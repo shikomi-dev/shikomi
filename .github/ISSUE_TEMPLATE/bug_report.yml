@@ -1,0 +1,58 @@
+name: バグ報告
+description: 動作しない・クラッシュする等の不具合を報告する
+title: "fix: [バグの概要を簡潔に記述]"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        セキュリティ脆弱性の報告は **このフォームを使わず** [SECURITY.md](../SECURITY.md) の手順に従ってください。
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows 10
+        - Windows 11
+        - macOS 12 Monterey
+        - macOS 13 Ventura
+        - macOS 14 Sonoma
+        - macOS 15 Sequoia
+        - Linux (X11)
+        - Linux (Wayland)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: shikomi バージョン
+      placeholder: "例: v0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 不具合の内容
+      description: 何が起きているか、何が期待されるかを説明してください
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. `shikomi add ...` を実行
+        2. ホットキーを押下
+        3. クラッシュ発生
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラーログ・スタックトレース
+      render: text

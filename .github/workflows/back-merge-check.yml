@@ -1,0 +1,97 @@
+name: Back-Merge Check
+
+on:
+  # release/* または hotfix/* が main にマージされた後
+  push:
+    branches:
+      - main
+  # 日次 cron で見落とし検知
+  schedule:
+    - cron: '0 9 * * *'  # UTC 09:00 = JST 18:00
+
+jobs:
+  check:
+    name: back-merge-check
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Check for missing back-merge PRs to develop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Checking for release/* and hotfix/* branches merged to main without back-merge to develop..."
+
+          # main にマージ済みの release/* / hotfix/* ブランチを取得
+          # （直近 30 件の main への merge commit を対象）
+          MERGED_BRANCHES=$(gh api "repos/$REPO/pulls?state=closed&base=main&per_page=30" \
+            --jq '[.[] | select(.merged_at != null) | select(.head.ref | test("^(release|hotfix)/")) | {ref: .head.ref, merged_at: .merged_at, number: .number}]')
+
+          echo "Merged release/hotfix branches to main: $(echo "$MERGED_BRANCHES" | jq length)"
+
+          MISSING=0
+
+          while IFS= read -r entry; do
+            REF=$(echo "$entry" | jq -r '.ref')
+            MERGED_AT=$(echo "$entry" | jq -r '.merged_at')
+            PR_NUMBER=$(echo "$entry" | jq -r '.number')
+
+            # 24h 経過しているか確認
+            MERGED_TS=$(date -d "$MERGED_AT" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$MERGED_AT" +%s 2>/dev/null)
+            NOW_TS=$(date +%s)
+            ELAPSED=$(( (NOW_TS - MERGED_TS) / 3600 ))
+
+            if [ "$ELAPSED" -lt 24 ]; then
+              echo "SKIP: $REF merged ${ELAPSED}h ago (< 24h, back-merge window still open)"
+              continue
+            fi
+
+            # develop への back-merge PR が存在するか確認
+            BACK_MERGE_EXISTS=$(gh api "repos/$REPO/pulls?state=all&base=develop&head=${REPO%/*}:$REF&per_page=5" \
+              --jq 'length')
+
+            if [ "$BACK_MERGE_EXISTS" -gt 0 ]; then
+              echo "OK: back-merge PR exists for $REF -> develop"
+            else
+              echo "MISSING: No back-merge PR found for $REF -> develop (merged ${ELAPSED}h ago, source PR #$PR_NUMBER)"
+
+              # Issue が既に存在するか確認（重複起票防止）
+              EXISTING_ISSUE=$(gh api "repos/$REPO/issues?labels=back-merge-missing&state=open&per_page=50" \
+                --jq "[.[] | select(.title | contains(\"$REF\"))] | length")
+
+              if [ "$EXISTING_ISSUE" -gt 0 ]; then
+                echo "SKIP: Issue already exists for $REF"
+              else
+                echo "Creating issue for missing back-merge: $REF"
+                gh issue create \
+                  --repo "$REPO" \
+                  --title "chore: back-merge missing — $REF -> develop" \
+                  --label "back-merge-missing" \
+                  --body "## Back-Merge 未実施の検知
+
+**ソースブランチ**: \`$REF\`
+**main マージ PR**: #$PR_NUMBER
+**main マージ日時**: $MERGED_AT
+**経過時間**: 約 ${ELAPSED}h
+
+\`$REF\` が \`main\` にマージされてから 24h 以上経過しましたが、\`develop\` への back-merge PR が見つかりません。
+
+## 対応手順
+
+1. \`$REF\` ブランチから \`develop\` への PR を作成する
+2. CONTRIBUTING.md §2 のリリースフロー 手順 5 を参照
+3. back-merge 完了後、本 Issue をクローズする
+
+> このIssueは \`back-merge-check\` CI によって自動起票されました (dev.md §7.6)"
+                MISSING=$((MISSING + 1))
+              fi
+            fi
+          done < <(echo "$MERGED_BRANCHES" | jq -c '.[]')
+
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::warning::${MISSING} back-merge(s) are missing. Issues have been created."
+          else
+            echo "All back-merges are in place."
+          fi
