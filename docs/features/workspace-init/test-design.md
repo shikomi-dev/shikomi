@@ -20,7 +20,7 @@
 | WS-04 | `cargo clippy --workspace -- -D warnings` が pass する（.clippy.toml 準拠） | 結合 |
 | WS-05 | `cargo deny check` が pass する（deny.toml 初期設定準拠） | 結合 |
 | WS-06 | ライブラリ crate（shikomi-core / infra / gui）が `lib.rs` のみ・バイナリ crate（daemon / cli）が `main.rs` のみの最小構成である | ユニット |
-| WS-07 | 各 crate に公開 API が存在しない（`pub fn` / `pub struct` / `pub enum` / `pub trait` / `pub mod` / `pub use` / `pub const` / `pub static` なし） | ユニット |
+| WS-07 | 各 crate に公開 API が存在しない（`pub fn` / `pub struct` / `pub enum` / `pub trait` / `pub mod` / `pub use` / `pub const` / `pub static` / `pub type` なし） | ユニット |
 | WS-08 | `Cargo.lock` がリポジトリにコミット済みである | ユニット |
 
 ## 3. テストマトリクス（トレーサビリティ）
@@ -32,12 +32,12 @@
 | TC-I03 | WS-03 | `cargo fmt --check --all` の実行成功（差分なし） | 結合 | 正常系 |
 | TC-I04 | WS-04 | `cargo clippy --workspace -- -D warnings` の実行成功（警告ゼロ） | 結合 | 正常系 |
 | TC-I05 | WS-05 | `cargo deny check` の実行成功（ライセンス・advisory・重複 crate 全 pass） | 結合 | 正常系 |
-| TC-U01 | WS-06 | `shikomi-core/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
-| TC-U02 | WS-06 | `shikomi-infra/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
-| TC-U03 | WS-06 | `shikomi-daemon/src/main.rs` が存在し、`src/` にはそのファイルのみである（バイナリ crate） | ユニット | 正常系 |
-| TC-U04 | WS-06 | `shikomi-cli/src/main.rs` が存在し、`src/` にはそのファイルのみである（バイナリ crate） | ユニット | 正常系 |
-| TC-U05 | WS-06 | `shikomi-gui/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
-| TC-U06 | WS-07 | 全 crate のソースファイルに公開 API シンボルが存在しない（検査パターン: `^pub (fn\|struct\|enum\|trait\|mod\|use\|const\|static) `、`pub(crate)` は誤検知対象外） | ユニット | 正常系 |
+| TC-U01 | WS-06 | `crates/shikomi-core/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
+| TC-U02 | WS-06 | `crates/shikomi-infra/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
+| TC-U03 | WS-06 | `crates/shikomi-daemon/src/main.rs` が存在し、`src/` にはそのファイルのみである（バイナリ crate） | ユニット | 正常系 |
+| TC-U04 | WS-06 | `crates/shikomi-cli/src/main.rs` が存在し、`src/` にはそのファイルのみである（バイナリ crate） | ユニット | 正常系 |
+| TC-U05 | WS-06 | `crates/shikomi-gui/src/lib.rs` が存在し、`src/` にはそのファイルのみである（ライブラリ crate） | ユニット | 正常系 |
+| TC-U06 | WS-07 | 全 crate のソースファイルに公開 API シンボルが存在しない（検査パターン: `^pub (fn\|struct\|enum\|trait\|mod\|use\|const\|static\|type) `、`pub(crate)` は誤検知対象外） | ユニット | 正常系 |
 | TC-U07 | WS-08 | `Cargo.lock` がリポジトリルートに存在する | ユニット | 正常系 |
 
 ## 4. E2Eテスト設計
@@ -120,11 +120,11 @@
 
 | テストID | crate | 種別 | 期待エントリポイント | 期待結果 |
 |---------|-------|------|-----------------|---------|
-| TC-U01 | shikomi-core | ライブラリ | `src/lib.rs` | `lib.rs` のみ存在する（他 `.rs` ファイルなし） |
-| TC-U02 | shikomi-infra | ライブラリ | `src/lib.rs` | `lib.rs` のみ存在する |
-| TC-U03 | shikomi-daemon | バイナリ | `src/main.rs` | `main.rs` のみ存在する（`lib.rs` なし） |
-| TC-U04 | shikomi-cli | バイナリ | `src/main.rs` | `main.rs` のみ存在する（`lib.rs` なし） |
-| TC-U05 | shikomi-gui | ライブラリ | `src/lib.rs` | `lib.rs` のみ存在する |
+| TC-U01 | shikomi-core | ライブラリ | `crates/shikomi-core/src/lib.rs` | `lib.rs` のみ存在する（他 `.rs` ファイルなし） |
+| TC-U02 | shikomi-infra | ライブラリ | `crates/shikomi-infra/src/lib.rs` | `lib.rs` のみ存在する |
+| TC-U03 | shikomi-daemon | バイナリ | `crates/shikomi-daemon/src/main.rs` | `main.rs` のみ存在する（`lib.rs` なし） |
+| TC-U04 | shikomi-cli | バイナリ | `crates/shikomi-cli/src/main.rs` | `main.rs` のみ存在する（`lib.rs` なし） |
+| TC-U05 | shikomi-gui | ライブラリ | `crates/shikomi-gui/src/lib.rs` | `lib.rs` のみ存在する |
 
 **前提条件**: workspace 実装コードが `feature/issue-4-workspace-init` ブランチにコミット済み
 **操作**: 各 crate の `src/` を確認
@@ -138,7 +138,7 @@
 | 対応する工程 | 詳細設計（設計原則: 公開 API ゼロ） |
 | 種別 | 正常系 |
 | 前提条件 | 全 crate のソースファイルが存在する |
-| 操作 | 全 `.rs` ファイルに対して `grep -rEn "^pub (fn\|struct\|enum\|trait\|mod\|use\|const\|static) " --include="*.rs"` を実行（`target/` 配下は除外） |
+| 操作 | 全 `.rs` ファイルに対して `grep -rEn "^pub (fn\|struct\|enum\|trait\|mod\|use\|const\|static\|type) " --include="*.rs"` を実行（`target/` 配下は除外） |
 | 期待結果 | マッチ行ゼロ。外部公開 API シンボルが存在しない。なお `pub(crate)` / `pub(super)` は公開 API ではないため検査対象外とする（grep パターンが `pub ` + スペースで区切ることで自動排除） |
 
 ### TC-U07: Cargo.lock コミット確認
@@ -215,11 +215,11 @@ PASS=true
 
 echo "=== TC-U01〜TC-U05: crate ソースファイル構成確認 ==="
 
-# ライブラリ crate: lib.rs のみ
+# ライブラリ crate: lib.rs のみ（crates/ 配下に配置）
 LIB_CRATES=(shikomi-core shikomi-infra shikomi-gui)
 for crate in "${LIB_CRATES[@]}"; do
-    FILES=$(find "$crate/src" -name "*.rs" | sort)
-    EXPECTED="$crate/src/lib.rs"
+    FILES=$(find "crates/$crate/src" -name "*.rs" | sort)
+    EXPECTED="crates/$crate/src/lib.rs"
     if [ "$FILES" = "$EXPECTED" ]; then
         echo "TC: $crate → PASS (lib.rs のみ)"
     else
@@ -228,11 +228,11 @@ for crate in "${LIB_CRATES[@]}"; do
     fi
 done
 
-# バイナリ crate: main.rs のみ
+# バイナリ crate: main.rs のみ（crates/ 配下に配置）
 BIN_CRATES=(shikomi-daemon shikomi-cli)
 for crate in "${BIN_CRATES[@]}"; do
-    FILES=$(find "$crate/src" -name "*.rs" | sort)
-    EXPECTED="$crate/src/main.rs"
+    FILES=$(find "crates/$crate/src" -name "*.rs" | sort)
+    EXPECTED="crates/$crate/src/main.rs"
     if [ "$FILES" = "$EXPECTED" ]; then
         echo "TC: $crate → PASS (main.rs のみ)"
     else
@@ -244,7 +244,7 @@ done
 echo "=== TC-U06: 公開 API 不存在確認 ==="
 # ^pub (fn|struct|enum|trait|mod|use|const|static) で外部公開シンボルを検査
 # pub(crate) / pub(super) は "pub " の後に "(" が来るため自動排除される
-PUB_MATCHES=$(grep -rEn "^pub (fn|struct|enum|trait|mod|use|const|static) " \
+PUB_MATCHES=$(grep -rEn "^pub (fn|struct|enum|trait|mod|use|const|static|type) " \
     --include="*.rs" . \
     --exclude-dir=target || true)
 if [ -z "$PUB_MATCHES" ]; then
@@ -285,4 +285,5 @@ $PASS && echo "=== 全ユニットテスト PASS ===" || { echo "=== FAIL ==="; 
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — WS-06/TC-U01〜U05 を daemon/cli バイナリ crate（main.rs）・core/infra/gui ライブラリ crate（lib.rs）に区別修正。TC-U06 の grep パターンを `^pub (fn|struct|enum|trait|mod|use|const|static) ` に精密化し pub(crate) 誤検知を排除*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — WS-07/TC-U06 に `pub type` を追加（型エイリアスの見逃し修正）。TC-U01〜U05 の期待パスとbashスクリプトの find/EXPECTED を `crates/{name}/src/` プレフィックスに統一（tech-stack.md §4.1 の crates/ 配置との整合）*
 *対応 Issue: #4 feat(workspace): Cargo workspace 初期化と 5 crate 空スケルトン*
