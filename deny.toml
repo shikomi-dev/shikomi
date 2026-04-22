@@ -37,7 +37,13 @@ deny = []
 # 初期状態は空（外部 crate 未導入のため）
 # NOTE: 以下の暗号クリティカル crate は skip / skip-tree への登録を禁止する
 # aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
-skip = []
+skip = [
+    # wit-bindgen 0.51.0 / 0.57.1 が getrandom v0.4 → uuid v1 の間接依存で共存する。
+    # Issue #7 で導入した uuid/getrandom による一時例外。
+    # uuid のバージョン更新時に再評価すること。
+    { name = "wit-bindgen", version = "0.51.0" },
+    { name = "wit-bindgen", version = "0.57.1" },
+]
 skip-tree = []
 
 [sources]

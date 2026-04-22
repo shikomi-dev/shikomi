@@ -145,6 +145,9 @@ impl Aad {
     ) -> Result<Self, DomainError> {
         let nanos: i128 = record_created_at.unix_timestamp_nanos();
         let micros_i128 = nanos / 1_000;
+        // SAFETY(到達不能): time 0.3 の `OffsetDateTime` は約 ±9999 年の範囲に収まり、
+        // i64 マイクロ秒（±292,000 年）を超えることは現実的にない。
+        // 将来の time クレートの年範囲拡張に備えた防衛的コードとして維持する。
         let record_created_at_micros = i64::try_from(micros_i128).map_err(|_| {
             DomainError::InvalidRecordPayload(InvalidRecordPayloadReason::AadTimestampOutOfRange)
         })?;
