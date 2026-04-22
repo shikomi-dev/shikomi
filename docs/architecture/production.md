@@ -122,7 +122,7 @@ flowchart LR
 **アプリ側 UX 要件（後続 feature `onboarding` で具体化）**:
 - 初回起動時に macOS Accessibility / Input Monitoring 権限が未付与なら、System Settings の該当ページを**直接 open**（`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` URL scheme）してから、アプリ内の説明モーダルを表示
 - 権限拒否時のリカバリー: アプリ再起動後も同じモーダルを表示し、「権限がないとホットキーが動作しない」ことと再度 System Settings を開く動線を提供
-- 詳細な初回セットアップ UX フローは `environment-diff.md` §6 に規定
+- 詳細な初回セットアップ UX フローは `environment-diff.md` §5 に規定
 
 ## 5. 更新・チャネル
 
@@ -147,9 +147,30 @@ flowchart LR
 
 ## 7. バックアップ・リカバリ
 
-- **vault バックアップ**: ユーザ手動 export（`shikomi export --output <path>`）。暗号化状態のまま書き出す
-- **マスターパスワード喪失時**: 復旧不能（設計上の仕様、README / SECURITY.md に明記）。export 時に紙での記録を UI で警告
-- **vault 破損時**: 認証タグ失敗で起動をブロックし、バックアップからの復元を促す
+### 7.1 vault バックアップ
+
+- ユーザ手動 export（`shikomi export --output <path>`）。暗号化状態のまま書き出す（VEK でラップされたレコードをそのまま、ヘッダの `wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` 付き）
+- 自動バックアップは MVP スコープ外。ユーザが export ファイルをクラウドストレージ等に置くかは利用者判断
+
+### 7.2 リカバリ経路（二本立て）
+
+shikomi は vault 暗号鍵（VEK）を **2 つの独立した KEK 経路**で保護する（詳細は `tech-stack.md` §2.4）。どちらか片方の秘密があれば vault を復号できる。
+
+| 経路 | 秘密 | 想定シナリオ |
+|-----|------|-----------|
+| マスターパスワード経路 | 日常使用のパスワード（Argon2id で派生 → `wrapped_VEK_by_pw`） | 日常のアンロック |
+| **リカバリコード経路** | **BIP-39 24 語（256 bit エントロピー）**。初回 vault 作成時に 1 度だけ提示、以降二度と取得不可 | **マスターパスワード失念時**。リカバリコードを入力して VEK を復元し、直後に新マスターパスワードを設定 |
+
+**重要な性質**:
+- リカバリコードは**マスターパスワード同等の完全な秘密**。紙で物理保護することをユーザに強く要求（UI で印刷ボタン・書写確認ステップを必須化）
+- リカバリコードが漏洩した場合の対処: 新規 vault 作成 → 全レコード手動再登録 → 旧 vault 破棄。**古いリカバリコードを無効化する手段はない**（vault 自体を捨てるしかない、これは OWASP 認証 Cheat Sheet の「バックアップコード漏洩時の標準対応」に整合）
+- リカバリコード紛失のみ（マスターパスワード無事）: 新規 vault を作成し直すか、そのまま日常運用継続。後から recovery を再生成する機能は**提供しない**（二度目の紙保管を誘導すると運用が緩む＝設計判断）
+- **マスターパスワードとリカバリコードを両方同時に失った場合のみ復旧不能**。README / SECURITY.md / 初回セットアップ UX に明記
+
+### 7.3 vault 破損時
+
+- AES-256-GCM 認証タグ失敗時は `fail fast` で起動ブロック → リカバリ UI（バックアップからの復元・新規作成・開発者向け export 等）を提示
+- `vault.db.new` の残存（atomic write 中のクラッシュ）を起動時に検出 → 同上のリカバリ UI へ
 
 ## 8. モニタリング・ログ
 

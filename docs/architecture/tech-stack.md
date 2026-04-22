@@ -51,7 +51,7 @@ flowchart TB
 | GUI フロントエンド | React / SolidJS / Svelte / Vue | **SolidJS** | Tauri 公式が推すフレームワークの一つ、初期バンドル小、1 ペイン構成の設定 GUI で十分。React は依存膨張、Svelte はエコシステムがやや薄い |
 | CLI パーサ | `clap` / `structopt`（非推奨）/ 手書き | **`clap` v4（derive）** | Rust エコシステムの事実上標準、`shell-completion` と `man-page` 生成が公式提供 |
 | 非同期ランタイム | `tokio` / `async-std` / `smol` | **`tokio`** | `tauri` が `tokio` 前提、`ashpd` が `zbus` 経由で `tokio` feature を持つ |
-| グローバルホットキー | `global-hotkey` / `tauri-plugin-global-shortcut` / `rdev::grab` / XDG Portal 直叩き | **`tauri-plugin-global-shortcut` (X11/macOS/Windows) + `ashpd` (Wayland)** | `global-hotkey` v0.7.0 の README に「Linux (X11 Only)」と明記、Wayland は XDG `org.freedesktop.portal.GlobalShortcuts` portal 必須。`ashpd` v0.13 で `global_shortcuts` feature が安定。二段実装を`shikomi-infra` の feature flag で切り替える<br/>出典: https://github.com/tauri-apps/global-hotkey, https://v2.tauri.app/plugin/global-shortcut/, https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html, https://github.com/bilelmoussaoui/ashpd |
+| グローバルホットキー | `global-hotkey` / `tauri-plugin-global-shortcut` / `rdev::grab` / XDG Portal 直叩き | **`tauri-plugin-global-shortcut` (X11/macOS/Windows) + `ashpd` (Wayland)** | `global-hotkey` v0.7.0 の README に「Linux (X11 Only)」と明記、Wayland は XDG `org.freedesktop.portal.GlobalShortcuts` portal 必須。`ashpd` v0.13 で `global_shortcuts` feature が安定。**両経路を Linux バイナリに常時同梱し §3.1 の起動時プローブで実行時選択**（feature flag ではない）<br/>出典: https://github.com/tauri-apps/global-hotkey, https://v2.tauri.app/plugin/global-shortcut/, https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html, https://github.com/bilelmoussaoui/ashpd |
 | クリップボード | `arboard` / `tauri-plugin-clipboard-manager` / `copypasta` | **`arboard` v3.6+（直接利用）** | sensitive hint メタデータ（`x-kde-passwordManagerHint=secret` 等）は `arboard` が issue #129 / PR #155 で対応、`tauri-plugin-clipboard-manager` は text/html/image のみで拡張 MIME を扱えず機密用途に不足。Wayland は `wayland-data-control` feature を有効化<br/>出典: https://github.com/1Password/arboard, https://phabricator.kde.org/D12539 |
 | 入力シミュレーション（フォールバック） | `enigo` / `rdev` / `autopilot-rs` | **`enigo`（最小限のフォールバック用途のみ）** | Wayland/libei が experimental ながら前進、`rdev` は Wayland 不可と README 明記。ただし MVP では**クリップボード投入が第一優先**で、キー注入は macOS Secure Event Input によるサイレント失敗のリスクがあるため CLI の `--paste-mode=inject` など明示オプトインに留める<br/>出典: https://github.com/enigo-rs/enigo, https://github.com/enigo-rs/enigo/blob/main/Permissions.md, https://developer.apple.com/library/archive/technotes/tn2150/_index.html |
 | シークレット保護 | `zeroize` / `secrecy` / 自前 | **`secrecy` + `zeroize`** | `secrecy::SecretBox` で `Debug`/`Serialize`/`Clone` の誤実装リークを型レベルで封じる。`zeroize` は LLVM の最適化除去防止を `volatile write` + `compiler_fence` で保証<br/>出典: https://docs.rs/secrecy/latest/secrecy/, https://docs.rs/zeroize/latest/zeroize/ |
@@ -98,24 +98,62 @@ flowchart TB
 
 ### 2.4 暗号運用の詳細
 
+**鍵階層（Envelope Encryption / VEK + KEK パターン）**:
+
+レコード暗号鍵とユーザ認証経路（マスターパスワード・リカバリコード）を**分離**する。これによりマスターパスワード変更やリカバリコード入力で**レコード全件の再暗号化は発生しない**（`wrapped_VEK` のみ書換）。
+
+```mermaid
+flowchart LR
+    MP[マスターパスワード] --> Argon2[Argon2id<br/>m=19456, t=2, p=1<br/>salt=pw_salt]
+    Argon2 --> KEKpw[KEK_pw 32B]
+    RC[BIP-39 リカバリコード 24 語] --> BIP39[PBKDF2-HMAC-SHA512<br/>2048 iter<br/>salt='mnemonic'+''<br/>=BIP-39 標準]
+    BIP39 --> Seed[64B Seed]
+    Seed --> HKDF[HKDF-SHA256<br/>info='shikomi-kek-v1']
+    HKDF --> KEKrc[KEK_recovery 32B]
+    VEK[VEK 32B<br/>CSPRNG 初回生成] -->|AES-256-GCM wrap| WrapPw["wrapped_VEK_by_pw<br/>vault.header"]
+    VEK -->|AES-256-GCM wrap| WrapRc["wrapped_VEK_by_recovery<br/>vault.header"]
+    KEKpw -. unwrap .-> WrapPw
+    KEKrc -. unwrap .-> WrapRc
+    WrapPw -. unwrap .-> VEK
+    WrapRc -. unwrap .-> VEK
+    VEK -->|AES-256-GCM per-record| Records[(各レコード ciphertext)]
+```
+
 | 項目 | 方針 | 根拠 |
 |-----|------|-----|
-| KDF | **Argon2id**、パラメータ `m=19456 KiB (19 MiB), t=2, p=1` | OWASP Password Storage Cheat Sheet 推奨値。CPU/メモリの攻撃コスト均衡 |
-| KDF ソルト | vault ごとに 16 バイト CSPRNG、vault ヘッダに平文保管（秘匿不要） | ソルトはレインボーテーブル対策であり秘匿性を求めない |
-| マスターキー → 派生鍵 | KDF 出力 32 バイトを AES-256-GCM 鍵として使用 | — |
-| レコード暗号 | **AES-256-GCM、レコード単位**（Envelope Encryption ではない、MVP では vault 全体ではなくレコード単位の AEAD） | レコード削除時にタグ再計算が不要、部分復号で平文展開範囲を最小化 |
-| nonce（IV）生成 | **CSPRNG 由来 96 bit / レコード**。同一派生鍵での nonce 衝突確率を $2^{-32}$ 以下に抑えるため、**同一派生鍵での暗号化回数上限を $2^{32}$ に制限**（NIST SP 800-38D §8.3 "Uniqueness Requirement on IVs"）。上限接近時は KDF 再実行＝再派生を強制 | nonce 再利用は認証タグ偽造と平文漏洩に直結するため最厳戒 |
-| nonce 保存場所 | 各レコードの AEAD ciphertext の先頭 12 バイトに prepend（標準レイアウト） | rusqlite BLOB カラムに `nonce \|\| ciphertext \|\| tag` 形式で保存 |
-| AAD（追加認証データ） | レコード ID（UUIDv7）・バージョン番号・作成日時を AAD に含める | レコード入れ替え攻撃（ciphertext を別レコードへ移植する攻撃）を検出 |
-| 派生鍵キャッシュ | `secrecy::SecretBox<[u8; 32]>` として daemon プロセスメモリ上のみ、アイドル 15 分 / スクリーンロック / サスペンドで即 `zeroize`（`context.md` §4.3） | ホットキー p95 100 ms と Argon2id 実行時間の矛盾を解消 |
-| マスターパスワード保持 | KDF 実行直後に即 `zeroize`。**派生鍵のみ**を保持 | マスターパスワード自体はメモリ上で最小時間のみ存在 |
-| レート制限（認証） | 連続失敗 5 回で 30 秒の指数バックオフ、プロセスで blocking sleep（OWASP A07 対応） | 総当たり攻撃緩和、Fail Secure |
+| **VEK**（Vault Encryption Key） | 初回 vault 作成時に 32 バイト CSPRNG 生成、以後不変。実レコード暗号鍵 | マスターパスワード変更でも VEK 不変＝全件再暗号化不要（O(1) 操作） |
+| **KEK_pw**（パスワード経路 KEK） | `Argon2id(password, salt_pw, m=19456, t=2, p=1)` の 32 バイト出力 | OWASP Password Storage Cheat Sheet 推奨値 |
+| **KEK_recovery**（リカバリ経路 KEK） | `HKDF-SHA256(PBKDF2-HMAC-SHA512(mnemonic, "mnemonic"+passphrase, 2048), info="shikomi-kek-v1")` の 32 バイト | BIP-39 標準 seed 導出＋用途分離のため HKDF で app 固有にドメイン分離 |
+| **wrapped_VEK**（vault ヘッダ） | `AES-256-GCM(KEK, VEK)` を 2 通り（pw 用・recovery 用）vault ヘッダに並置 | どちらの経路でも同一 VEK が取り出せる |
+| KDF ソルト（pw 経路） | vault ごとに 16 バイト CSPRNG、vault ヘッダに平文保管 | ソルトはレインボーテーブル対策のため秘匿不要 |
+| リカバリコードの受入 | **BIP-39 24 語**（256 bit エントロピー）。12 語は 128 bit でパスワード相当を下回るため採用しない | BIP-39 24 語は本物のマスターパスワード**同等**の秘密として扱う。紛失・漏洩どちらも vault 全滅 |
+| リカバリコード保存方針 | **1 度だけ表示し二度と取得不可**。ユーザが紙に転記するまで UI をブロック | 再発行可能にすると攻撃面が増える（OWASP A07 推奨） |
+| リカバリコード提示順序 | マスターパスワード作成直後に生成・表示・転記確認 → 以降いかなる操作でも再表示しない | マスターパスワードを先に作らせてから recovery を表示することで「recovery だけで済ませる」誤用を防止 |
+| リカバリコード使用時の流れ | `KEK_recovery → wrapped_VEK_by_recovery アンラップ → VEK 復元 → 新マスターパスワード設定 → 新 KEK_pw で wrapped_VEK_by_pw を再書込`。**リカバリコード自体は vault に保存しない** | 紙の物理保護にリスクを移譲。侵害時は新規 vault 再作成を促す |
+| レコード暗号 | **AES-256-GCM、レコード単位** | レコード削除時にタグ再計算不要、部分復号で平文展開範囲を最小化 |
+| nonce（IV）生成 | **CSPRNG 由来 96 bit / レコード**。同一 VEK での nonce 衝突確率を $2^{-32}$ 以下に抑えるため、**同一 VEK での暗号化回数上限を $2^{32}$ に制限**（NIST SP 800-38D §8.3 "Uniqueness Requirement on IVs"）。上限接近時は **VEK を新規生成し全レコード再暗号化**（rekey 操作、ユーザ明示トリガか到達時に警告） | nonce 再利用は認証タグ偽造と平文漏洩に直結するため最厳戒 |
+| nonce 保存場所 | 各レコードの AEAD ciphertext 先頭 12 バイトに prepend（標準レイアウト） | rusqlite BLOB カラムに `nonce \|\| ciphertext \|\| tag` 形式で保存 |
+| AAD（追加認証データ） | レコード ID（UUIDv7）・バージョン番号・作成日時を AAD に含める | レコード入れ替え攻撃（ciphertext を別レコードへ移植）を検出 |
+| VEK キャッシュ | `secrecy::SecretBox<[u8; 32]>` として daemon プロセスメモリ上のみ。アイドル 15 分 / スクリーンロック / サスペンドで即 `zeroize`（`context.md` §4.3） | ホットキー p95 100 ms と Argon2id 実行時間の矛盾を解消 |
+| マスターパスワード／リカバリコード保持 | KDF 実行直後に即 `zeroize`。**VEK のみ**を保持 | 秘密はメモリ上で最小時間のみ存在 |
+| レート制限（認証） | 連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフ** を該当 IPC リクエストに適用。**daemon イベントループ全体は停止させない**（ホットキー購読継続） | 総当たり攻撃緩和、Fail Secure。blocking sleep は daemon 全体が硬直しホットキー反応停止＝ DoS と同義なので禁止 |
 | 更新パッケージ署名 | `minisign`（公開鍵はアプリにバンドル、検証失敗で更新中断） | `tauri-plugin-updater` 準拠 |
+
+**脅威モデル上の位置づけ**:
+- マスターパスワード単独で vault 全復号可能 ⇔ リカバリコード単独でも vault 全復号可能（対称）
+- 両方同時に失うと復旧不能（これは受容する残存リスク）
+- リカバリコード漏洩は即時かつ完全な侵害 → ユーザは vault 再作成と新リカバリコード再生成が必須（UI で明示）
+
+**将来拡張（MVP 外）**:
+- OS キーチェーン経由の自動アンロック（`context.md` §4.3）は**第 3 の KEK 経路**として `wrapped_VEK_by_keychain` を追加する形で実装。同じ Envelope パターンで拡張可能
 
 出典:
 - OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 - NIST SP 800-38D "Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC": https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf
 - RustCrypto `aes-gcm`: https://docs.rs/aes-gcm/latest/aes_gcm/
+- BIP-39 "Mnemonic code for generating deterministic keys": https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+- RFC 5869 "HKDF: HMAC-based Extract-and-Expand Key Derivation Function": https://www.rfc-editor.org/rfc/rfc5869
+- OWASP Authentication Cheat Sheet（リカバリコード方針）: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
 
 ## 3. プラットフォーム差分の扱い（アーキテクチャ方針）
 

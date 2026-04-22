@@ -51,7 +51,7 @@ flowchart TB
 |----|---------------|---------------|
 | Windows | `arboard` → `SetClipboardData` + `CF_TEXT`＋以下の補助フォーマット: `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0`, `ExcludeClipboardContentFromMonitorProcessing=1` | Cloud Clipboard・履歴マネージャへの流出遮断 |
 | macOS | `arboard` → `NSPasteboard` + `application/x-nspasteboard-concealed-type` | macOS 標準のクリップボード履歴非保存 |
-| Linux X11 | `arboard` → X Selection + `x-kde-passwordManagerHint = "secret"` MIME | Klipper / CopyQ / wl-clipboard が履歴保持を拒否 |
+| Linux X11 | `arboard` → X Selection + `x-kde-passwordManagerHint = "secret"` MIME | Klipper / CopyQ が履歴保持を拒否（X11 対応クリップボードマネージャのみ、wl-clipboard は Wayland 専用のため X11 経路とは無関係） |
 | Linux Wayland | `arboard` の `wayland-data-control` feature、あるいは `Clipboard Portal` | 同上 hint を付与、Portal 経路は Flatpak/Snap サンドボックス下で必須 |
 
 出典: KeePassXC Clipboard.cpp、KDE Phabricator D12539（§context.md §6.2）
@@ -108,11 +108,11 @@ flowchart TB
 | バックアップ | なし | GH Actions 履歴 90 日保持 | Releases 永続、ソースは Git 履歴 |
 | モニタリング | なし | CI ダッシュボード（Actions UI） | 該当なし — クライアントテレメトリなし方針 |
 
-## 6. 初回セットアップ UX フロー（OS 別）
+## 5. 初回セットアップ UX フロー（OS 別）
 
 本書では UX の骨格を示し、画面遷移・文言・ワイヤーフレームは後続 feature `onboarding` の `requirements.md` / `basic-design.md` で具体化する。ここでは OS 差分とエッジケースの網羅性を担保する。
 
-### 6.1 Windows 初回起動フロー
+### 5.1 Windows 初回起動フロー
 
 ```mermaid
 flowchart TB
@@ -136,7 +136,7 @@ flowchart TB
 - SmartScreen 警告時の UX は**アプリ側では介入不能**（インストール前のため）。配布側（公式サイト・README・DMG 同梱 README）のみで対応（`production.md` §4.2）
 - 管理者権限は不要。ユーザ権限のみでインストール可能（`%LOCALAPPDATA%\shikomi\`）
 
-### 6.2 macOS 初回起動フロー
+### 5.2 macOS 初回起動フロー
 
 ```mermaid
 flowchart TB
@@ -175,7 +175,7 @@ flowchart TB
 - 権限拒否時のリカバリー: アプリ再起動後も初期化済み vault は保持、起動時に「権限未付与」バナーを常時表示し、タップで Settings に飛ぶ動線を維持
 - **Secure Event Input 下のサイレント失敗**: キー注入モード有効時、macOS で `IsSecureEventInputEnabled()` を呼び、`true` ならその旨をユーザに通知してクリップボード投入にフォールバック（ログと UI 両方で明示、Fail Fast / Fail Transparent）
 
-### 6.3 Linux 初回起動フロー
+### 5.3 Linux 初回起動フロー
 
 ```mermaid
 flowchart TB
@@ -203,16 +203,17 @@ flowchart TB
 - Wayland の `BindShortcuts` は compositor 側 UI を経由するため、**compositor により見た目が異なる**（GNOME / KDE / sway / Hyprland 等）。アプリ側は「compositor の同意画面を見てください」と誘導
 - Portal が利用不可な compositor（存在する）では明示エラー表示（「非対応 compositor です」）し fail fast
 
-### 6.4 全 OS 共通のリカバリー UX
+### 5.4 全 OS 共通のリカバリー UX
 
 | シナリオ | 対応 |
 |---------|------|
-| マスターパスワード忘れ | **復旧不能**を UI・README・公式サイトで明示。ただし作成時に**リカバリコード**（BIP-39 ベース 12 語）を必ず生成・表示して保存を促す（MVP で必須。失念リスクはペルソナ A/C にとって致命的） |
+| マスターパスワード忘れ | 作成時に発行した **BIP-39 24 語リカバリコード**を入力 → VEK を復元し、直後に新マスターパスワードを設定（詳細は `production.md` §7.2 / `tech-stack.md` §2.4）。マスターパスワード**と**リカバリコード**両方**を失った場合のみ復旧不能 |
+| リカバリコード入力画面への到達手段 | CLI `shikomi unlock --recovery` / GUI 初期画面「パスワードをお忘れですか？」リンクから遷移 |
 | vault ファイル破損（atomic write の `.new` 残存等） | 起動時に検出 → リカバリ UI（バックアップからの復元・新規作成・開発者向けエクスポート）を提示 |
 | 権限喪失（macOS Settings で切られた） | 起動時バナー + タップで Settings へ |
-| 派生鍵キャッシュが突然切れた（スクリーンロック連動） | 次のホットキー押下時に通知 + マスターパスワード再入力モーダル（daemon は常駐、GUI/CLI 不要でロック画面風モーダル表示） |
+| VEK キャッシュが突然切れた（スクリーンロック連動） | 次のホットキー押下時に通知 + マスターパスワード再入力モーダル（daemon は常駐、GUI/CLI 不要でロック画面風モーダル表示） |
 
-## 7. 該当なし項目
+## 6. 該当なし項目
 
 | 項目 | 理由 |
 |------|------|
@@ -221,7 +222,7 @@ flowchart TB
 | VPC Endpoint / fck-nat | サーバなし |
 | DNS 切替（dev.shikomi / stg.shikomi） | サーバなし、公式サイトは単一の GitHub Pages を想定 |
 
-## 8. 参考一次情報（§6 UX フロー）
+## 7. 参考一次情報（§5 UX フロー）
 
 - macOS System Settings URL scheme（`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`）: https://developer.apple.com/documentation/devicemanagement/systempreferences
 - `AXIsProcessTrusted` / `AXIsProcessTrustedWithOptions`: https://developer.apple.com/documentation/applicationservices/1462089-axisprocesstrusted
