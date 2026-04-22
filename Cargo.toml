@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shikomi-core",
+    "crates/shikomi-infra",
+    "crates/shikomi-gui",
+    "crates/shikomi-daemon",
+    "crates/shikomi-cli",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["shikomi-dev"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/shikomi-dev/shikomi"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

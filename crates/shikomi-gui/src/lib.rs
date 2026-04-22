@@ -1,0 +1,1 @@
+//! shikomi-gui — GUIフロントエンド層

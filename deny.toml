@@ -1,0 +1,46 @@
+[advisories]
+# 脆弱性のある crate は即座にビルドを失敗させる（Fail Fast）
+vulnerability = "deny"
+unmaintained = "deny"
+yanked = "deny"
+# 一時例外: ignore リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# 初期状態は空（外部 crate 未導入のため）
+ignore = []
+
+[licenses]
+# MIT / Apache-2.0 / ISC / BSD 系のみ許可
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+]
+deny = []
+copyleft = "deny"
+allow-osi-fsf-free = "neither"
+default = "deny"
+
+[bans]
+# 複数バージョン共存は依存解決の複雑化を招く（Fail Fast）
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+# 暗号クリティカル crate を直接依存に含める場合は明示的に許可が必要
+deny = []
+# 一時例外: skip リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# 初期状態は空（外部 crate 未導入のため）
+# NOTE: 以下の暗号クリティカル crate は skip / skip-tree への登録を禁止する
+# aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
