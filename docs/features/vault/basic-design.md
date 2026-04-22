@@ -204,7 +204,7 @@ classDiagram
 ### REQ-010: `NonceCounter::next(&mut self)`
 
 1. 内部 `u32` counter が `u32::MAX` なら `DomainError::NonceOverflow` を返却し状態を進めない
-2. それ未満なら CSPRNG 乱数（呼び出し側から供給、`shikomi-core` は乱数源を持たない）と counter 値から 12 バイトの `NonceBytes` を構築
+2. それ未満なら「ランダム prefix（構築時に呼び出し側から供給、8 byte）＋ counter（4 byte）」から 12 byte の `NonceBytes` を構築（詳細なバイト配置とエンディアンは `detailed-design.md` §バイナリ正規形仕様）
 3. counter をインクリメント
 
 ## シーケンス図
@@ -240,7 +240,7 @@ classDiagram
 | 悪意あるログ出力パス | 開発者が誤って `tracing::info!("...{:?}", secret)` を書く | 秘密値 | `SecretString` / `SecretBytes` の `Debug` を `"[REDACTED]"` 固定に実装。**コンパイルは通るが中身は出ない** |
 | 誤った永続化 | `serde` で `Vault` をシリアライズする際に秘密値が混入 | レコード平文 | `SecretString` / `SecretBytes` は `serde::Serialize` **未実装**。コンパイルエラーで防ぐ（Fail Fast） |
 | nonce 再利用攻撃 | アプリバグで同一 VEK での nonce が重複 | AEAD の認証タグと暗号文 | `NonceCounter` で $2^{32}$ 到達を Fail Fast 検知し rekey を強制 |
-| 入れ替え攻撃 | 攻撃者が vault ファイル内のレコードをすげ替え | レコード完全性 | `Aad` に `record_id` + `version` + `created_at` を含める（§2.4）。型で AAD の構造を固定 |
+| 入れ替え攻撃 | 攻撃者が vault ファイル内のレコードをすげ替え | レコード完全性 | `Aad` に `record_id` + `vault_version` + `record_created_at` を含め、**バイト正規形を固定**（`detailed-design.md` §バイナリ正規形仕様 の 26 byte 固定長レイアウト）。実装言語・シリアライザを問わず再現可能 |
 | 状態遷移の誤り | `Plaintext` vault に暗号化レコードが混入 | Vault の一貫性 | `VaultHeader` enum と `RecordPayload` enum の整合を `Vault::add_record` が検証（Fail Fast） |
 
 ### OWASP Top 10 対応

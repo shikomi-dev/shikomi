@@ -80,7 +80,7 @@ Issue #4 完了後の工程1で以下を合意:
 |---|------|---------|
 | 1 | 全機能 REQ-001〜REQ-010 の型が `shikomi-core` の公開 API に存在する | `cargo doc -p shikomi-core --no-deps` の出力確認 |
 | 2 | 排他条件を型で保証（`Plaintext` に wrapped_VEK が生えない 等） | 詳細設計の `VaultHeader` enum 定義 + ユニットテスト |
-| 3 | `RecordLabel` が空文字列・制御文字・255 文字超過を構築時に拒否 | 境界値テスト（空 / 1 文字 / 254 / 255 / 256 / 制御文字） |
+| 3 | `RecordLabel` が空文字列・制御文字（ただし `\t` / `\n` / `\r` は許可）・255 grapheme 超過を構築時に拒否 | 境界値テスト（空 / 1 文字 / 254 / 255 / 256 / 制御文字 / `\t`・`\n`・`\r` 許可確認） |
 | 4 | `SecretString` / `SecretBytes` が `Debug` / `Display` で中身を露出しない | doc テスト + コンパイル時型検査（`Serialize` 未実装） |
 | 5 | `NonceCounter::next()` が $2^{32}$ 到達で `DomainError::NonceOverflow` を返す | ユニットテスト（上限直前・到達・超過） |
 | 6 | `cargo test -p shikomi-core` が pass、行カバレッジ 80% 以上 | CI（`cargo llvm-cov` 等）で測定 |

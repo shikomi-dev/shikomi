@@ -74,15 +74,15 @@
 |------|------|
 | 入力 | `String` / `Box<[u8]>`（呼び出し側は生値を即座に wrapper に渡す規約） |
 | 処理 | `secrecy::SecretBox` に格納。`Debug` / `Display` 実装は必ず `"[REDACTED]"` 固定文字列を出力。`serde::Serialize` は実装しない（コンパイル時に誤シリアライズを検出） |
-| 出力 | `SecretString` / `SecretBytes<N>`（N は定数長配列向けの別型、`SecretBytes` 可変長も提供） |
-| エラー時 | 入力検証は呼び出し側責務（本型は中身を判定しない）。ただし `SecretBytes<N>` は長さ不一致を `DomainError::InvalidSecretLength { expected, got }` で拒否 |
+| 出力 | `SecretString` / `SecretBytes`（可変長のみ。本 Issue では固定長バリアントを提供しない — 呼び出し側で長さ検証が必要な型は将来の shikomi-infra Issue で追加） |
+| エラー時 | 入力検証は呼び出し側責務（本型は中身を判定しない） |
 
 ### REQ-009: DomainError
 
 | 項目 | 内容 |
 |------|------|
 | 入力 | 各型の構築／状態遷移呼び出し |
-| 処理 | `thiserror::Error` で列挙型として実装。バリアントは機能ごとに分離（`InvalidProtectionMode` / `UnsupportedVaultVersion` / `InvalidVaultHeader` / `InvalidRecordId` / `InvalidRecordLabel(Reason)` / `InvalidRecordPayload(Reason)` / `VaultConsistencyError(Reason)` / `NonceOverflow` / `InvalidSecretLength { expected, got }`） |
+| 処理 | `thiserror::Error` で列挙型として実装。バリアントは機能ごとに分離（`InvalidProtectionMode` / `UnsupportedVaultVersion` / `InvalidVaultHeader(Reason)` / `InvalidRecordId(Reason)` / `InvalidRecordLabel(Reason)` / `InvalidRecordPayload(Reason)` / `VaultConsistencyError(Reason)` / `NonceOverflow`） |
 | 出力 | `DomainError` 値 |
 | エラー時 | エラー型自体は Fail しない（エラーを表現する型） |
 
@@ -151,10 +151,9 @@
 | MSG-DEV-003 | 開発者エラー | `invalid record label: {0}` | `InvalidRecordLabel` |
 | MSG-DEV-004 | 開発者エラー | `vault and record payload mode mismatch: {0}` | `VaultConsistencyError` |
 | MSG-DEV-005 | 開発者エラー | `nonce counter exhausted; rekey required` | `NonceOverflow` |
-| MSG-DEV-006 | 開発者エラー | `secret length mismatch: expected {expected}, got {got}` | `InvalidSecretLength` |
-| MSG-DEV-007 | 開発者エラー | `invalid record id: {0}` | `InvalidRecordId` |
-| MSG-DEV-008 | 開発者エラー | `invalid record payload: {0}` | `InvalidRecordPayload` |
-| MSG-DEV-009 | 開発者エラー | `invalid vault header: {0}` | `InvalidVaultHeader` |
+| MSG-DEV-006 | 開発者エラー | `invalid record id: {0}` | `InvalidRecordId` |
+| MSG-DEV-007 | 開発者エラー | `invalid record payload: {0}` | `InvalidRecordPayload` |
+| MSG-DEV-008 | 開発者エラー | `invalid vault header: {0}` | `InvalidVaultHeader` |
 
 **エンドユーザー向け文言**（例: SmartScreen 警告対応、リカバリコード入力画面）は GUI/CLI Issue で `MSG-UI-xxx` として別途定義する。
 

@@ -191,7 +191,6 @@ classDiagram
         +InvalidRecordPayload
         +VaultConsistencyError
         +NonceOverflow
-        +InvalidSecretLength
     }
 
     class VekProvider {
@@ -259,8 +258,10 @@ classDiagram
 | `KdfSalt` 長 | 定数 | Argon2id ソルト | `16 byte`（CSPRNG、OWASP 推奨 16 以上） |
 | `NonceCounter` counter 上限 | 定数 | VEK 当たり暗号化上限 | `u32::MAX`（= $2^{32} - 1$、NIST SP 800-38D §8.3） |
 | `RecordLabel` 最大 grapheme 長 | 定数 | UI 表示・UX | `255`（一般的な UI ラベル上限） |
-| `RecordLabel` 禁止文字 | 定数 | 制御文字 | `U+0000..=U+001F`（ただし `\t` / `\n` / `\r` は許可）、`U+007F` |
+| `RecordLabel` 禁止文字 | 定数 | 制御文字 | `U+0000..=U+001F`（ただし `\t` (U+0009) / `\n` (U+000A) / `\r` (U+000D) は**例外として許可**）、`U+007F` |
 | `ProtectionMode` 永続化表現 | 定数 | vault ヘッダ `protection_mode` フィールド | `"plaintext"` / `"encrypted"`（小文字固定） |
+
+**`\t` / `\n` / `\r` を例外許可する根拠**: ユーザがレコードの説明（例: パスワード運用メモ、SSH コマンドの複数行例）を label に入れるユースケースを想定する（`overview.md` §3.2 ペルソナ山田「よく使う SSH コマンド」「長いコマンド」）。これらを**完全禁止すると UI 側でエスケープ/変換の二重管理が必要**になるため、画面描画で安全な 3 制御文字に限って許可する。他の制御文字（NUL 等）は SQLite BLOB / UTF-8 処理で脆弱性の温床となるため拒否を維持。本例外は `requirements-analysis.md` §受入基準 #3 と整合。
 
 **VEK / KEK のバイト長**: いずれも 32 byte（256 bit）。型では `SecretBytes` の可変長で扱い、長さ検証は `shikomi-infra` 側の暗号化 API の責務とする（本 crate では `SecretBytes` に固定長要件を課さない）。
 
@@ -276,7 +277,6 @@ classDiagram
 | `InvalidRecordPayload(InvalidRecordPayloadReason)` | `NonceLength { expected, got }` / `CipherTextEmpty` / `AadMissingField(String)` | `RecordPayloadEncrypted::new` |
 | `VaultConsistencyError(VaultConsistencyReason)` | `ModeMismatch { vault_mode, record_mode }` / `DuplicateId(RecordId)` / `RekeyInPlaintextMode` / `RekeyPartialFailure` / `RecordNotFound(RecordId)` | `Vault::*` |
 | `NonceOverflow` | — | `NonceCounter::next` |
-| `InvalidSecretLength` | `{ expected: usize, got: usize }` | `SecretBytes`（固定長バリアント。本 Issue は可変長のみ実装で回避） |
 
 ### 公開 API（lib.rs からの再エクスポート一覧）
 
@@ -358,12 +358,53 @@ classDiagram
 - `Debug` impl は `"[REDACTED]"` 固定
 
 `Aad`:
-- `Aad::new(record_id: RecordId, vault_version: VaultVersion, record_created_at: OffsetDateTime) -> Aad`
-- `Aad::to_canonical_bytes(&self) -> Box<[u8]>`（RFC3339 と UUID テキスト表現を固定順で連結、vault_version は 2 バイト big-endian。正規形で暗号化処理に渡す）
+- `Aad::new(record_id: RecordId, vault_version: VaultVersion, record_created_at: OffsetDateTime) -> Result<Aad, DomainError>`（`record_created_at` を i64 マイクロ秒に丸めた時の範囲外は `InvalidRecordPayload(Reason::AadTimestampOutOfRange)`）
+- `Aad::to_canonical_bytes(&self) -> [u8; 26]`（下記「バイナリ正規形仕様」に定める 26 byte 固定長レイアウト）
 
 `ProtectionMode`:
 - `ProtectionMode::as_persisted_str(&self) -> &'static str`（`"plaintext"` / `"encrypted"`）
 - `ProtectionMode::try_from_persisted_str(s: &str) -> Result<ProtectionMode, DomainError>`
+
+## バイナリ正規形仕様（将来の暗号互換性の契約）
+
+暗号化モードで AEAD（AES-256-GCM）に渡す **`Aad::to_canonical_bytes()` と `NonceBytes` の内部バイトレイアウト**は、vault のフォーマット互換性と直結する。一度 vault を作成・書き出した後は、将来版の shikomi が同じ vault を**復号できる保証**をこの仕様で担保する。**本仕様を破壊する変更は `VaultVersion` のメジャーアップとセットでのみ許可される**（互換性のために旧バージョンの解釈コードを残す）。
+
+### `Aad::to_canonical_bytes()` — 26 byte 固定長
+
+| オフセット | サイズ | 内容 | エンディアン / 形式 |
+|-----------|--------|------|-------------------|
+| `0..16`   | 16 byte | `record_id` の UUIDv7 バイト列 | RFC 4122 バイナリ形式（`uuid::Uuid::as_bytes()` の順序、MSB first） |
+| `16..18`  | 2 byte  | `vault_version` の u16 値 | **big-endian** |
+| `18..26`  | 8 byte  | `record_created_at` の Unix epoch からのマイクロ秒（i64） | **big-endian**、two's complement |
+
+**設計判断と根拠**:
+
+- **固定長 26 byte**: 可変長プレフィックスを排し、実装言語・シリアライザを問わず同一バイト列が再現できる（再現性 = AEAD 認証タグの整合）
+- **UUIDv7 をテキストでなくバイナリで埋める**: テキスト表現は大文字小文字・ハイフン位置の揺れを持つ。バイナリなら揺れ不能
+- **タイムスタンプをマイクロ秒 i64**: `time::OffsetDateTime` のナノ秒表現は i128（16 byte）だが、AAD に 16 byte 取るのは過剰。マイクロ秒 i64 で ±292,000 年の範囲をカバーし、i128 派生のエンディアン曖昧性を排除
+- **サブ秒精度丸め**: `Record::new(..)` / `Record::with_updated_payload(..)` は内部で `created_at` / `updated_at` をマイクロ秒精度に**切り捨て**る（nanoseconds 以下は捨てる）。永続化（SQLite の RFC3339 TEXT）と AAD 計算の双方で同じ値になるよう round-trip を構造で保証
+- **endian 選択の根拠**: big-endian は RFC 標準 / ネットワークバイトオーダー。hex dump 時に vault_version や timestamp が人間の読み順で並び、運用時の検証が容易
+
+### `NonceBytes` — 12 byte 固定長（AEAD IV 相当）
+
+| オフセット | サイズ | 内容 | 生成元 |
+|-----------|--------|------|--------|
+| `0..8`   | 8 byte  | CSPRNG 由来のランダム prefix | `NonceCounter::new(random_prefix: [u8; 8])` で呼び出し側から供給 |
+| `8..12`  | 4 byte  | `NonceCounter` 内部の `u32` counter 値 | **big-endian** |
+
+**設計判断と根拠**:
+
+- **nonce = 96 bit**: AES-GCM の標準 IV 長（NIST SP 800-38D §5.2.1.1「96-bit IV recommended」）
+- **上位 8B = 乱数、下位 4B = カウンタ の構造**: VEK が変わらない前提で「random prefix 固定 + counter 単調増加」にすることで、同一 VEK での nonce 衝突確率を $2^{-32}$ 以下に抑える（§2.4 の nonce 衝突抑止設計）
+- **big-endian の counter**: Aad と揃える。hex dump 時に `00 00 00 01 → 00 00 00 02` と読める可視性
+- **counter 上限 `u32::MAX`**: 上限到達で `NonceCounter::next` が `DomainError::NonceOverflow` を返し、呼び出し側に rekey を強制（§2.4 NIST SP 800-38D §8.3 準拠）
+- **乱数生成を `shikomi-core` で行わない**: pure Rust / no-I/O 方針（§4.5）。`random_prefix` は `shikomi-infra` 側で `getrandom` / OS CSPRNG から取得し、構築時に渡す
+
+### 検証テストの要点（テスト設計担当向けメモ）
+
+- 既知の `RecordId` / `VaultVersion` / `OffsetDateTime` の組から `to_canonical_bytes()` が**期待される 26 byte 列と完全一致**することを検証（黄金値テスト）
+- `NonceCounter::next()` を繰り返し呼んだ結果が、random prefix は不変で counter が `0, 1, 2, ...` と big-endian でインクリメントされることを検証
+- サブ秒精度丸めのテスト: nanoseconds を含む `OffsetDateTime` を `Record::new` に渡し、保存後に取り出した `created_at` がマイクロ秒粒度に一致することを検証
 
 ## ビジュアルデザイン
 
