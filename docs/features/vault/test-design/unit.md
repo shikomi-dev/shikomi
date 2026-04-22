@@ -139,7 +139,8 @@
 | TC-U09-01 | — | `format!("{}", DomainError::InvalidProtectionMode("x".into()))` | `"unknown protection mode"` を含む（MSG-DEV-001） |
 | TC-U09-02 | — | `format!("{}", DomainError::UnsupportedVaultVersion(99))` | `"unsupported vault version"` かつ `"99"` を含む（MSG-DEV-002） |
 | TC-U09-03 | — | `format!("{}", DomainError::InvalidRecordLabel(Empty))` | `"invalid record label"` を含む（MSG-DEV-003） |
-| TC-U09-04 | — | `format!("{}", DomainError::VaultConsistencyError(ModeMismatch { .. }))` | `"vault"` かつ `"mode mismatch"` を含む（MSG-DEV-004） |
+| TC-U09-04 | — | `format!("{}", DomainError::VaultConsistencyError(ModeMismatch { vault_mode: Plaintext, record_mode: Encrypted }))` | `"vault"` かつ `"mode"` を含む（MSG-DEV-004 改訂: `#[error("{0}")]` により `VaultConsistencyReason::ModeMismatch` の Display `"vault is in ... mode but record payload is ..."` が素通しされる） |
+| TC-U09-04b | — | `format!("{}", DomainError::VaultConsistencyError(DuplicateId(..)))` | `"duplicate"` を含み `"mode mismatch"` を含まない（旧 `#[error("vault and record payload mode mismatch: {0}")]` で混入していた文言が除去されたことの確認） |
 | TC-U09-05 | — | `format!("{}", DomainError::NonceOverflow)` | `"nonce counter exhausted"` を含む（MSG-DEV-005） |
 | TC-U09-06 | — | `format!("{}", DomainError::InvalidRecordId(NilUuid))` | `"invalid record id"` を含む（MSG-DEV-006） |
 | TC-U09-07 | — | `format!("{}", DomainError::InvalidRecordPayload(CipherTextEmpty))` | `"invalid record payload"` を含む（MSG-DEV-007） |
