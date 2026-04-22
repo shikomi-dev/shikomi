@@ -14,7 +14,7 @@ version = "0.1.0"
 authors = ["shikomi-dev"]
 license = "MIT"
 repository = "https://github.com/shikomi-dev/shikomi"
-# MSRV: rust-toolchain.toml / .clippy.toml の msrv と同値で一元管理
+# MSRV: `.clippy.toml` の msrv と同値。`rust-toolchain.toml` は開発時チャンネル(stable)指定のみで、MSRV管理は本フィールドと `.clippy.toml` で一元化
 rust-version = "1.80.0"
 publish = false
 
