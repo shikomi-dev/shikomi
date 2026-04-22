@@ -22,6 +22,7 @@
 | AC-06 | `cargo test -p shikomi-core` が pass する | 結合 |
 | AC-07 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` が pass する | 結合 |
 | AC-08 | 公開 API 上に生 `String` / `Vec<u8>` がシークレット経路に露出しない（`SecretString` / `SecretBytes` / `CipherText` 等 newtype 経由） | ユニット |
+| AC-09 | `deny.toml` の `[advisories]` コメントに `secrecy` / `zeroize` が暗号クリティカル crate として明記され、かつ `ignore = []` リストに含まれていない | 静的確認 |
 
 ## 3. テストマトリクス（トレーサビリティ）
 
@@ -82,6 +83,18 @@
 | TC-U07-11 | REQ-007 | AC-01 | `Vault::protection_mode()` がヘッダのモードを返す | 正常系 |
 | TC-U07-12 | REQ-007 | AC-01 | `Vault::records()` が全レコードのスライスを返す | 正常系 |
 | TC-U07-13 | REQ-007 | AC-01 | `Vault::update_record` が updater クロージャ経由でレコードを更新できる | 正常系 |
+| TC-U07-14 | REQ-007 | AC-01 | `Vault::rekey_with` が Plaintext vault で `VaultConsistencyError(RekeyInPlaintextMode)` を返す | 異常系 |
+| TC-U07-15 | REQ-007 | AC-01 | `Vault::rekey_with` が Encrypted vault + 成功ダミー `VekProvider` で `Ok(())` を返す | 正常系 |
+| TC-U07-16 | REQ-007 | AC-01 | `Vault::rekey_with` が Encrypted vault + 失敗ダミー `VekProvider`（`reencrypt_all` が `Err`）で `VaultConsistencyError(RekeyPartialFailure)` を返す | 異常系 |
+| TC-U09-01 | REQ-009 | AC-01 | `DomainError::InvalidProtectionMode("x")` の `Display` が `"unknown protection mode: x"` を含む（MSG-DEV-001） | 正常系 |
+| TC-U09-02 | REQ-009 | AC-01 | `DomainError::UnsupportedVaultVersion(99)` の `Display` が `"unsupported vault version: 99"` を含む（MSG-DEV-002） | 正常系 |
+| TC-U09-03 | REQ-009 | AC-01 | `DomainError::InvalidRecordLabel(Empty)` の `Display` が `"invalid record label"` を含む（MSG-DEV-003） | 正常系 |
+| TC-U09-04 | REQ-009 | AC-01 | `DomainError::VaultConsistencyError(ModeMismatch { .. })` の `Display` が `"vault and record payload mode mismatch"` を含む（MSG-DEV-004） | 正常系 |
+| TC-U09-05 | REQ-009 | AC-01 | `DomainError::NonceOverflow` の `Display` が `"nonce counter exhausted"` を含む（MSG-DEV-005） | 正常系 |
+| TC-U09-06 | REQ-009 | AC-01 | `DomainError::InvalidSecretLength { expected:32, got:16 }` の `Display` が `"expected 32, got 16"` を含む（MSG-DEV-006） | 正常系 |
+| TC-U09-07 | REQ-009 | AC-01 | `DomainError::InvalidRecordId(NilUuid)` の `Display` が `"invalid record id"` を含む（MSG-DEV-007） | 正常系 |
+| TC-U09-08 | REQ-009 | AC-01 | `DomainError::InvalidRecordPayload(CipherTextEmpty)` の `Display` が `"invalid record payload"` を含む（MSG-DEV-008） | 正常系 |
+| TC-U09-09 | REQ-009 | AC-01 | `DomainError::InvalidVaultHeader(KdfSaltLength { expected:16, got:15 })` の `Display` が `"invalid vault header"` を含む（MSG-DEV-009） | 正常系 |
 | TC-U08-01 | REQ-008 | AC-01 | `SecretString::from_string` でインスタンスを構築できる（失敗しない） | 正常系 |
 | TC-U08-02 | REQ-008 | AC-04 | `format!("{:?}", secret_string)` の出力が `"[REDACTED]"` である | 正常系 |
 | TC-U08-03 | REQ-008 | AC-04 | `SecretString::expose_secret()` が元の文字列を返す | 正常系 |
@@ -106,6 +119,7 @@
 | TC-I04 | REQ-008 | AC-04, AC-06 | `SecretString` / `SecretBytes` の Debug フォーマットでリーク不存在を確認（`format!("{:?}")` に秘密値が含まれないこと） | 正常系 |
 | TC-I05 | REQ-010 | AC-05, AC-06 | `NonceCounter` のオーバーフロー検知を外部 API から確認: `resume(prefix, u32::MAX)` 後に `next()` → `NonceOverflow` | 境界値 |
 | TC-I06 | REQ-001〜REQ-010 | AC-07 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` が CI 環境で pass する | 正常系 |
+| TC-I07 | REQ-009 | AC-09 | `deny.toml` に `secrecy` / `zeroize` が `ignore` 禁止コメントに明記され、`ignore = []` リストに含まれていないことを grep で確認 | 静的確認 |
 
 ## 4. E2Eテスト設計
 
@@ -192,6 +206,19 @@
 | 前提条件 | `shikomi-core` のソースコードが実装済みかつコミット済み |
 | 操作 | (1) `cargo build --workspace` → (2) `cargo test --workspace` → (3) `cargo fmt --check --all` → (4) `cargo clippy --workspace -- -D warnings` → (5) `cargo deny check` |
 | 期待結果 | 全コマンド exit code == 0 |
+
+### TC-I07: deny.toml 暗号クリティカル crate 登録確認
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I07 |
+| 対応する機能ID | REQ-009 |
+| 対応する受入基準ID | AC-09 |
+| 対応する工程 | 要件定義（requirements-analysis.md §受入基準 #9） |
+| 種別 | 静的確認 |
+| 前提条件 | `deny.toml` がリポジトリルートに存在する |
+| 操作 | (1) `grep -n "secrecy\|zeroize" deny.toml` でコメント行への記載を確認 → (2) `deny.toml` の `ignore = [` 以下に `secrecy` / `zeroize` の advisory ID が**含まれない**ことを確認 |
+| 期待結果 | (1) `secrecy` / `zeroize` がコメント（`#` 行）に出現する / (2) `ignore = []` が空のまま、または `secrecy` / `zeroize` 関連 advisory ID を含まない |
 
 ## 6. ユニットテスト設計（詳細）
 
@@ -291,6 +318,11 @@
 | TC-U07-11 | Plaintext vault | `protection_mode()` | `ProtectionMode::Plaintext` |
 | TC-U07-12 | 2 record 追加済み | `records()` | 長さ 2 のスライス |
 | TC-U07-13 | 1 record 追加済み | `update_record(&id, \|r\| Ok(r.with_updated_label(new_label, now)?))` | `Ok(())` かつ `find_record` で更新後ラベルを確認できる |
+| TC-U07-14 | Plaintext vault | `rekey_with(&mut dummy_provider)` | `Err(VaultConsistencyError(RekeyInPlaintextMode))` |
+| TC-U07-15 | Encrypted vault + 1 record 追加済み | `rekey_with(&mut succeeding_dummy_provider)` | `Ok(())` |
+| TC-U07-16 | Encrypted vault + 1 record 追加済み | `rekey_with(&mut failing_dummy_provider)` （`reencrypt_all` が `Err` を返す） | `Err(VaultConsistencyError(RekeyPartialFailure))` |
+
+> **ダミー `VekProvider` について**: `VekProvider` は `shikomi-core` が定義する trait。ユニットテストでは `#[cfg(test)]` モジュール内に `struct DummyVekProvider { should_fail: bool }` を定義し trait を実装する。これは外部 I/O を代替するモックではなく、**トレイト境界を満たすテスト用実装**（test double）であり、テスト戦略の「自分が書いたコードはモックするな」に抵触しない（実際の `shikomi-infra` 実装が存在しないスケルトン段階での唯一の検証手段）。
 
 ### TC-U08: SecretString / SecretBytes
 
@@ -304,6 +336,24 @@
 | TC-U08-04 | — | `SecretBytes::from_boxed_slice(vec![1,2,3].into_boxed_slice())` | パニックなし（失敗しない） |
 | TC-U08-05 | `from_boxed_slice([1,2,3])` 成功後 | `format!("{:?}", b)` | 文字列に生バイト値が含まれず `"[REDACTED]"` を含む |
 | TC-U08-06 | `from_boxed_slice([1,2,3])` 成功後 | `b.expose_secret()` | `&[1u8, 2, 3]` |
+
+### TC-U09: DomainError Display 実装
+
+**配置先**: `crates/shikomi-core/src/error.rs`
+
+> **検証方針**: `thiserror::Error` 由来の `Display` 実装が MSG-DEV-001〜009 のメッセージ文面を正しく返すことを確認する。完全一致ではなく、メッセージの主要キーワードを `contains()` で検証する（メッセージ文面の細部修正で CI が落ちないよう意図的に柔軟化）。
+
+| テストID | 前提条件 | 操作 | 期待結果 |
+|---------|---------|------|---------|
+| TC-U09-01 | — | `format!("{}", DomainError::InvalidProtectionMode("x".into()))` | `"unknown protection mode"` を含む（MSG-DEV-001） |
+| TC-U09-02 | — | `format!("{}", DomainError::UnsupportedVaultVersion(99))` | `"unsupported vault version"` かつ `"99"` を含む（MSG-DEV-002） |
+| TC-U09-03 | — | `format!("{}", DomainError::InvalidRecordLabel(Empty))` | `"invalid record label"` を含む（MSG-DEV-003） |
+| TC-U09-04 | — | `format!("{}", DomainError::VaultConsistencyError(ModeMismatch { .. }))` | `"vault"` かつ `"mode mismatch"` を含む（MSG-DEV-004） |
+| TC-U09-05 | — | `format!("{}", DomainError::NonceOverflow)` | `"nonce counter exhausted"` を含む（MSG-DEV-005） |
+| TC-U09-06 | — | `format!("{}", DomainError::InvalidSecretLength { expected: 32, got: 16 })` | `"32"` かつ `"16"` を含む（MSG-DEV-006） |
+| TC-U09-07 | — | `format!("{}", DomainError::InvalidRecordId(NilUuid))` | `"invalid record id"` を含む（MSG-DEV-007） |
+| TC-U09-08 | — | `format!("{}", DomainError::InvalidRecordPayload(CipherTextEmpty))` | `"invalid record payload"` を含む（MSG-DEV-008） |
+| TC-U09-09 | — | `format!("{}", DomainError::InvalidVaultHeader(KdfSaltLength { expected: 16, got: 15 }))` | `"invalid vault header"` を含む（MSG-DEV-009） |
 
 ### TC-U10: NonceCounter
 
@@ -327,6 +377,7 @@
 | 時刻（`OffsetDateTime`） | **不要**（テスト用固定値を直接渡す） | `OffsetDateTime::now_utc()` を呼ぶのはテストではなく呼び出し側責務。型が値を受け取るだけ |
 | 乱数源（`NonceCounter::new` の random_prefix） | **不要**（`[0u8; 8]` 等の固定値を使う） | `shikomi-core` は乱数源を持たない設計（詳細設計 §注記6） |
 | `cargo` コマンド（TC-I06） | **不要**（本物を使用） | 実際のツールチェーンを使う |
+| `VekProvider` trait（TC-U07-14〜16） | **test double を使用**（モックではない） | `shikomi-infra` 実装がスケルトン段階で存在しないため、`#[cfg(test)]` 内に `DummyVekProvider { should_fail: bool }` を定義し trait を実装する。外部 I/O の代替でなく trait 境界を満たす最小実装。「自分が書いたコードはモックするな」の対象外 |
 
 外部 I/O を持たないため assumed mock は発生しない。Characterization test も不要。
 
@@ -347,12 +398,14 @@ crates/shikomi-core/
       nonce.rs       # TC-U10
     secret/
       mod.rs         # TC-U08
+    error.rs         # TC-U09（DomainError Display）
   tests/
     vault_lifecycle.rs      # TC-I01, TC-I02
     record_label_boundary.rs # TC-I03
     secret_no_leak.rs       # TC-I04
     nonce_overflow.rs       # TC-I05
     ci_commands.rs          # TC-I06（cargo コマンド確認は CI 環境で実施）
+    deny_toml_check.rs      # TC-I07（deny.toml grep 確認。fs::read_to_string で読み込み assert）
 ```
 
 **テスト命名規則**: `test_何をした時_どうなるべきか`（例: `test_add_record_with_mode_mismatch_returns_consistency_error`）
@@ -388,13 +441,14 @@ cargo deny check
 
 | 観点 | 基準 |
 |------|------|
-| 受入基準の網羅 | AC-01〜AC-08 が全テストケースで網羅されていること |
+| 受入基準の網羅 | AC-01〜AC-09 が全テストケースで網羅されていること |
 | 行カバレッジ | `cargo test -p shikomi-core` で 80% 以上（受入基準 AC-06）。計測は `cargo llvm-cov` 等で行う |
-| 正常系 | 全ケース必須（ユニット 54 件 + 結合 6 件 = 合計 60 件） |
+| 正常系 | 全ケース必須（ユニット 66 件 + 結合 7 件 = 合計 73 件） |
 | 異常系 | エラーバリアントの種別まで検証（`assert!(matches!(err, DomainError::Xxx))` レベル） |
 | 境界値 | `RecordLabel`（0/1/254/255/256 grapheme）、`NonceCounter`（u32::MAX-1 / u32::MAX）、`VaultVersion`（0/1/2）を必須とする |
 
 ---
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — AC-09（deny.toml 暗号クリティカル crate 確認）追加・TC-I07 追加。TC-U09（DomainError Display MSG-DEV-001〜009）追加。TC-U07-14〜16（Vault::rekey_with テスト）追加。合計 60件→73件*
 *対応 Issue: #7 feat(shikomi-core): vault ドメイン型定義*
