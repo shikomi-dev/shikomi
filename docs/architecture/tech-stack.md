@@ -246,13 +246,13 @@ flowchart LR
 | セクション | 初期方針 | 根拠 |
 |----------|---------|------|
 | `[licenses] allow` | `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-DFS-2016`, `Unicode-3.0`, `Zlib`, `CC0-1.0` | OSS デスクトップ配布で商用互換性を保つ範囲。GPL 系は shikomi 本体のライセンス（MIT）と衝突するため allow しない |
-| `[licenses] confidence-threshold` | `0.93` | デフォルト値。極端に低くすると誤検知が出る |
-| `[advisories] vulnerability` | `deny` | RustSec advisory DB 由来の脆弱性は CI で即 fail |
-| `[advisories] unmaintained` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から全 crate に `deny` を適用し、どうしても外せない個別 crate のみ `[advisories].ignore` に RustSec advisory ID を登録して**一時的に例外化**する（§4.3.1）。暗号クリティカル crate は **ignore リストへの追加を禁止**（§4.3.2） |
-| `[advisories] yanked` | `deny` | yanked 版を引いたままのビルドは再現不能 |
-| `[bans] multiple-versions` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から `deny`。外せない重複は `[bans].skip` で個別 crate と version を列挙して暫定除外（§4.3.1）。外部 crate を持たない Issue #4 時点では `skip` リストは空 |
-| `[bans] wildcards` | `deny` | `*` バージョン指定は Cargo.lock との整合を破壊する |
-| `[sources] unknown-registry` / `unknown-git` | `deny` | crates.io 以外からの取得は明示的に `allow` リストへ追加する運用 |
+| `[licenses] confidence-threshold` | `0.93` | cargo-deny デフォルト `0.8` から**厳格化**。低閾値はライセンス誤検知（短い SPDX 記述や曖昧な表記を別ライセンスとして通過させる）を許容するため、パスワードを扱う本プロダクトでは高信頼要求として `0.93` を設定。出典: https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html |
+| `[advisories] vulnerability` | **設定不要（cargo-deny 0.19 以降 deprecated、常時 `deny` 相当で動作）** | cargo-deny 0.19 で `[advisories].vulnerability` キーは deprecated となり、**vulnerability severity はデフォルトで常時 `deny` 相当**（ハードコード動作、無効化不可）。`deny.toml` へ書いても CI で `[unexpected-field]` になる。**省略が正**、ただし意図を明示するため `deny.toml` に短いコメントで「vulnerability は deprecated で常時 deny」と書き残す運用とする。出典: https://github.com/EmbarkStudios/cargo-deny/blob/main/CHANGELOG.md |
+| `[advisories] unmaintained` | **`"all"`（Issue #4 時点から）** | cargo-deny 0.19 で有効値が列挙型（`"all"` / `"workspace"` / `"transitive"` / `"none"`）に変更。`"all"` = workspace 直接・間接の全依存に対して unmaintained を `deny`。反転方式: 外せない個別 crate のみ `[advisories].ignore` に RustSec advisory ID を登録して**一時的に例外化**する（§4.3.1）。暗号クリティカル crate は **ignore リストへの追加を禁止**（§4.3.2） |
+| `[advisories] yanked` | `"deny"` | yanked 版を引いたままのビルドは再現不能 |
+| `[bans] multiple-versions` | **`"deny"`（Issue #4 時点から）** | 反転方式: 初期から `deny`。外せない重複は `[bans].skip` で個別 crate と version を列挙して暫定除外（§4.3.1）。外部 crate を持たない Issue #4 時点では `skip` リストは空 |
+| `[bans] wildcards` | `"deny"` | `*` バージョン指定は Cargo.lock との整合を破壊する |
+| `[sources] unknown-registry` / `unknown-git` | `"deny"` | crates.io 以外からの取得は明示的に `allow` リストへ追加する運用 |
 
 ### 4.3.1 反転方式の運用（`warn` 段階を持たない `deny` + 一時 `ignore` 方式）
 

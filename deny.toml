@@ -1,0 +1,47 @@
+[advisories]
+# メンテナンス停止・yanked な crate は即座にビルドを失敗させる（Fail Fast）
+# vulnerability: cargo-deny 0.19.x で deprecated となり省略可能（常時有効・deny相当で動作する）
+# unmaintained: "all"=全依存, "workspace"=直接依存のみ, "transitive"=間接のみ, "none"=無効
+unmaintained = "all"
+yanked = "deny"
+# 一時例外: ignore リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# 初期状態は空（外部 crate 未導入のため）
+# NOTE: 以下の暗号クリティカル crate は ignore への登録を禁止する
+# aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
+ignore = []
+
+[licenses]
+# MIT / Apache-2.0 / ISC / BSD 系のみ許可
+# confidence-threshold: ライセンス検出精度の下限（0.93 未満は unknown 扱いで deny）
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+]
+
+[bans]
+# 複数バージョン共存は依存解決の複雑化を招く（Fail Fast）
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+deny = []
+# 一時例外: skip リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# 初期状態は空（外部 crate 未導入のため）
+# NOTE: 以下の暗号クリティカル crate は skip / skip-tree への登録を禁止する
+# aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

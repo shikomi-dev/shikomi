@@ -1,0 +1,14 @@
+[package]
+name = "shikomi-cli"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "shikomi"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "shikomi-infra"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
