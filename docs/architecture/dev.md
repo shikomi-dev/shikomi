@@ -39,6 +39,9 @@ flowchart LR
 | `build-nightly` | 日次 cron | 未署名バイナリ、`develop` から（main は常にタグ付きリリース状態のため nightly 対象ではない） | matrix |
 | `release` | タグ `v*.*.*` push（`main` への release/hotfix マージ後に付与） | 署名済み・公証済み・SBOM 付き成果物を Releases に登録 | matrix |
 | `pages` | main push（`docs/` 差分時） | `mdBook` / Astro 等で設計書＆ランディングページを GitHub Pages へ | ubuntu-latest |
+| `branch-policy` | PR opened / synchronize | PR の source/target ブランチ名を `§7.1` の命名規則と `§7.2` の PR ソース制限で検証。違反は即 fail（`main` への PR が `release/*` / `hotfix/*` 以外、`develop` への PR が `feature/*` / `release/*` / `hotfix/*` 以外、など） | ubuntu-latest |
+| `pr-title-check` | PR opened / edited / synchronize | PR タイトルを Conventional Commits 正規表現で検証（`feat:` / `fix:` / `docs:` / `chore:` / `refactor:` / `test:` / `ci:` / `build:` / `perf:`、Breaking は `!:` 付）。違反は fail（squash merge 時のコミットメッセージとして採用されるため） | ubuntu-latest |
+| `back-merge-check` | PR merged to `main`（release/hotfix）／日次 cron | `main` への release/hotfix マージ後 24h 以内に同ブランチが `develop` にも back-merge されているかを GitHub API で確認。未実施なら `back-merge-missing` ラベル付き Issue を自動起票し release 担当者にアサイン | ubuntu-latest |
 
 **Ubuntu は X11 と Wayland の両セッションでテストする**（Wayland のホットキー実装は X11 と別経路のため）。GitHub Actions の `ubuntu-24.04` は既定で Wayland セッション、`ubuntu-22.04` は X11 セッションを使える。詳細は環境差分ドキュメント（`environment-diff.md`）を参照。
 
@@ -120,14 +123,14 @@ gitGraph
 
 ### 7.2 ブランチ保護ルール
 
-GitHub のブランチ保護設定は下表の通り。**include administrators = true**（管理者も規則に従う）、**force push = disabled**、**delete = disabled** は全保護ブランチ共通。
+GitHub のブランチ保護設定は下表の通り。**enforce_admins = true**（管理者も規則に従う）、**force push = disabled**、**delete = disabled** は全保護ブランチ共通。緊急時例外は §7.4 で定義する **bypass allowances**（Rulesets の `bypass_actors`）で、特定チーム（`@shikomi-dev/security-hotfix`）だけに必要最小限の迂回を許す（`enforce_admins` は無効化せず、管理者個人への特権も与えない）。
 
 | 設定項目 | `main` | `develop` | `release/*` | `hotfix/*` |
 |---------|--------|-----------|-------------|-----------|
 | 直接 push | ❌ 禁止 | ❌ 禁止 | ❌ 禁止（PR 経由のみ） | ❌ 禁止（PR 経由のみ） |
 | PR 必須 | ✅ | ✅ | ✅ | ✅ |
-| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `back-merge-check` | `lint` / `unit-core` / `test-infra` / `audit` | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` | 同左 |
-| 必須レビュー人数 | **2 名**（CODEOWNERS 必須） | 1 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須、緊急時は 1 名＋事後レビュー） |
+| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` / `back-merge-check` | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` | 同左 |
+| 必須レビュー人数 | **2 名**（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） | 1 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） |
 | PR ソース制限 | `release/*` または `hotfix/*` のみ（branch naming rule で強制） | `feature/*` / `release/*` / `hotfix/*` のみ | `develop` から作成 | `main` から作成 |
 | マージ方法許可 | **merge commit のみ**（release/hotfix の分岐履歴を保持） | squash merge（feature）＋ merge commit（release/hotfix back-merge） | merge commit | merge commit |
 | linear history 強制 | ❌（merge commit 必須のため） | ❌ | ❌ | ❌ |
@@ -166,7 +169,28 @@ GitHub のブランチ保護設定は下表の通り。**include administrators 
 4. **back-merge**: 同じ hotfix を `develop` へも merge commit で戻す
 5. **片付け**: ブランチ削除
 
-**緊急時例外**: セキュリティ脆弱性（`SECURITY.md` 経由の報告）は 1 名承認＋事後レビュー可。事後レビュー期限は main マージから 72h。未実施は Issue として自動起票（`security-post-review` ラベル）
+**緊急時例外（bypass allowances 方式）**:
+
+`enforce_admins = true` を**無効化せず**、個人管理者にも特権を付与しない。緊急時例外は GitHub **Rulesets の `bypass_actors`** 機能で、専用チーム `@shikomi-dev/security-hotfix` にだけ必要最小限の迂回権限を明示的に付与する形で実現する（§7.2 の `enforce_admins=true` 方針と矛盾しない）。
+
+| 項目 | 設定 |
+|------|------|
+| 対象ブランチ | `main`、`hotfix/*` |
+| 許可する bypass actor | `@shikomi-dev/security-hotfix` チーム（メンテナ 2 名以上で構成、SECURITY.md の脆弱性トリアージ担当） |
+| bypass モード | `pull_request`（PR 自体は必須だが、レビュー数を 1 名に軽減できる）。**`always`（直接 push）は使わない** |
+| 軽減対象ルール | 「必須レビュー 2 名」のみ。`enforce_admins` / `required_status_checks`（lint/unit-core/test-infra/audit）/ `signed_commits` は**軽減対象外**（セキュリティ hotfix でも CI は通す） |
+| トリガ条件 | `SECURITY.md` 経由で受領した脆弱性レポートが High / Critical 評価、かつ現行リリースに影響 |
+| 事後レビュー | main マージから **72h 以内に 2 名目レビュー**を GitHub の `required_reviewers` コマンドで追加取得。未実施は `security-post-review` ラベル付き Issue が自動起票され、release 担当者にアサイン |
+| 監査 | bypass 使用時は GitHub Audit log に自動記録される。月次で CODEOWNERS が `@shikomi-dev/security-hotfix` メンバー構成と bypass 使用履歴を確認 |
+
+**設計原則との整合**:
+- **Fail Fast**: 事後レビュー 72h 未実施は自動 Issue 化で検知
+- **Tell, Don't Ask**: bypass 権限はチームに付与し、**個人の判断で enforce_admins を切る運用を排除**（人間の手でブランチ保護を一時的に off→on する手順は不可逆な事故の温床）
+- **Fail Secure**: bypass は「レビュー数軽減のみ」。CI と署名コミットという客観的検証は軽減しない
+
+出典:
+- GitHub Rulesets bypass actors: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository#granting-bypass-permissions-for-your-ruleset
+- Branch protection `enforce_admins`: https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection
 
 ### 7.5 マージ戦略とコミット規約
 
