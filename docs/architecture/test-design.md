@@ -40,7 +40,7 @@
 | TC-U14 | REPO-01 | `SECURITY.md` に脆弱性報告窓口の記載を含む | ユニット | 正常系 |
 | TC-U15 | REPO-01 | `CODEOWNERS` に `docs/architecture/` の責務割当を含む | ユニット | 正常系 |
 | TC-U16 | REPO-05 | `CONTRIBUTING.md` に `feature/*` → `develop` のマージ先が明記されている | ユニット | 正常系 |
-| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks（branch-policy/pr-title-check含む、back-merge-checkは除外）・force push 禁止・会話解決必須・bypass list | 結合 | 正常系 |
+| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks（branch-policy/pr-title-check含む、build-preview/back-merge-checkは§7.6方針で除外）・force push 禁止・会話解決必須・bypass list | 結合 | 正常系 |
 | TC-I02 | REPO-02 | `develop` ブランチ保護: PR 必須・1名レビュー・status checks（branch-policy/pr-title-check含む）・force push 禁止 | 結合 | 正常系 |
 | TC-I03 | REPO-02 | `main` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
 | TC-I04 | REPO-02 | `develop` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
@@ -104,7 +104,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `main` ブランチ保護が GitHub 上で設定済み |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` を実行 |
-| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_pull_request_reviews.bypass_pull_request_allowances` に 1 件以上のアクター（teams または users）が設定されている<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `build-preview`, `branch-policy`, `pr-title-check` が含まれる（`back-merge-check` は post-merge/cron 事後監視のため PR required には含まれない — dev.md §7.6）<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false<br>- `required_conversation_resolution.enabled` == true |
+| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_pull_request_reviews.bypass_pull_request_allowances` に 1 件以上のアクター（teams または users）が設定されている<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `branch-policy`, `pr-title-check` が含まれる（`build-preview` は条件付トリガ opt-in、`back-merge-check` は post-merge/cron 事後監視のため、いずれも PR required には含まれない — dev.md §7.6）<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false<br>- `required_conversation_resolution.enabled` == true |
 
 ### TC-I02: develop ブランチ保護ルール確認
 
