@@ -12,7 +12,6 @@
 /LICENSE                        @kkm-horikawa
 /CONTRIBUTING.md                @kkm-horikawa
 /SECURITY.md                    @kkm-horikawa
-/CODEOWNERS                     @kkm-horikawa
 
 # GitHub 設定・CI ワークフロー（全体オーナー）
 /.github/                       @kkm-horikawa

@@ -14,11 +14,8 @@
 
 ### 報告方法
 
-1. **GitHub Security Advisories**（推奨）:  
-   [https://github.com/shikomi-dev/shikomi/security/advisories/new](https://github.com/shikomi-dev/shikomi/security/advisories/new) から非公開で報告
-
-2. **メール**:  
-   `security@shikomi-dev.github.io` 宛てに GPG 暗号化して送信（公開鍵は Releases ページに掲載）
+**GitHub Security Advisories**（唯一の報告窓口）:  
+[https://github.com/shikomi-dev/shikomi/security/advisories/new](https://github.com/shikomi-dev/shikomi/security/advisories/new) から非公開で報告してください。GitHub のプライベートフォーク機能を使い、修正コードを報告者と共同でレビューすることもできます。
 
 ### 報告内容に含めるべき情報
 
