@@ -215,6 +215,66 @@ mod tests {
         RecordId::new(Uuid::now_v7()).unwrap()
     }
 
+    // ---------------------------------------------------------------
+    // WrappedVek::try_new 境界値テスト（TC-U06a）
+    // REQ-009 / AC-09（Defense in Depth: 暗号的不正入力のドメイン層排除）
+    // ---------------------------------------------------------------
+
+    /// TC-U06a-01: 空バイト列 → WrappedVekEmpty
+    #[test]
+    fn test_wrapped_vek_try_new_with_empty_bytes_returns_wrapped_vek_empty() {
+        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekEmpty)
+            ),
+            "Expected WrappedVekEmpty, got: {:?}",
+            err
+        );
+    }
+
+    /// TC-U06a-02: 1 バイト（最小不正値）→ WrappedVekTooShort
+    #[test]
+    fn test_wrapped_vek_try_new_with_1_byte_returns_wrapped_vek_too_short() {
+        let err = WrappedVek::try_new(vec![0u8; 1].into_boxed_slice()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekTooShort)
+            ),
+            "Expected WrappedVekTooShort for 1-byte input, got: {:?}",
+            err
+        );
+    }
+
+    /// TC-U06a-03: 15 バイト（上限不正値）→ WrappedVekTooShort
+    #[test]
+    fn test_wrapped_vek_try_new_with_15_bytes_returns_wrapped_vek_too_short() {
+        let err = WrappedVek::try_new(vec![0u8; 15].into_boxed_slice()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekTooShort)
+            ),
+            "Expected WrappedVekTooShort for 15-byte input, got: {:?}",
+            err
+        );
+    }
+
+    /// TC-U06a-04: 16 バイト（最小有効値）→ Ok
+    #[test]
+    fn test_wrapped_vek_try_new_with_16_bytes_ok() {
+        assert!(
+            WrappedVek::try_new(vec![0u8; 16].into_boxed_slice()).is_ok(),
+            "WrappedVek with 16 bytes must succeed"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Aad テスト
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_aad_new_with_valid_args_ok() {
         let id = make_id();
