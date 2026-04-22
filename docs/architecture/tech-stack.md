@@ -193,8 +193,95 @@ flowchart LR
 | 4 | `target_os = "macos"` | macOS backend（Carbon + Accessibility） |
 | 5 | `target_os = "windows"` | Windows backend（`RegisterHotKey`） |
 
-## 4. クレートバージョンピン方針
+## 4. Cargo workspace 構成と依存管理
+
+### 4.1 workspace 初期設定（実装規約）
+
+§1 の 5 crate を単一 Cargo workspace として管理する。各 crate は `crates/{name}/` 配下に置き、ルートには workspace 定義ファイルのみを置く。
+
+| 設定項目 | 値 | 根拠 |
+|---------|----|------|
+| `resolver` | `"2"` | workspace と feature unification の挙動が v1 と非互換。crate の feature が OS 別に分岐する shikomi では v2 必須（Cargo Book: Features / Feature resolver version 2） |
+| `[workspace.package] edition` | `"2021"` | 全 crate 共通。`2024` は Rust 1.85 以降で安定化したが、Tauri v2 / ashpd 等のエコシステムは 2021 想定のため合わせる |
+| `[workspace.package] rust-version` | `rust-toolchain.toml` と同値 | MSRV を workspace 横断で一元管理 |
+| `[workspace.package] license` | `"MIT"` | `nfr.md` §9 に準拠 |
+| `[workspace.package] authors` / `repository` | workspace 側で定義 | DRY: crate 個別の `Cargo.toml` には書かない |
+| 各 crate の `publish` | `false` | shikomi はデスクトップアプリ本体であり、crate 個別に crates.io へ公開しない |
+| `Cargo.lock` コミット | **必須** | §4.3 参照。バイナリ crate の標準プラクティス |
+
+**crate 配置と依存方向**:
+
+| crate | 配置 | エントリ | 責務境界 | 依存してよい crate |
+|-------|------|---------|---------|------------------|
+| `shikomi-core` | `crates/shikomi-core/` | `lib.rs` | pure Rust / no-I/O ドメイン | なし（最下層） |
+| `shikomi-infra` | `crates/shikomi-infra/` | `lib.rs` | OS 依存アダプタ | `shikomi-core` |
+| `shikomi-daemon` | `crates/shikomi-daemon/` | `main.rs` | 常駐プロセス / IPC サーバ | `shikomi-core`, `shikomi-infra` |
+| `shikomi-cli` | `crates/shikomi-cli/` | `main.rs` | CLI（IPC クライアント） | `shikomi-core`, `shikomi-infra` |
+| `shikomi-gui` | `crates/shikomi-gui/` | `lib.rs`（Tauri 初期化は後続 Issue） | 設定 GUI（IPC クライアント） | `shikomi-core`, `shikomi-infra` |
+
+**依存方向ルール**（Clean Architecture、違反時は `cargo-deny` 相当の検査で fail fast）:
+- `shikomi-core` は他 crate に依存しない
+- `shikomi-infra → shikomi-core` の一方向のみ
+- `daemon` / `cli` / `gui` は相互依存しない
+- 実装 crate（`daemon` / `cli` / `gui`）が `core` を迂回して互いを参照することは禁止
+
+**外部 crate の参照方法**: 各 crate の `Cargo.toml` では外部 crate のバージョンを直接書かず、**workspace ルートで一元定義したものを `{ workspace = true }` で参照する**（§4.4）。これにより同一依存の version drift を構造的に防ぐ。ワークスペース内の 5 crate 間参照（`shikomi-infra` → `shikomi-core` 等）も同方式で定義する（path 依存＋バージョン併記）。
+
+### 4.2 toolchain / lint / format 規約
+
+| ファイル | 項目 | 値 / 方針 |
+|---------|------|----------|
+| `rust-toolchain.toml` | `channel` | `"stable"`（最新安定版、CI と開発環境で統一） |
+| 〃 | `components` | `["rustfmt", "clippy"]` |
+| 〃 | `profile` | `"minimal"`（不要コンポーネントを取らず CI 時間を短縮） |
+| `rustfmt.toml` | 方針 | Rust 公式デフォルトを基本。`edition = "2021"` を明示。意図的な逸脱項目のみ追記 |
+| `.clippy.toml` | 方針 | `msrv` を `rust-toolchain.toml` と一致させる。カテゴリレベル設定は CI コマンド側の `-D warnings` で強制 |
+| CI clippy 呼び出し | コマンド | `cargo clippy --workspace --all-targets -- -D warnings` |
+| CI fmt 呼び出し | コマンド | `cargo fmt --all -- --check` |
+
+### 4.3 `cargo-deny` 初期ポリシー
+
+`deny.toml` は shikomi が「パスワードを扱うデスクトップ OSS」であるため、ライセンス / advisory / 依存の重複を CI で fail fast させる。
+
+| セクション | 初期方針 | 根拠 |
+|----------|---------|------|
+| `[licenses] allow` | `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-DFS-2016`, `Unicode-3.0`, `Zlib`, `CC0-1.0` | OSS デスクトップ配布で商用互換性を保つ範囲。GPL 系は shikomi 本体のライセンス（MIT）と衝突するため allow しない |
+| `[licenses] confidence-threshold` | `0.93` | デフォルト値。極端に低くすると誤検知が出る |
+| `[advisories] vulnerability` | `deny` | RustSec advisory DB 由来の脆弱性は CI で即 fail |
+| `[advisories] unmaintained` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から全 crate に `deny` を適用し、どうしても外せない個別 crate のみ `[advisories].ignore` に RustSec advisory ID を登録して**一時的に例外化**する（§4.3.1）。暗号クリティカル crate は **ignore リストへの追加を禁止**（§4.3.2） |
+| `[advisories] yanked` | `deny` | yanked 版を引いたままのビルドは再現不能 |
+| `[bans] multiple-versions` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から `deny`。外せない重複は `[bans].skip` で個別 crate と version を列挙して暫定除外（§4.3.1）。外部 crate を持たない Issue #4 時点では `skip` リストは空 |
+| `[bans] wildcards` | `deny` | `*` バージョン指定は Cargo.lock との整合を破壊する |
+| `[sources] unknown-registry` / `unknown-git` | `deny` | crates.io 以外からの取得は明示的に `allow` リストへ追加する運用 |
+
+### 4.3.1 反転方式の運用（`warn` 段階を持たない `deny` + 一時 `ignore` 方式）
+
+**前回ドラフトで検討した「初期 `warn` → 後続 Issue で `deny` 昇格」方式は採用しない**（Boy Scout Rule 違反かつ、後続 Issue での昇格忘れ検知が人間の注意力に依存し Fail Fast でないため）。代わりに **cargo-deny 標準機能である個別 ignore リストで運用する反転方式**を採用する。
+
+| 方向 | 初期値 | 一時例外手段 | 例外解除トリガ |
+|-----|-------|-------------|---------------|
+| `[advisories] unmaintained` | `deny` | `[advisories].ignore` に RustSec advisory ID（例: `"RUSTSEC-2024-XXXX"`）を列挙 | ignore に記載した ID ごとに「代替 crate 移行 Issue」を `gh issue create` で発行。**Issue の acceptance criteria に `deny.toml` から該当 ID 削除を必須項目化** |
+| `[bans] multiple-versions` | `deny` | `[bans].skip = [{ name = "foo", version = "=1.2.3" }]` に個別登録 | 同上。依存元を新しい major に追随した Issue で `skip` エントリを削除 |
+
+**ignore / skip リストは PR 内でインラインコメント必須**（`# RUSTSEC-YYYY-NNNN: <crate>, 解除 Issue #NNN` 等）。コメントなしの匿名 ignore は服部が PR レビュー時に却下する。
+
+**Issue #4 時点の ignore / skip リスト初期値**: いずれも**空**。workspace にはまだ外部 crate が無いため、暫定例外を登録する対象がない。
+
+### 4.3.2 セキュリティクリティカル crate のリスト（ignore 禁止）
+
+下記 crate が将来 `unmaintained` 警告を受けた場合、**`[advisories].ignore` への追加を禁止**する。必ず代替 crate への移行 Issue を優先する（`unmaintained` = `deny` のまま維持、ビルド失敗を受けて即時対応）。
+
+対象 crate: `aes-gcm` / `argon2` / `zeroize` / `secrecy` / `hkdf` / `pbkdf2` / `bip39` / `rand_core` / `subtle`
+
+根拠: 暗号運用（§2.4）は **unmaintained crate を引きずるだけでゼロデイ脆弱性放置と同義**。パスワードを扱うアプリである shikomi は、暗号周辺の unmaintained を「一時 ignore」で済ませない。構造的には「workspace 全体で `unmaintained = deny` が有効で、かつこのリストは `ignore` への登録を禁止」の二重防護とする。
+
+**検知手段**: `deny.toml` の `[advisories].ignore` に本リストの crate の RustSec ID が入った場合、服部が PR レビューで却下する。機械的検知を追加するには、CI に「`deny.toml` をパースし、`ignore` 配列に本リスト crate 名を含む advisory ID が登録されていないか」を検査するスクリプトジョブを置く選択肢もあるが、当面は服部の目視レビュー + 本節への明示で運用する（YAGNI: 実被害が出るまで自動化しない）。
+
+出典: https://embarkstudios.github.io/cargo-deny/ (`[advisories].ignore` / `[bans].skip` セクション)
+
+### 4.4 クレートバージョンピン方針
 
 - Tauri は **v2 系**にピン（major 固定、minor/patch は Dependabot 追従）
 - セキュリティクリティカルな `aes-gcm` / `argon2` / `zeroize` / `secrecy` は minor もピン、patch のみ追従
 - `Cargo.lock` を**リポジトリにコミット**（バイナリ crate の推奨プラクティス、再現ビルド担保）
+- `[workspace.dependencies]` セクションに**外部 crate のバージョンを一元集約**し、各 crate の `Cargo.toml` からは `foo = { workspace = true }` で参照する（DRY、バージョン drift 防止）
