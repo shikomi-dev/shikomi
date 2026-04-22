@@ -242,7 +242,7 @@ for crate in "${BIN_CRATES[@]}"; do
 done
 
 echo "=== TC-U06: 公開 API 不存在確認 ==="
-# ^pub (fn|struct|enum|trait|mod|use|const|static) で外部公開シンボルを検査
+# ^pub (fn|struct|enum|trait|mod|use|const|static|type) で外部公開シンボルを検査
 # pub(crate) / pub(super) は "pub " の後に "(" が来るため自動排除される
 PUB_MATCHES=$(grep -rEn "^pub (fn|struct|enum|trait|mod|use|const|static|type) " \
     --include="*.rs" . \
