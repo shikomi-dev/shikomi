@@ -32,7 +32,7 @@ flowchart TB
         OSVerify[OS 署名検証<br/>Gatekeeper / SmartScreen / dpkg-sig]
         App[shikomi 常駐]
         Keychain[OS キーチェーン]
-        Vault[(暗号化 vault<br/>~/.config/shikomi/ 等)]
+        Vault[(vault<br/>デフォルト: 平文 + OS perm 0600<br/>オプトイン: AES-256-GCM)]
     end
 
     Tag --> Matrix --> Sign --> SBOM --> Checksum --> GHRel
@@ -45,7 +45,7 @@ flowchart TB
     GHRel --> DL
     DL --> Install --> OSVerify --> App
     App <--> Vault
-    App -. マスターキー預入（任意） .-> Keychain
+    App -. 暗号化モード時のみ: マスターキー預入（任意） .-> Keychain
 ```
 
 ## 3. 配布物一覧（成果物 SKU）
@@ -70,10 +70,10 @@ flowchart LR
     subgraph UserSpace[ユーザー空間 — 通常権限]
         direction TB
         ShikomiProc[shikomi プロセス<br/>通常ユーザ権限]
-        ShikomiProc --> MemSecret[メモリ上シークレット<br/>secrecy + zeroize + best-effort mlock]
-        ShikomiProc --> VaultFile[(vault<br/>AES-256-GCM + Argon2id)]
+        ShikomiProc --> MemSecret[メモリ上シークレット<br/>暗号化モード時のみ<br/>secrecy + zeroize + best-effort mlock]
+        ShikomiProc --> VaultFile[(vault<br/>デフォルト: 平文 + OS perm 0600<br/>オプトイン: AES-256-GCM + Argon2id)]
         ShikomiProc -- Session 経由 --> OSClip[OS クリップボード<br/>sensitive hint MIME]
-        ShikomiProc -. OS API .-> OSKey[OS キーチェーン<br/>任意オプトイン]
+        ShikomiProc -. OS API .-> OSKey[OS キーチェーン<br/>暗号化モード時のみ任意オプトイン]
     end
 
     subgraph KernelSpace[カーネル / OS 境界]
@@ -93,11 +93,12 @@ flowchart LR
 | 境界 | 保護 | 検出 |
 |-----|------|------|
 | インストーラ → OS | OS 署名（Developer ID / Authenticode）＋ SHA-256 checksum + minisign | 改竄時は OS が起動拒否 |
-| プロセス → vault ファイル | AES-256-GCM の認証タグ + レコード AAD（レコード ID + version + 作成日時）。書込は **atomic write**（`.new` → `fsync` → `rename` / `ReplaceFileW`） | 改竄時は `fail fast`、`.new` 残存は起動時にリカバリ UI へ誘導 |
+| プロセス → vault ファイル（**平文モード・デフォルト**） | OS ファイルパーミッション `0600`（Unix）/ 所有者 ACL（Windows）+ ディレクトリ `0700`。書込は **atomic write**（`.new` → `fsync` → `rename` / `ReplaceFileW`） | OS パーミッション突破・同ユーザ他プロセスによる読取は**検出不能**（vault は平文）。**ユーザ自己責任として `context.md` §7.0 で明示** |
+| プロセス → vault ファイル（**暗号化モード・オプトイン**） | AES-256-GCM の認証タグ + レコード AAD（レコード ID + version + 作成日時）。書込は atomic write（同上） | 改竄時は AEAD タグ検証失敗で `fail fast`、`.new` 残存は起動時にリカバリ UI へ誘導 |
 | プロセス → クリップボード | sensitive hint MIME（Win: `CanIncludeInClipboardHistory=0` 等 / KDE: `x-kde-passwordManagerHint=secret` / macOS: `application/x-nspasteboard-concealed-type`）＋ タイマー自動クリア（既定 30 秒、`context.md` §7.2） | — |
-| プロセス → OS キーチェーン | `keyring` crate 経由、デフォルトオフ | — |
+| プロセス → OS キーチェーン | 暗号化モード時のみ利用可能、`keyring` crate 経由、デフォルトオフ | — |
 | daemon ↔ CLI/GUI (IPC) | UDS `0700` / Named Pipe SDDL + ピア UID 検証 + セッショントークン（`context.md` §4.2） | 不正接続は即切断、`tracing::warn!` |
-| 他プロセス → shikomi | 同ユーザ権限内では OS 側保護は弱い（Wayland は compositor が制限、X11/macOS/Win は同ユーザプロセス間で可視） | メモリ保護は best-effort、残存リスクを SECURITY.md に明記 |
+| 他プロセス → shikomi | 同ユーザ権限内では OS 側保護は弱い（Wayland は compositor が制限、X11/macOS/Win は同ユーザプロセス間で可視）。**平文モードでは vault 直読みを阻止できない**、暗号化モードなら AEAD で保護 | メモリ保護は best-effort、残存リスクを SECURITY.md / `context.md` §7.0 に明記 |
 
 ### 4.2 初回インストール警告への対応方針（非技術者向け UX）
 
@@ -147,29 +148,45 @@ flowchart LR
 
 ## 7. バックアップ・リカバリ
 
-### 7.1 vault バックアップ
+### 7.1 vault バックアップ（両モード共通）
 
-- ユーザ手動 export（`shikomi export --output <path>`）。暗号化状態のまま書き出す（VEK でラップされたレコードをそのまま、ヘッダの `wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` 付き）
+- ユーザ手動 export（`shikomi export --output <path>`）
+  - **平文モード**: SQLite ダンプをそのまま出力。書き出しファイルは平文のためユーザが責任を持って保管（OS の `umask` / 手動 `chmod 600` 推奨、UI でも注意喚起）
+  - **暗号化モード**: VEK でラップされたレコードをそのまま、ヘッダの `wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` 付きで暗号化状態のまま書き出す
 - 自動バックアップは MVP スコープ外。ユーザが export ファイルをクラウドストレージ等に置くかは利用者判断
 
-### 7.2 リカバリ経路（二本立て）
+### 7.2 リカバリ経路（vault 保護モード別）
 
-shikomi は vault 暗号鍵（VEK）を **2 つの独立した KEK 経路**で保護する（詳細は `tech-stack.md` §2.4）。どちらか片方の秘密があれば vault を復号できる。
+リカバリ戦略は **vault 保護モード**に依存する。
+
+#### 7.2.1 平文モードのリカバリ
+
+| シナリオ | 対応 |
+|---------|------|
+| マシン故障・OS 再インストール | バックアップ export ファイル（§7.1）を新マシンに持ち込み、`shikomi import` で復元 |
+| vault ファイル破損（`.new` 残存等） | §7.3 のリカバリ UI へ |
+| パスワード／リカバリコードの概念 | **存在しない**（平文モードには認証がない）。vault ファイル自体がアクセスできれば中身は読める |
+
+#### 7.2.2 暗号化モードのリカバリ（二本立て）
+
+暗号化モードでは、vault 暗号鍵（VEK）を **2 つの独立した KEK 経路**で保護する（詳細は `tech-stack.md` §2.4）。どちらか片方の秘密があれば vault を復号できる。
 
 | 経路 | 秘密 | 想定シナリオ |
 |-----|------|-----------|
 | マスターパスワード経路 | 日常使用のパスワード（Argon2id で派生 → `wrapped_VEK_by_pw`） | 日常のアンロック |
-| **リカバリコード経路** | **BIP-39 24 語（256 bit エントロピー）**。初回 vault 作成時に 1 度だけ提示、以降二度と取得不可 | **マスターパスワード失念時**。リカバリコードを入力して VEK を復元し、直後に新マスターパスワードを設定 |
+| **リカバリコード経路** | **BIP-39 24 語（256 bit エントロピー）**。**暗号化モードを有効化した時点で 1 度だけ提示、以降二度と取得不可** | **マスターパスワード失念時**。リカバリコードを入力して VEK を復元し、直後に新マスターパスワードを設定 |
 
-**重要な性質**:
+**重要な性質（暗号化モード時のみ）**:
 - リカバリコードは**マスターパスワード同等の完全な秘密**。紙で物理保護することをユーザに強く要求（UI で印刷ボタン・書写確認ステップを必須化）
 - リカバリコードが漏洩した場合の対処: 新規 vault 作成 → 全レコード手動再登録 → 旧 vault 破棄。**古いリカバリコードを無効化する手段はない**（vault 自体を捨てるしかない、これは OWASP 認証 Cheat Sheet の「バックアップコード漏洩時の標準対応」に整合）
 - リカバリコード紛失のみ（マスターパスワード無事）: 新規 vault を作成し直すか、そのまま日常運用継続。後から recovery を再生成する機能は**提供しない**（二度目の紙保管を誘導すると運用が緩む＝設計判断）
-- **マスターパスワードとリカバリコードを両方同時に失った場合のみ復旧不能**。README / SECURITY.md / 初回セットアップ UX に明記
+- **マスターパスワードとリカバリコードを両方同時に失った場合のみ復旧不能**。README / SECURITY.md / 暗号化モード有効化 UX に明記
+- **重要**: 平文モードではリカバリコードは生成・保持されない。暗号化モードへ**オプトインした瞬間**に初めて生成・表示される
 
 ### 7.3 vault 破損時
 
-- AES-256-GCM 認証タグ失敗時は `fail fast` で起動ブロック → リカバリ UI（バックアップからの復元・新規作成・開発者向け export 等）を提示
+- **暗号化モード**: AES-256-GCM 認証タグ失敗時は `fail fast` で起動ブロック → リカバリ UI（バックアップからの復元・新規作成・開発者向け export 等）を提示
+- **平文モード**: SQLite 整合性（`PRAGMA integrity_check`）失敗、または `.new` 残存時に同様のリカバリ UI
 - `vault.db.new` の残存（atomic write 中のクラッシュ）を起動時に検出 → 同上のリカバリ UI へ
 
 ## 8. モニタリング・ログ

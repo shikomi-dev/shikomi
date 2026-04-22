@@ -4,6 +4,19 @@
 
 shikomi はクラウドリソースを持たないデスクトップ OSS であるため、`config/templates` の技術選定表のうちクラウド関連項目（App Runner、RDS、CDN、ALB、VPC、IaC、SES 等）は**該当なし**とする。代わりに、デスクトップアプリとして実際に判断が必要となる**言語・ランタイム・クロスプラットフォーム層・セキュリティ関連 crate・配布経路**を同フォーマットで扱う。
 
+### 0.1 vault 保護モード（選定全体に波及する大前提）
+
+**vault の暗号化はデフォルト OFF（平文モード）**。暗号化はユーザが明示的にオプトインした時のみ適用する（`context.md` §4.3）。これにより**技術選定の一部の項目は「オプトイン時のみ必須」となる**ため、以下の各表でその条件を明記する。
+
+| モード | デフォルト | 暗号スタック | KDF |
+|-------|---------|-----------|-----|
+| **平文モード** | ✔ | なし（OS パーミッション `0600` のみ） | なし |
+| **暗号化モード**（オプトイン） | — | AES-256-GCM (`aes-gcm`) + AEAD AAD | Argon2id (`argon2`) + HKDF-SHA256 + PBKDF2-HMAC-SHA512（BIP-39） |
+
+`aes-gcm` / `argon2` / `hkdf` / `pbkdf2` / `bip39` などの crate は**両モードのバイナリに常時同梱**する（feature flag で切り分けない）。理由:
+- 暗号化モード切替（`shikomi vault encrypt`）は実行時操作。ビルドを差し替える運用は UX として破綻する
+- 全 crate をコンパイルしても Rust の dead-code elimination と LTO で、平文モードで未使用コードは最終バイナリからほぼ消える（バイナリサイズ影響は数百 KB レベルで許容範囲）
+
 ## 1. 全体構成図
 
 ```mermaid
@@ -56,7 +69,8 @@ flowchart TB
 | 入力シミュレーション（フォールバック） | `enigo` / `rdev` / `autopilot-rs` | **`enigo`（最小限のフォールバック用途のみ）** | Wayland/libei が experimental ながら前進、`rdev` は Wayland 不可と README 明記。ただし MVP では**クリップボード投入が第一優先**で、キー注入は macOS Secure Event Input によるサイレント失敗のリスクがあるため CLI の `--paste-mode=inject` など明示オプトインに留める<br/>出典: https://github.com/enigo-rs/enigo, https://github.com/enigo-rs/enigo/blob/main/Permissions.md, https://developer.apple.com/library/archive/technotes/tn2150/_index.html |
 | シークレット保護 | `zeroize` / `secrecy` / 自前 | **`secrecy` + `zeroize`** | `secrecy::SecretBox` で `Debug`/`Serialize`/`Clone` の誤実装リークを型レベルで封じる。`zeroize` は LLVM の最適化除去防止を `volatile write` + `compiler_fence` で保証<br/>出典: https://docs.rs/secrecy/latest/secrecy/, https://docs.rs/zeroize/latest/zeroize/ |
 | OS キーチェーン連携 | `keyring` / 自前 D-Bus / 自前 CFI | **`keyring` crate** | `apple-native` / `windows-native` / `linux-native` / `sync-secret-service` feature でプラットフォーム backend を明示選択可、デフォルト feature なし方針が安全<br/>出典: https://docs.rs/keyring/latest/keyring/ |
-| Vault 暗号 | AES-256-GCM / ChaCha20-Poly1305 | **AES-256-GCM（RustCrypto `aes-gcm`）+ Argon2id（`argon2` crate）** | AEAD で認証タグ検証による tampering 検出、OWASP Password Storage 推奨値 `m=19456 KiB, t=2, p=1`。nonce 管理・AAD・派生鍵キャッシュは §2.4 に詳述<br/>出典: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html |
+| Vault 暗号（オプトイン時のみ） | AES-256-GCM / ChaCha20-Poly1305 | **AES-256-GCM（RustCrypto `aes-gcm`）+ Argon2id（`argon2` crate）** | **暗号化モード有効時のみ適用**。デフォルト（平文モード）では暗号処理なし。AEAD で認証タグ検証による tampering 検出、OWASP Password Storage 推奨値 `m=19456 KiB, t=2, p=1`。nonce 管理・AAD・鍵階層は §2.4 に詳述<br/>出典: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html |
+| Vault 保護（デフォルト） | OS ファイルパーミッション / 暗号化必須 | **OS ファイルパーミッション `0600` + ディレクトリ `0700`** | ペルソナ A/C のオンボーディング障壁を最小化する設計判断（`context.md` §1 / §4.3）。機密情報を入れるユーザは `shikomi vault encrypt` で暗号化モードへ切替。リスクは `context.md` §7.0 で明示 |
 | IPC シリアライズ | JSON / MessagePack / bincode / Protocol Buffers | **MessagePack（`rmp-serde`）** | 型付き `serde` 統合、バイナリ高速、文字列 escape のクロス OS バグを回避。スキーマは `shikomi-core` 型で共有し二重管理を避ける |
 | 永続化フォーマット | SQLite / JSON / TOML | **SQLite（`rusqlite` + SQLCipher 任意）** | 件数が増えても O(log n) で検索、`rusqlite` のバンドル feature で外部依存ゼロ、SQLCipher は任意オプション（OSS ビルドはバンドル版で足りる） |
 | ログ | `tracing` / `log` | **`tracing`** | 構造化ログ、`tracing-subscriber` で環境変数レベル制御、secret スパン属性の漏洩防止も `secrecy` 連携で可能 |
@@ -88,7 +102,7 @@ flowchart TB
 | オブジェクトストレージ（S3 等） | 該当なし | 同上 |
 | CDN | 該当なし | GitHub Releases の CDN に委譲 |
 | ネットワーク構成 / ロードバランサ / VPC | 該当なし | サーバなし |
-| 認証基盤（Cognito 等） | 該当なし | ローカル認証のみ（マスターパスワード + 任意 OS キーチェーン） |
+| 認証基盤（Cognito 等） | 該当なし | ローカル認証のみ。デフォルトは認証なし（平文モード）、暗号化モード時はマスターパスワード + 任意 OS キーチェーン |
 | 秘密情報管理（Secrets Manager 等） | 該当なし | OS ネイティブキーチェーン（`keyring` crate）で代替 |
 | IaC | 該当なし | インフラなし |
 | 監視・ログ（CloudWatch / Datadog / Sentry 等） | 該当なし | 初期は最小限、将来オプトインのクラッシュレポータ（`sentry-rust` 等）を検討するが MVP 対象外 |
@@ -96,7 +110,9 @@ flowchart TB
 | DNS | 該当なし | ドメインは `shikomi-dev/shikomi` GitHub Pages で静的ページのみ（後続） |
 | リージョン | 該当なし | クラウドなし |
 
-### 2.4 暗号運用の詳細
+### 2.4 暗号運用の詳細（暗号化モード有効時のみ適用）
+
+**適用条件**: 本節は **vault が暗号化モード**（`shikomi vault encrypt` でユーザがオプトイン済み）の場合に**のみ**適用される。平文モード（デフォルト）では本節の全要素は動作しない。
 
 **鍵階層（Envelope Encryption / VEK + KEK パターン）**:
 
@@ -139,10 +155,14 @@ flowchart LR
 | レート制限（認証） | 連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフ** を該当 IPC リクエストに適用。**daemon イベントループ全体は停止させない**（ホットキー購読継続） | 総当たり攻撃緩和、Fail Secure。blocking sleep は daemon 全体が硬直しホットキー反応停止＝ DoS と同義なので禁止 |
 | 更新パッケージ署名 | `minisign`（公開鍵はアプリにバンドル、検証失敗で更新中断） | `tauri-plugin-updater` 準拠 |
 
-**脅威モデル上の位置づけ**:
+**脅威モデル上の位置づけ（暗号化モード時）**:
 - マスターパスワード単独で vault 全復号可能 ⇔ リカバリコード単独でも vault 全復号可能（対称）
 - 両方同時に失うと復旧不能（これは受容する残存リスク）
 - リカバリコード漏洩は即時かつ完全な侵害 → ユーザは vault 再作成と新リカバリコード再生成が必須（UI で明示）
+
+**平文モードとの相互排他**:
+- vault ヘッダの `protection_mode` フィールドで `"plaintext"` / `"encrypted"` を排他管理。「一部レコードだけ暗号化」のような半端な状態は作らない（KISS / Fail Fast）
+- モード変更時は全レコードを一括変換する atomic write 操作。途中クラッシュ時は `.new` 残存で検出してリカバリ UI（`context.md` §7.1）
 
 **将来拡張（MVP 外）**:
 - OS キーチェーン経由の自動アンロック（`context.md` §4.3）は**第 3 の KEK 経路**として `wrapped_VEK_by_keychain` を追加する形で実装。同じ Envelope パターンで拡張可能

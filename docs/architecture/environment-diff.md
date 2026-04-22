@@ -120,19 +120,21 @@ flowchart TB
     SS{SmartScreen 警告?}
     DLHelp[公式サイトの<br/>ヘルプ誘導<br/>詳細情報→実行]
     Install[インストーラ完了]
-    First[初回起動]
-    MasterSet[マスターパスワード作成<br/>Argon2id 計算 ~1 秒]
-    Recovery[リカバリコード表示<br/>印刷 or 保存を強く促す]
+    First[初回起動<br/>平文モードで即利用可能]
+    Welcome[ウェルカム画面<br/>平文モードの注意喚起<br/>+ 暗号化モードへの案内]
     HotkeySetup[既定ホットキー Ctrl+Alt+1 設定]
-    Done[完了]
+    Done[完了<br/>後から vault encrypt で暗号化可]
 
     DL --> SS
     SS -- 警告あり --> DLHelp --> Install
     SS -- 警告なし --> Install
-    Install --> First --> MasterSet --> Recovery --> HotkeySetup --> Done
+    Install --> First --> Welcome --> HotkeySetup --> Done
 ```
 
 **注意点**:
+- **デフォルトは平文モード**。マスターパスワード・リカバリコードのセットアップは初回フローに**含めない**（ペルソナ A/C のオンボーディング障壁を最小化）
+- ウェルカム画面で「現在は平文モードです。機密情報を扱う場合は `shikomi vault encrypt` で暗号化モードへ切替できます」を必ず表示（スキップ可、ただし隠さない）
+- 暗号化モード移行フローは §5.5 に別立て
 - SmartScreen 警告時の UX は**アプリ側では介入不能**（インストール前のため）。配布側（公式サイト・README・DMG 同梱 README）のみで対応（`production.md` §4.2）
 - 管理者権限は不要。ユーザ権限のみでインストール可能（`%LOCALAPPDATA%\shikomi\`）
 
@@ -144,9 +146,8 @@ flowchart TB
     Gate{Gatekeeper 警告?}
     GateHelp[初回右クリック→開く手順を<br/>公式サイトで案内]
     Install[DMG からアプリフォルダへドラッグ]
-    First[初回起動]
-    MasterSet[マスターパスワード作成]
-    Recovery[リカバリコード表示]
+    First[初回起動<br/>平文モードで即利用可能]
+    Welcome[ウェルカム画面<br/>平文モードの注意喚起]
     AXCheck{AXIsProcessTrusted?}
     AXSettings[System Settings 自動 open<br/>Privacy > Accessibility]
     AXDeny{権限付与された?}
@@ -154,12 +155,12 @@ flowchart TB
     IMCheck{Input Monitoring 必要?}
     IMSettings[System Settings 自動 open<br/>Privacy > Input Monitoring]
     HotkeySetup[Cmd+Option+1 設定]
-    Done[完了]
+    Done[完了<br/>後から vault encrypt で暗号化可]
 
     DL --> Gate
     Gate -- 警告あり --> GateHelp --> Install
     Gate -- 警告なし --> Install
-    Install --> First --> MasterSet --> Recovery --> AXCheck
+    Install --> First --> Welcome --> AXCheck
     AXCheck -- 未付与 --> AXSettings --> AXDeny
     AXDeny -- 付与された --> IMCheck
     AXDeny -- 拒否 --> AXRetry --> AXSettings
@@ -181,17 +182,16 @@ flowchart TB
 flowchart TB
     DL[deb/rpm/AppImage DL]
     Install[apt install / dnf install / chmod +x]
-    First[初回起動]
-    MasterSet[マスターパスワード作成]
-    Recovery[リカバリコード表示]
+    First[初回起動<br/>平文モードで即利用可能]
+    Welcome[ウェルカム画面<br/>平文モードの注意喚起]
     Session{XDG_SESSION_TYPE?}
     X11Path[X11 経路<br/>XGrabKey で即登録]
     WaylandPortal{Portal 同意ダイアログ<br/>BindShortcuts}
     WaylandDeny[Portal 拒否時<br/>アプリ内モーダルで再要求動線]
     HotkeySetup[Ctrl+Alt+1 設定]
-    Done[完了]
+    Done[完了<br/>後から vault encrypt で暗号化可]
 
-    DL --> Install --> First --> MasterSet --> Recovery --> Session
+    DL --> Install --> First --> Welcome --> Session
     Session -- x11 --> X11Path --> HotkeySetup
     Session -- wayland --> WaylandPortal
     WaylandPortal -- 許可 --> HotkeySetup
@@ -205,13 +205,37 @@ flowchart TB
 
 ### 5.4 全 OS 共通のリカバリー UX
 
-| シナリオ | 対応 |
-|---------|------|
-| マスターパスワード忘れ | 作成時に発行した **BIP-39 24 語リカバリコード**を入力 → VEK を復元し、直後に新マスターパスワードを設定（詳細は `production.md` §7.2 / `tech-stack.md` §2.4）。マスターパスワード**と**リカバリコード**両方**を失った場合のみ復旧不能 |
-| リカバリコード入力画面への到達手段 | CLI `shikomi unlock --recovery` / GUI 初期画面「パスワードをお忘れですか？」リンクから遷移 |
-| vault ファイル破損（atomic write の `.new` 残存等） | 起動時に検出 → リカバリ UI（バックアップからの復元・新規作成・開発者向けエクスポート）を提示 |
-| 権限喪失（macOS Settings で切られた） | 起動時バナー + タップで Settings へ |
-| VEK キャッシュが突然切れた（スクリーンロック連動） | 次のホットキー押下時に通知 + マスターパスワード再入力モーダル（daemon は常駐、GUI/CLI 不要でロック画面風モーダル表示） |
+| シナリオ | 平文モード（デフォルト）の対応 | 暗号化モード（オプトイン）の対応 |
+|---------|--------------------------|--------------------------|
+| マスターパスワード忘れ | 該当なし — 平文モードにはパスワードがない | 作成時に発行した **BIP-39 24 語リカバリコード**を入力 → VEK を復元し、直後に新マスターパスワードを設定（詳細は `production.md` §7.2.2 / `tech-stack.md` §2.4）。マスターパスワード**と**リカバリコード**両方**を失った場合のみ復旧不能 |
+| リカバリコード入力画面への到達手段 | 該当なし | CLI `shikomi unlock --recovery` / GUI 初期画面「パスワードをお忘れですか？」リンクから遷移 |
+| vault ファイル破損（atomic write の `.new` 残存等） | 起動時に検出 → リカバリ UI（バックアップからの復元・新規作成） | 同左 + AEAD タグ失敗時の `fail fast` |
+| 権限喪失（macOS Settings で切られた） | 起動時バナー + タップで Settings へ | 同左 |
+| VEK キャッシュが突然切れた（スクリーンロック連動） | 該当なし（VEK そのものがない） | 次のホットキー押下時に通知 + マスターパスワード再入力モーダル（daemon は常駐、GUI/CLI 不要でロック画面風モーダル表示） |
+
+### 5.5 暗号化モードへのオプトイン移行フロー（全 OS 共通）
+
+```mermaid
+flowchart TB
+    Trigger[ユーザ操作: GUI「vault 保護を有効化」<br/>または CLI: shikomi vault encrypt]
+    Warn[警告モーダル:<br/>パスワード失念 + リカバリコード紛失 = 復旧不能<br/>紙保管の必要性]
+    PwSet[マスターパスワード作成<br/>強度メータで OWASP 最低要件確認]
+    Argon[Argon2id 計算<br/>~1 秒]
+    RecoveryGen[BIP-39 24 語生成<br/>画面フル表示 + 印刷ボタン]
+    RecoveryConfirm[転記確認画面<br/>3 語ランダム抜き打ち入力で確認]
+    Migrate[全レコードを VEK で暗号化<br/>atomic write で .new → rename]
+    Done[暗号化モード有効<br/>CLI プロンプト / GUI バッジで [encrypted] 表示]
+
+    Trigger --> Warn --> PwSet --> Argon --> RecoveryGen --> RecoveryConfirm
+    RecoveryConfirm -- 失敗 --> RecoveryGen
+    RecoveryConfirm -- 成功 --> Migrate --> Done
+```
+
+**設計ポイント**:
+- **警告モーダルのスキップは不可**（Fail Visible）。ユーザが「復旧不能の可能性」を必ず読むフローにする
+- リカバリコード転記確認は 24 語中ランダム 3 語の抜き打ち入力（全 24 語入力は UX 負荷過大、0 語は確認の意味がない、3 語は中庸）
+- 移行中のクラッシュ耐性: atomic write により `.new` が残存した場合は起動時に検出し、「暗号化移行が中断しました。継続しますか？」のリカバリ UI を提示
+- 逆方向（暗号化 → 平文）も `shikomi vault decrypt` で提供。警告モーダル（「暗号保護がなくなります」）＋ マスターパスワード再認証を必須化
 
 ## 6. 該当なし項目
 
@@ -228,4 +252,4 @@ flowchart TB
 - `AXIsProcessTrusted` / `AXIsProcessTrustedWithOptions`: https://developer.apple.com/documentation/applicationservices/1462089-axisprocesstrusted
 - Apple TN2150（Secure Event Input）: https://developer.apple.com/library/archive/technotes/tn2150/_index.html
 - XDG Desktop Portal GlobalShortcuts v2: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html
-- BIP-39（リカバリコード候補）: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+- BIP-39（暗号化モード時のリカバリコード）: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
