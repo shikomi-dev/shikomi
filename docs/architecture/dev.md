@@ -41,7 +41,7 @@ flowchart LR
 | `pages` | main push（`docs/` 差分時） | `mdBook` / Astro 等で設計書＆ランディングページを GitHub Pages へ | ubuntu-latest |
 | `branch-policy` | PR opened / synchronize | PR の source/target ブランチ名を `§7.1` の命名規則と `§7.2` の PR ソース制限で検証。違反は即 fail（`main` への PR が `release/*` / `hotfix/*` 以外、`develop` への PR が `feature/*` / `release/*` / `hotfix/*` 以外、など） | ubuntu-latest |
 | `pr-title-check` | PR opened / edited / synchronize | PR タイトルを Conventional Commits 正規表現で検証（`feat:` / `fix:` / `docs:` / `chore:` / `refactor:` / `test:` / `ci:` / `build:` / `perf:`、Breaking は `!:` 付）。違反は fail（squash merge 時のコミットメッセージとして採用されるため） | ubuntu-latest |
-| `back-merge-check` | PR merged to `main`（release/hotfix）／日次 cron | `main` への release/hotfix マージ後 24h 以内に同ブランチが `develop` にも back-merge されているかを GitHub API で確認。未実施なら `back-merge-missing` ラベル付き Issue を自動起票し release 担当者にアサイン | ubuntu-latest |
+| `back-merge-check` | PR merged to `main`（release/hotfix）／日次 cron | **事後監視ジョブ（PR required status check としては登録しない — post-merge/cron トリガのため PR 時点では未実行であり required check として機能しないため、責務を分離する）**。`main` への release/hotfix マージ後 24h 以内に同ブランチが `develop` にも back-merge されているかを GitHub API で確認。未実施なら `back-merge-missing` ラベル付き Issue を自動起票し release 担当者にアサイン | ubuntu-latest |
 
 **Ubuntu は X11 と Wayland の両セッションでテストする**（Wayland のホットキー実装は X11 と別経路のため）。GitHub Actions の `ubuntu-24.04` は既定で Wayland セッション、`ubuntu-22.04` は X11 セッションを使える。詳細は環境差分ドキュメント（`environment-diff.md`）を参照。
 
@@ -129,7 +129,7 @@ GitHub のブランチ保護設定は下表の通り。**enforce_admins = true**
 |---------|--------|-----------|-------------|-----------|
 | 直接 push | ❌ 禁止 | ❌ 禁止 | ❌ 禁止（PR 経由のみ） | ❌ 禁止（PR 経由のみ） |
 | PR 必須 | ✅ | ✅ | ✅ | ✅ |
-| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` / `back-merge-check` | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` | 同左 |
+| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check`（`back-merge-check` は post-merge/cron 監視のため PR required には含めない — §7.6） | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` | 同左 |
 | 必須レビュー人数 | **2 名**（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） | 1 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） |
 | PR ソース制限 | `release/*` または `hotfix/*` のみ（branch naming rule で強制） | `feature/*` / `release/*` / `hotfix/*` のみ | `develop` から作成 | `main` から作成 |
 | マージ方法許可 | **merge commit のみ**（release/hotfix の分岐履歴を保持） | squash merge（feature）＋ merge commit（release/hotfix back-merge） | merge commit | merge commit |
@@ -222,7 +222,12 @@ GitHub のブランチ保護設定は下表の通り。**enforce_admins = true**
 **back-merge 検知 CI（`back-merge-check`）**:
 - `release/*` / `hotfix/*` が `main` にマージされた後、**同じ branch を `develop` にもマージする PR が存在するか**を GitHub API で確認
 - 24h 以内に back-merge PR が開かれていない場合、自動的に Issue 起票（`back-merge-missing` ラベル）し、release 担当者にアサイン
-- これにより「`main` だけにマージして `develop` 退行」を Fail Fast で検知
+- これにより「`main` だけにマージして `develop` 退行」を事後検知
+
+**本ジョブは PR required status check として登録しない**。責務を分離する設計判断:
+- PR required status check は PR head commit の check status を評価する仕組みで、post-merge/cron トリガのジョブは PR head 時点では未実行であり、required に登録すると恒久的に pending のまま残って**偽陽性の block**を生む（Fail Fast の真逆）
+- back-merge は「**事後**に履行されるべき契約」であり、「PR マージ前に検証する」必要はない。Fail Fast は「事後違反を最速で検知し Issue 化する」という形で達成する（Single Responsibility に従い PR ゲート系統とは分離）
+- 代わりに main への release/hotfix PR 側で PR テンプレ・チェックリストに「back-merge PR を 24h 以内に作成する」責任を明示（§7.3 手順 4 / §7.4 手順 4）
 
 ## 8. コスト
 
