@@ -153,8 +153,8 @@ impl Vault {
 
     /// 指定した ID のレコードに `updater` クロージャを適用して更新する。
     ///
-    /// updater が失敗した場合、レコードは vault から失われる。
-    /// 呼び出し元は `SQLite` トランザクションでアトミック更新を担保すること（Fail Fast）。
+    /// `updater` には元レコードの `clone` を渡す。
+    /// `updater` 失敗・モード不一致の場合も `self.records` は変更されない（Fail Fast）。
     ///
     /// # Errors
     /// - 該当 ID が存在しない: `DomainError::VaultConsistencyError(RecordNotFound)`
@@ -174,8 +174,8 @@ impl Vault {
                 ))
             })?;
 
-        let record = self.records.remove(pos);
-        let new_record = updater(record)?;
+        // clone を updater に渡す。updater 失敗・モード不一致でも self.records[pos] は untouched。
+        let new_record = updater(self.records[pos].clone())?;
 
         let vault_mode = self.protection_mode();
         let record_mode = new_record.payload().variant_mode();
@@ -188,7 +188,7 @@ impl Vault {
             ));
         }
 
-        self.records.insert(pos, new_record);
+        self.records[pos] = new_record;
         Ok(())
     }
 

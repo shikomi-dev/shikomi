@@ -40,7 +40,8 @@ pub enum DomainError {
     InvalidRecordPayload(InvalidRecordPayloadReason),
 
     /// MSG-DEV-004: vault とレコードのモード不整合、または状態遷移違反。
-    #[error("vault and record payload mode mismatch: {0}")]
+    /// 詳細文言は内包する `VaultConsistencyReason` の `Display` に委譲する。
+    #[error("{0}")]
     VaultConsistencyError(VaultConsistencyReason),
 
     /// MSG-DEV-005: `NonceCounter` が上限 (`u32::MAX`) に達した。rekey が必要。
@@ -193,11 +194,30 @@ mod tests {
             record_mode: ProtectionMode::Encrypted,
         });
         let msg = format!("{}", err);
+        // #[error("{0}")] により VaultConsistencyReason の Display が素通しになる。
+        // ModeMismatch の Display: "vault is in ... mode but record payload is ..."
         assert!(
-            msg.contains("vault") && msg.contains("mode mismatch"),
+            msg.contains("vault") && msg.contains("mode"),
             "got: {}",
             msg
         );
+    }
+
+    #[test]
+    fn test_display_vault_consistency_duplicate_id_does_not_contain_mode_mismatch() {
+        use crate::vault::RecordId;
+        use uuid::Uuid;
+        let id = RecordId::new(Uuid::now_v7()).unwrap();
+        let err = DomainError::VaultConsistencyError(VaultConsistencyReason::DuplicateId(id));
+        let msg = format!("{}", err);
+        // 以前は外枠の文言 "vault and record payload mode mismatch" が混入していた。
+        // #[error("{0}")] により DuplicateId の Display だけが出ることを確認する。
+        assert!(
+            !msg.contains("mode mismatch"),
+            "DuplicateId should not contain 'mode mismatch', got: {}",
+            msg
+        );
+        assert!(msg.contains("duplicate"), "got: {}", msg);
     }
 
     #[test]

@@ -36,8 +36,8 @@ pub struct VaultHeaderEncrypted {
 }
 
 impl VaultHeaderEncrypted {
-    /// rekey 時に wrapped VEK を更新する（vault/mod.rs 内部からのみ呼び出し）。
-    pub(super) fn replace_wrapped_veks(
+    /// rekey 時に wrapped VEK を更新する（`shikomi-core` クレート内部からのみ呼び出し）。
+    pub(crate) fn replace_wrapped_veks(
         &mut self,
         wrapped_vek_by_pw: WrappedVek,
         wrapped_vek_by_recovery: WrappedVek,

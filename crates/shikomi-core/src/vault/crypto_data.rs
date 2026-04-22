@@ -12,6 +12,10 @@ use crate::vault::version::VaultVersion;
 /// Argon2id KDF ソルト長（16 byte、OWASP 推奨 16 B 以上）。
 const KDF_SALT_LEN: usize = 16;
 
+/// `WrappedVek` に必要な最小バイト長。
+/// AES-GCM 認証タグが 16 B 固定のため、それ以上でなければ暗号的に不正。
+const WRAPPED_VEK_MIN_LEN: usize = 16;
+
 // -------------------------------------------------------------------
 // KdfSalt
 // -------------------------------------------------------------------
@@ -64,11 +68,17 @@ impl WrappedVek {
     /// バイト列から `WrappedVek` を構築する。
     ///
     /// # Errors
-    /// 空の場合 `DomainError::InvalidVaultHeader(WrappedVekEmpty)` を返す。
+    /// - 空の場合 `DomainError::InvalidVaultHeader(WrappedVekEmpty)` を返す。
+    /// - 16 バイト未満の場合 `DomainError::InvalidVaultHeader(WrappedVekTooShort)` を返す。
     pub fn try_new(bytes: Box<[u8]>) -> Result<Self, DomainError> {
         if bytes.is_empty() {
             return Err(DomainError::InvalidVaultHeader(
                 InvalidVaultHeaderReason::WrappedVekEmpty,
+            ));
+        }
+        if bytes.len() < WRAPPED_VEK_MIN_LEN {
+            return Err(DomainError::InvalidVaultHeader(
+                InvalidVaultHeaderReason::WrappedVekTooShort,
             ));
         }
         Ok(Self { inner: bytes })
