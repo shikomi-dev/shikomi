@@ -285,3 +285,22 @@ flowchart LR
 - セキュリティクリティカルな `aes-gcm` / `argon2` / `zeroize` / `secrecy` は minor もピン、patch のみ追従
 - `Cargo.lock` を**リポジトリにコミット**（バイナリ crate の推奨プラクティス、再現ビルド担保）
 - `[workspace.dependencies]` セクションに**外部 crate のバージョンを一元集約**し、各 crate の `Cargo.toml` からは `foo = { workspace = true }` で参照する（DRY、バージョン drift 防止）
+- **バージョンピン・feature 指定は `[workspace.dependencies]` が単一の真実源**。個別 crate の**採用根拠**は §2（技術選定表）か各 feature の `requirements.md` に記載し、本節には**導入履歴を書かない**（git log で追える）
+
+### 4.5 `shikomi-core` ドメイン層で共通に使う crate（方針）
+
+`shikomi-core` は pure Rust / no-I/O で、ドメイン型表現に**軽量な serde・エラー・UUID・時刻・秘密値ラッパ**のみを許可する。OS 依存 crate（`rusqlite` / `keyring` / `ashpd` 等）は**依存させない**（Clean Architecture）。
+
+| 用途 | 採用 crate | バージョン方針 | 根拠 |
+|-----|---------|-------------|------|
+| 一意 ID | `uuid`（feature `v7` / `serde`） | minor ピン、patch 追従 | `tech-stack.md` §2.4 AAD に UUIDv7 を要求。v7 は `uuid` crate v1.10+ で安定化 |
+| シリアライズ属性 | `serde` + `serde_derive`（feature `derive`） | major ピン | Rust エコシステム事実上標準。vault ヘッダ・レコードの永続化・MessagePack IPC で共通利用 |
+| 秘密値ラッパ | `secrecy`（feature 最小、`serde` 連携は使わない） | minor ピン（§4.3.2 暗号クリティカル） | §2.1 「シークレット保護」採用根拠。本 crate は `serde` シリアライズを意図的に無効化する |
+| メモリ消去 | `zeroize`（feature `derive`） | minor ピン（§4.3.2 暗号クリティカル） | 同上 |
+| エラー型 | `thiserror` | major ピン | `DomainError` の `Error` trait 自動派生。`anyhow` は型情報が失われるため**採用しない** |
+| 時刻型 | `time`（feature `serde`, `macros`） | minor ピン | `chrono` より保守性が高く、`OffsetDateTime` の UTC 固定運用が明確。§2.4 の `created_at` を RFC3339 で統一 |
+
+**`shikomi-core` が採用しないもの**:
+- `std::time::SystemTime`（タイムゾーン非対応）
+- `anyhow` / `eyre`（動的エラー型、呼び出し側がエラー種別で分岐できない）
+- `async_trait` / `tokio` 等の非同期ランタイム（`shikomi-core` は同期のみ、async は境界層で委譲）
