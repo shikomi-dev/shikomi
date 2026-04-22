@@ -97,6 +97,8 @@
 | TC-U11-01 | REQ-006 | AC-01 | `Aad::new(record_id, vault_version, valid_created_at)` が `Ok(Aad)` を返す | 正常系 |
 | TC-U11-02 | REQ-006 | AC-01 | `Aad::new(record_id, vault_version, out_of_range_created_at)` が `InvalidRecordPayload(AadTimestampOutOfRange)` を返す（Fail Fast） | 異常系 |
 | TC-U11-03 | REQ-006 | AC-01 | `Aad::to_canonical_bytes()` が 26 byte 固定長の配列を返す | 正常系 |
+| TC-U11-04 | REQ-006 | AC-01 | 既知の RecordId / VaultVersion / OffsetDateTime から `to_canonical_bytes()` が期待する 26 byte 列とバイト単位で完全一致する（黄金値テスト） | 正常系 |
+| TC-U12-01 | REQ-005 | AC-01 | ナノ秒を含む `OffsetDateTime` を `Record::new` に渡すと `record.created_at()` がマイクロ秒精度に切り捨てられる（サブ秒丸め round-trip） | 正常系 |
 | TC-U08-01 | REQ-008 | AC-01 | `SecretString::from_string` でインスタンスを構築できる（失敗しない） | 正常系 |
 | TC-U08-02 | REQ-008 | AC-04 | `format!("{:?}", secret_string)` の出力が `"[REDACTED]"` である | 正常系 |
 | TC-U08-03 | REQ-008 | AC-04 | `SecretString::expose_secret()` が元の文字列を返す | 正常系 |
@@ -110,6 +112,7 @@
 | TC-U10-05 | REQ-010 | AC-05 | `NonceCounter` の counter が `u32::MAX - 1` の状態で `next()` が成功する（境界値: 上限直前） | 境界値 |
 | TC-U10-06 | REQ-010 | AC-05 | `NonceCounter` の counter が `u32::MAX` の状態で `next()` が `DomainError::NonceOverflow` を返す（境界値: 上限） | 境界値 |
 | TC-U10-07 | REQ-010 | AC-01 | `NonceCounter::next()` で生成された `NonceBytes` は上位 8 バイトが `random_prefix` と一致する | 正常系 |
+| TC-U10-08 | REQ-010 | AC-01 | `next()` を 3 回呼んだ時、下位 4 バイト（bytes 8..12）が big-endian で `[0,0,0,0]→[0,0,0,1]→[0,0,0,2]` になる（エンディアン契約） | 正常系 |
 
 ### 結合テスト（tests/ 配下の integration test）
 
@@ -370,6 +373,7 @@
 | TC-U10-05 | `resume([0u8;8], u32::MAX - 1)` | `next()` | `Ok(NonceBytes)` |
 | TC-U10-06 | `resume([0u8;8], u32::MAX)` | `next()` | `Err(DomainError::NonceOverflow)` |
 | TC-U10-07 | `new([0xAB; 8])` 後 | `next()` → `as_array()[0..8]` | `[0xAB; 8]`（上位 8B が random_prefix） |
+| TC-U10-08 | `new([0u8; 8])` 後 | `next()` × 3 → 各 `as_array()[8..12]` | 1回目: `[0x00, 0x00, 0x00, 0x00]` / 2回目: `[0x00, 0x00, 0x00, 0x01]` / 3回目: `[0x00, 0x00, 0x00, 0x02]`（big-endian カウンタ） |
 
 ### TC-U11: Aad（追加認証データ）
 
@@ -382,8 +386,38 @@
 | TC-U11-01 | — | `Aad::new(valid_record_id, VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH)` | `Ok(Aad)` |
 | TC-U11-02 | — | `Aad::new(valid_record_id, VaultVersion::CURRENT, out_of_range_created_at)` | `Err(DomainError::InvalidRecordPayload(AadTimestampOutOfRange))` |
 | TC-U11-03 | `Aad::new` 成功後 | `aad.to_canonical_bytes().len()` | `26`（26 byte 固定長） |
+| TC-U11-04 | — | 下記「黄金値テストベクタ」を使い `to_canonical_bytes()` の出力を `assert_eq!` | 期待 26 byte 列と完全一致（バイト単位） |
+
+> **黄金値テストベクタ**（TC-U11-04 専用）
+>
+> | 入力 | 値 |
+> |------|---|
+> | `RecordId` | `Uuid::from_bytes([0x01, 0x8f, 0x12, 0x34, 0x56, 0x78, 0x7a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12])` — UUIDv7 形式（`uuid::Uuid::as_bytes()` 順） |
+> | `VaultVersion` | `VaultVersion::CURRENT`（= 1） |
+> | `record_created_at` | `OffsetDateTime::UNIX_EPOCH`（Unix エポック, マイクロ秒 = 0） |
+>
+> | オフセット | 期待バイト列 | 由来 |
+> |-----------|------------|------|
+> | `0..16`   | `[0x01, 0x8f, 0x12, 0x34, 0x56, 0x78, 0x7a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12]` | `uuid::Uuid::as_bytes()` — MSB first |
+> | `16..18`  | `[0x00, 0x01]` | u16 = 1 の big-endian |
+> | `18..26`  | `[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]` | i64 = 0 の big-endian（エポック） |
+>
+> 期待全体: `[0x01,0x8f,0x12,0x34,0x56,0x78,0x7a,0xbc,0xde,0xf0,0x12,0x34,0x56,0x78,0x90,0x12,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00]`
 
 > **out_of_range_created_at の設定**: i64 マイクロ秒が `i64::MAX` を超える未来日付、または `i64::MIN` を下回る過去日付を `OffsetDateTime` として構成する。詳細設計 §バイナリ正規形仕様に定める変換範囲外が対象。
+
+### TC-U12: Record タイムスタンプ精度（サブ秒丸め round-trip）
+
+**配置先**: `crates/shikomi-core/src/vault/mod.rs` または `record.rs`
+
+> **根拠**: `detailed-design.md` §バイナリ正規形仕様 L385「`Record::new(..)` は内部で `created_at` / `updated_at` をマイクロ秒精度に**切り捨て**る（nanoseconds 以下は捨てる）」。この契約は AAD 計算と SQLite 永続化が同じ値を参照する保証の基盤。切り捨て実装が欠落すると `Aad::to_canonical_bytes()` と永続化値が diverge しサイレントデコード失敗を招く。
+
+| テストID | 前提条件 | 操作 | 期待結果 |
+|---------|---------|------|---------|
+| TC-U12-01 | — | `OffsetDateTime::from_unix_timestamp_nanos(123_456_789)` (= 0.123456789s, 789ns sub-µs成分あり) を `now` として `Record::new` を呼ぶ | `record.created_at().nanosecond() % 1_000 == 0`（789ns が切り捨てられて 000ns になる） |
+| TC-U12-02 | — | 同じ `now` で `record.updated_at()` も確認 | `record.updated_at().nanosecond() % 1_000 == 0` かつ `record.updated_at() == record.created_at()` |
+
+> **テスト上の留意点**: `time::OffsetDateTime` から nanoseconds 成分を取り出すには `.nanosecond()` を使う。切り捨て後の値は `OffsetDateTime::from_unix_timestamp_nanos(123_456_000)` と等しい（789 → 000 ns）。
 
 ## 7. モック方針
 
@@ -405,14 +439,14 @@ Rust 慣習に従う（テスト戦略ガイド §テストディレクトリ構
 crates/shikomi-core/
   src/
     vault/
-      mod.rs         # TC-U07 (#[cfg(test)] mod tests)
+      mod.rs         # TC-U07, TC-U12（Vault / Record サブ秒丸め）
       protection_mode.rs  # TC-U01
       version.rs     # TC-U02
       header.rs      # TC-U03
       id.rs          # TC-U04
       record.rs      # TC-U05, TC-U06
-      nonce.rs       # TC-U10
-      crypto_data.rs # TC-U11（Aad::new Fail Fast / to_canonical_bytes）
+      nonce.rs       # TC-U10（TC-U10-08 big-endian 検証を含む）
+      crypto_data.rs # TC-U11（Aad::new Fail Fast / to_canonical_bytes / 黄金値 TC-U11-04）
     secret/
       mod.rs         # TC-U08
     error.rs         # TC-U09（DomainError Display）
@@ -460,7 +494,7 @@ cargo deny check
 |------|------|
 | 受入基準の網羅 | AC-01〜AC-09 が全テストケースで網羅されていること |
 | 行カバレッジ | `cargo test -p shikomi-core` で 80% 以上（受入基準 AC-06）。計測は `cargo llvm-cov` 等で行う |
-| 正常系 | 全ケース必須（ユニット 68 件 + 結合 7 件 = 合計 75 件） |
+| 正常系 | 全ケース必須（ユニット 72 件 + 結合 7 件 = 合計 79 件） |
 | 異常系 | エラーバリアントの種別まで検証（`assert!(matches!(err, DomainError::Xxx))` レベル） |
 | 境界値 | `RecordLabel`（0/1/254/255/256 grapheme）、`NonceCounter`（u32::MAX-1 / u32::MAX）、`VaultVersion`（0/1/2）を必須とする |
 
@@ -469,4 +503,5 @@ cargo deny check
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — AC-09（deny.toml 暗号クリティカル crate 確認）追加・TC-I07 追加。TC-U09（DomainError Display MSG-DEV-001〜009）追加。TC-U07-14〜16（Vault::rekey_with テスト）追加。合計 60件→73件*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — セル commit db52923 対応: TC-U09 の MSG-DEV 番号を 001〜008 に詰め直し（旧 MSG-DEV-006 InvalidSecretLength 削除）。TC-U11（Aad::new Fail Fast / to_canonical_bytes バイナリ正規形）追加。合計 73件→75件*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス第3ラウンド指摘対応: TC-U11-04（Aad黄金値テスト・26byte完全一致）追加。TC-U10-08（NonceCounter下位4B big-endianバイトオーダー検証）追加。TC-U12（Record::new サブ秒丸めround-trip 2件）追加。合計 75件→79件*
 *対応 Issue: #7 feat(shikomi-core): vault ドメイン型定義*
