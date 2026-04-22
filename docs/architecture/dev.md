@@ -35,7 +35,7 @@ flowchart LR
 | `unit-core` | PR / push | `shikomi-core` ユニットテスト、`cargo nextest` | ubuntu-latest 単一（I/O なし、OS 非依存） |
 | `test-infra` | PR / push | `shikomi-infra` の OS 依存テスト | Win / macOS / Ubuntu（22.04 x11 + 24.04 wayland）の matrix |
 | `audit` | PR / push / nightly | `cargo-deny check`, Dependabot alerts 集約 | ubuntu-latest |
-| `build-preview` | PR `labeled: preview` | 未署名の 3-OS ビルドを artifact として PR に添付 | matrix |
+| `build-preview` | PR `labeled: preview` | **オプトインの開発者補助ジョブ（PR required status check としては登録しない — §7.6 の条件付トリガ・ジョブ分離方針に従う）**。未署名の 3-OS ビルドを artifact として PR に添付し、手元で動作確認したいレビュアのために提供 | matrix |
 | `build-nightly` | 日次 cron | 未署名バイナリ、`develop` から（main は常にタグ付きリリース状態のため nightly 対象ではない） | matrix |
 | `release` | タグ `v*.*.*` push（`main` への release/hotfix マージ後に付与） | 署名済み・公証済み・SBOM 付き成果物を Releases に登録 | matrix |
 | `pages` | main push（`docs/` 差分時） | `mdBook` / Astro 等で設計書＆ランディングページを GitHub Pages へ | ubuntu-latest |
@@ -129,7 +129,7 @@ GitHub のブランチ保護設定は下表の通り。**enforce_admins = true**
 |---------|--------|-----------|-------------|-----------|
 | 直接 push | ❌ 禁止 | ❌ 禁止 | ❌ 禁止（PR 経由のみ） | ❌ 禁止（PR 経由のみ） |
 | PR 必須 | ✅ | ✅ | ✅ | ✅ |
-| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check`（`back-merge-check` は post-merge/cron 監視のため PR required には含めない — §7.6） | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | `lint` / `unit-core` / `test-infra` / `audit` / `build-preview` / `branch-policy` / `pr-title-check` | 同左 |
+| 必須 status checks | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check`（`build-preview` / `back-merge-check` は条件付トリガ・post-merge/cron のため PR required には含めない — §7.6） | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | `lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check` | 同左 |
 | 必須レビュー人数 | **2 名**（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） | 1 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須） | 2 名（CODEOWNERS 必須、緊急時は §7.4 bypass allowances で軽減可） |
 | PR ソース制限 | `release/*` または `hotfix/*` のみ（branch naming rule で強制） | `feature/*` / `release/*` / `hotfix/*` のみ | `develop` から作成 | `main` から作成 |
 | マージ方法許可 | **merge commit のみ**（release/hotfix の分岐履歴を保持） | squash merge（feature）＋ merge commit（release/hotfix back-merge） | merge commit | merge commit |
@@ -224,10 +224,19 @@ GitHub のブランチ保護設定は下表の通り。**enforce_admins = true**
 - 24h 以内に back-merge PR が開かれていない場合、自動的に Issue 起票（`back-merge-missing` ラベル）し、release 担当者にアサイン
 - これにより「`main` だけにマージして `develop` 退行」を事後検知
 
-**本ジョブは PR required status check として登録しない**。責務を分離する設計判断:
-- PR required status check は PR head commit の check status を評価する仕組みで、post-merge/cron トリガのジョブは PR head 時点では未実行であり、required に登録すると恒久的に pending のまま残って**偽陽性の block**を生む（Fail Fast の真逆）
-- back-merge は「**事後**に履行されるべき契約」であり、「PR マージ前に検証する」必要はない。Fail Fast は「事後違反を最速で検知し Issue 化する」という形で達成する（Single Responsibility に従い PR ゲート系統とは分離）
-- 代わりに main への release/hotfix PR 側で PR テンプレ・チェックリストに「back-merge PR を 24h 以内に作成する」責任を明示（§7.3 手順 4 / §7.4 手順 4）
+**条件付トリガ・ジョブを PR required status check に登録しない一般方針**:
+
+PR required status check は GitHub の仕様上「PR head commit に対して当該 check が**実行済み**かつ**success**」であることを要求する。したがって、以下のいずれかに該当するジョブを required に登録すると、対象外 PR では恒久的に pending のまま残り**偽陽性の block**を生む（Fail Fast の真逆で、真の異常がノイズに埋もれる）。本リポジトリでは当該パターンのジョブを一律 required から除外し、別系統の Fail Fast 機構で担保する。
+
+| ジョブ | 非対象 PR | required 登録時の事故 | 代替の Fail Fast |
+|-------|---------|----------------------|-----------------|
+| `back-merge-check` | 全 PR（post-merge / 日次 cron トリガ） | 全 PR が恒久 pending | 事後 24h 以内の back-merge 未実施を検知し `back-merge-missing` Issue 自動起票（§7.3 手順 4 / §7.4 手順 4 で PR テンプレに責任明示） |
+| `build-preview` | `preview` ラベル未付与 PR（= release/hotfix → main PR など日常の大半） | ラベル無し PR が恒久 pending | リリース側は `release` ジョブ（tag push トリガ）が 3-OS 署名ビルド・公証・SBOM・checksum を不可避で実施。開発時の動作確認は `preview` ラベルで opt-in 起動し、通過は任意 |
+
+**設計原則**:
+- **Single Responsibility**: PR ゲート（`lint` / `unit-core` / `test-infra` / `audit` / `branch-policy` / `pr-title-check`）と「事後監視」「opt-in 補助」を分離する
+- **Fail Fast**: 「検知できない」ことではなく「誤検知で本物のシグナルが埋もれる」ことが最悪の失敗モード。required の意味を正しく保つ
+- **Fail Secure**: リリース品質の最終担保は tag push 起動の `release` ジョブ側で**必ず**署名・公証が走る設計であり、`build-preview` が走らなくとも未署名バイナリが本番に流れることはない
 
 ## 8. コスト
 
