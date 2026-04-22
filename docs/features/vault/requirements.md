@@ -149,7 +149,7 @@
 | MSG-DEV-001 | 開発者エラー | `unknown protection mode: {0}` | `InvalidProtectionMode` |
 | MSG-DEV-002 | 開発者エラー | `unsupported vault version: {0}` | `UnsupportedVaultVersion` |
 | MSG-DEV-003 | 開発者エラー | `invalid record label: {0}` | `InvalidRecordLabel` |
-| MSG-DEV-004 | 開発者エラー | `vault and record payload mode mismatch: {0}` | `VaultConsistencyError` |
+| MSG-DEV-004 | 開発者エラー | 内包 `VaultConsistencyReason` の `Display` を素通し（`#[error("{0}")]`、各バリアント文言は `error.rs` の `VaultConsistencyReason` 定義を参照。`DuplicateId` 等は mode mismatch 文言を含まない） | `VaultConsistencyError` |
 | MSG-DEV-005 | 開発者エラー | `nonce counter exhausted; rekey required` | `NonceOverflow` |
 | MSG-DEV-006 | 開発者エラー | `invalid record id: {0}` | `InvalidRecordId` |
 | MSG-DEV-007 | 開発者エラー | `invalid record payload: {0}` | `InvalidRecordPayload` |

@@ -105,7 +105,8 @@
 | TC-U09-01 | REQ-009 | AC-01 | `DomainError::InvalidProtectionMode("x")` の `Display` が `"unknown protection mode: x"` を含む（MSG-DEV-001） | 正常系 |
 | TC-U09-02 | REQ-009 | AC-01 | `DomainError::UnsupportedVaultVersion(99)` の `Display` が `"unsupported vault version: 99"` を含む（MSG-DEV-002） | 正常系 |
 | TC-U09-03 | REQ-009 | AC-01 | `DomainError::InvalidRecordLabel(Empty)` の `Display` が `"invalid record label"` を含む（MSG-DEV-003） | 正常系 |
-| TC-U09-04 | REQ-009 | AC-01 | `DomainError::VaultConsistencyError(ModeMismatch { .. })` の `Display` が `"vault and record payload mode mismatch"` を含む（MSG-DEV-004） | 正常系 |
+| TC-U09-04 | REQ-009 | AC-01 | `DomainError::VaultConsistencyError(ModeMismatch { .. })` の `Display` が `"vault"` かつ `"mode"` を含む（MSG-DEV-004 改訂: `#[error("{0}")]` により内包 `VaultConsistencyReason` の Display に委譲） | 正常系 |
+| TC-U09-04b | REQ-009 | AC-01 | `DomainError::VaultConsistencyError(DuplicateId(..))` の `Display` が `"duplicate"` を含み `"mode mismatch"` を含まない（旧実装で混入していた文言の不混入確認） | 異常系 |
 | TC-U09-05 | REQ-009 | AC-01 | `DomainError::NonceOverflow` の `Display` が `"nonce counter exhausted"` を含む（MSG-DEV-005） | 正常系 |
 | TC-U09-06 | REQ-009 | AC-01 | `DomainError::InvalidRecordId(NilUuid)` の `Display` が `"invalid record id"` を含む（MSG-DEV-006） | 正常系 |
 | TC-U09-07 | REQ-009 | AC-01 | `DomainError::InvalidRecordPayload(CipherTextEmpty)` の `Display` が `"invalid record payload"` を含む（MSG-DEV-007） | 正常系 |
