@@ -93,3 +93,52 @@ impl fmt::Debug for SecretBytes {
         f.write_str("[REDACTED]")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_secret_string_from_string_constructs_without_panic() {
+        let _ = SecretString::from_string("password".to_string());
+    }
+
+    #[test]
+    fn test_secret_string_debug_does_not_expose_value() {
+        let s = SecretString::from_string("password".to_string());
+        let debug_output = format!("{:?}", s);
+        assert!(
+            !debug_output.contains("password"),
+            "Debug must not expose the secret"
+        );
+        assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_secret_string_expose_secret_returns_original_value() {
+        let s = SecretString::from_string("password".to_string());
+        assert_eq!(s.expose_secret(), "password");
+    }
+
+    #[test]
+    fn test_secret_bytes_from_boxed_slice_constructs_without_panic() {
+        let _ = SecretBytes::from_boxed_slice(vec![1u8, 2, 3].into_boxed_slice());
+    }
+
+    #[test]
+    fn test_secret_bytes_debug_does_not_expose_value() {
+        let b = SecretBytes::from_boxed_slice(vec![1u8, 2, 3].into_boxed_slice());
+        let debug_output = format!("{:?}", b);
+        assert!(
+            !debug_output.contains("1, 2, 3"),
+            "Debug must not expose bytes"
+        );
+        assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_secret_bytes_expose_secret_returns_original_bytes() {
+        let b = SecretBytes::from_boxed_slice(vec![1u8, 2, 3].into_boxed_slice());
+        assert_eq!(b.expose_secret(), &[1u8, 2, 3]);
+    }
+}

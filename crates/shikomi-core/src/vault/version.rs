@@ -37,3 +37,31 @@ impl VaultVersion {
         self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_try_new_current_version_ok() {
+        assert!(VaultVersion::try_new(1).is_ok());
+    }
+
+    #[test]
+    fn test_try_new_below_min_supported_returns_error() {
+        let err = VaultVersion::try_new(0).unwrap_err();
+        assert!(matches!(err, DomainError::UnsupportedVaultVersion(0)));
+    }
+
+    #[test]
+    fn test_try_new_above_current_returns_error() {
+        let err = VaultVersion::try_new(2).unwrap_err();
+        assert!(matches!(err, DomainError::UnsupportedVaultVersion(2)));
+    }
+
+    #[test]
+    fn test_value_returns_inner_u16() {
+        let v = VaultVersion::try_new(1).unwrap();
+        assert_eq!(v.value(), 1u16);
+    }
+}

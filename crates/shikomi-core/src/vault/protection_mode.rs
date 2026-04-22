@@ -39,3 +39,40 @@ impl ProtectionMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_as_persisted_str_plaintext_returns_plaintext() {
+        assert_eq!(ProtectionMode::Plaintext.as_persisted_str(), "plaintext");
+    }
+
+    #[test]
+    fn test_as_persisted_str_encrypted_returns_encrypted() {
+        assert_eq!(ProtectionMode::Encrypted.as_persisted_str(), "encrypted");
+    }
+
+    #[test]
+    fn test_try_from_persisted_str_plaintext_ok() {
+        assert_eq!(
+            ProtectionMode::try_from_persisted_str("plaintext").unwrap(),
+            ProtectionMode::Plaintext
+        );
+    }
+
+    #[test]
+    fn test_try_from_persisted_str_encrypted_ok() {
+        assert_eq!(
+            ProtectionMode::try_from_persisted_str("encrypted").unwrap(),
+            ProtectionMode::Encrypted
+        );
+    }
+
+    #[test]
+    fn test_try_from_persisted_str_unknown_returns_invalid_protection_mode() {
+        let err = ProtectionMode::try_from_persisted_str("PLAINTEXT").unwrap_err();
+        assert!(matches!(err, DomainError::InvalidProtectionMode(_)));
+    }
+}

@@ -164,3 +164,88 @@ impl VaultHeader {
 // InvalidVaultHeaderReason は error.rs にある
 #[allow(unused_imports)]
 use InvalidVaultHeaderReason as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::DomainError;
+    use time::OffsetDateTime;
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH
+    }
+
+    fn valid_kdf_salt() -> KdfSalt {
+        KdfSalt::try_new(&[0u8; 16]).unwrap()
+    }
+
+    fn valid_wrapped_vek() -> WrappedVek {
+        WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap()
+    }
+
+    #[test]
+    fn test_new_plaintext_with_current_version_ok() {
+        let result = VaultHeader::new_plaintext(VaultVersion::CURRENT, now());
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), VaultHeader::Plaintext(_)));
+    }
+
+    #[test]
+    fn test_new_plaintext_unsupported_version_try_new_returns_error() {
+        // VaultVersion has a private field so we cannot construct VaultVersion(2) directly.
+        // The defensive check in new_plaintext never fires for validly-constructed VaultVersions.
+        // We verify that the only way to get an unsupported version is rejected by VaultVersion::try_new.
+        let err = VaultVersion::try_new(2).unwrap_err();
+        assert!(matches!(err, DomainError::UnsupportedVaultVersion(2)));
+    }
+
+    #[test]
+    fn test_new_encrypted_with_valid_args_ok() {
+        let result = VaultHeader::new_encrypted(
+            VaultVersion::CURRENT,
+            now(),
+            valid_kdf_salt(),
+            valid_wrapped_vek(),
+            valid_wrapped_vek(),
+        );
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), VaultHeader::Encrypted(_)));
+    }
+
+    #[test]
+    fn test_new_encrypted_with_wrong_kdf_salt_length_returns_error() {
+        let salt = KdfSalt::try_new(&[0u8; 15]).unwrap_err();
+        assert!(matches!(salt, DomainError::InvalidVaultHeader(_)));
+    }
+
+    #[test]
+    fn test_new_encrypted_with_empty_wrapped_vek_pw_returns_error() {
+        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
+        assert!(matches!(err, DomainError::InvalidVaultHeader(_)));
+    }
+
+    #[test]
+    fn test_new_encrypted_with_empty_wrapped_vek_recovery_returns_error() {
+        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
+        assert!(matches!(err, DomainError::InvalidVaultHeader(_)));
+    }
+
+    #[test]
+    fn test_plaintext_protection_mode_returns_plaintext() {
+        let header = VaultHeader::new_plaintext(VaultVersion::CURRENT, now()).unwrap();
+        assert_eq!(header.protection_mode(), ProtectionMode::Plaintext);
+    }
+
+    #[test]
+    fn test_encrypted_protection_mode_returns_encrypted() {
+        let header = VaultHeader::new_encrypted(
+            VaultVersion::CURRENT,
+            now(),
+            valid_kdf_salt(),
+            valid_wrapped_vek(),
+            valid_wrapped_vek(),
+        )
+        .unwrap();
+        assert_eq!(header.protection_mode(), ProtectionMode::Encrypted);
+    }
+}

@@ -74,3 +74,62 @@ impl FromStr for RecordId {
         Self::try_from_str(s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn valid_uuid_v7() -> Uuid {
+        Uuid::now_v7()
+    }
+
+    #[test]
+    fn test_new_with_valid_uuidv7_ok() {
+        assert!(RecordId::new(valid_uuid_v7()).is_ok());
+    }
+
+    #[test]
+    fn test_new_with_uuidv4_returns_wrong_version_error() {
+        let uuid_v4 = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let err = RecordId::new(uuid_v4).unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidRecordId(crate::error::InvalidRecordIdReason::WrongVersion {
+                actual: 4
+            })
+        ));
+    }
+
+    #[test]
+    fn test_new_with_nil_uuid_returns_nil_uuid_error() {
+        let err = RecordId::new(Uuid::nil()).unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidRecordId(crate::error::InvalidRecordIdReason::NilUuid)
+        ));
+    }
+
+    #[test]
+    fn test_try_from_str_with_valid_uuidv7_string_ok() {
+        // A valid UUIDv7 string (version=7, variant=10xx)
+        let result = RecordId::try_from_str("01234567-0123-7000-8000-0123456789ab");
+        assert!(result.is_ok(), "expected Ok but got {:?}", result);
+    }
+
+    #[test]
+    fn test_try_from_str_with_invalid_string_returns_parse_error() {
+        let err = RecordId::try_from_str("not-a-uuid").unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidRecordId(crate::error::InvalidRecordIdReason::ParseError(_))
+        ));
+    }
+
+    #[test]
+    fn test_as_uuid_returns_stored_uuid() {
+        let uuid = valid_uuid_v7();
+        let id = RecordId::new(uuid).unwrap();
+        assert_eq!(id.as_uuid(), &uuid);
+    }
+}

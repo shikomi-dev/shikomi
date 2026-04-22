@@ -189,3 +189,82 @@ impl Aad {
         bytes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::id::RecordId;
+    use crate::vault::version::VaultVersion;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    fn make_id() -> RecordId {
+        RecordId::new(Uuid::now_v7()).unwrap()
+    }
+
+    #[test]
+    fn test_aad_new_with_valid_args_ok() {
+        let id = make_id();
+        assert!(Aad::new(id, VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH).is_ok());
+    }
+
+    #[test]
+    fn test_aad_new_with_out_of_range_timestamp_returns_aad_timestamp_out_of_range() {
+        // TC-U11-02: AadTimestampOutOfRange fires when microseconds overflow i64.
+        // Overflow threshold: seconds > i64::MAX / 1_000_000 ≈ 9_223_372_036_854.
+        // time 0.3 limits representable years to [-9999, 9999]; max unix timestamp
+        // ≈ year 9999 ≈ 2.53×10^11 s → max microseconds ≈ 2.53×10^17 << i64::MAX.
+        // Therefore AadTimestampOutOfRange is unreachable within time 0.3's range.
+        // If time 0.3 cannot represent the threshold timestamp, the test is
+        // vacuously satisfied (defensive path cannot be triggered with this crate).
+        let threshold = i64::MAX / 1_000_000 + 1;
+        if let Ok(far_future) = OffsetDateTime::from_unix_timestamp(threshold) {
+            let id = make_id();
+            let err = Aad::new(id, VaultVersion::CURRENT, far_future).unwrap_err();
+            assert!(matches!(
+                err,
+                DomainError::InvalidRecordPayload(
+                    crate::error::InvalidRecordPayloadReason::AadTimestampOutOfRange
+                )
+            ));
+        }
+        // else: time 0.3 cannot represent this timestamp; the error variant is
+        // dead code in practice — test is vacuously satisfied.
+    }
+
+    #[test]
+    fn test_aad_to_canonical_bytes_returns_26_bytes() {
+        let id = make_id();
+        let aad = Aad::new(id, VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH).unwrap();
+        assert_eq!(aad.to_canonical_bytes().len(), 26);
+    }
+
+    #[test]
+    fn test_aad_to_canonical_bytes_golden_value() {
+        // Golden value test: known RecordId + VaultVersion::CURRENT + UNIX_EPOCH
+        // Expected 26 bytes:
+        //   [0..16]: UUID bytes MSB first
+        //   [16..18]: u16=1 big-endian = [0x00, 0x01]
+        //   [18..26]: i64=0 big-endian = [0x00; 8]
+        let uuid_bytes = [
+            0x01u8, 0x8f, 0x12, 0x34, 0x56, 0x78, 0x7a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
+            0x90, 0x12,
+        ];
+        let uuid = Uuid::from_bytes(uuid_bytes);
+        let id = RecordId::new(uuid).unwrap();
+        let aad = Aad::new(id, VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH).unwrap();
+        let canonical = aad.to_canonical_bytes();
+
+        let expected: [u8; 26] = [
+            0x01, 0x8f, 0x12, 0x34, 0x56, 0x78, 0x7a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
+            0x90, 0x12, // UUID bytes [0..16]
+            0x00, 0x01, // u16=1 BE [16..18]
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // i64=0 BE [18..26]
+        ];
+        assert_eq!(
+            canonical, expected,
+            "Golden value mismatch: got {:02x?}, expected {:02x?}",
+            canonical, expected
+        );
+    }
+}

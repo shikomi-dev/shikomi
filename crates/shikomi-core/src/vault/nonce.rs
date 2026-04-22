@@ -111,3 +111,78 @@ impl NonceCounter {
         self.counter
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nonce_counter_new_starts_at_zero() {
+        let counter = NonceCounter::new([0u8; 8]);
+        assert_eq!(counter.current_counter(), 0u32);
+    }
+
+    #[test]
+    fn test_nonce_counter_next_returns_12_byte_nonce() {
+        let mut counter = NonceCounter::new([0u8; 8]);
+        let nonce = counter.next().unwrap();
+        assert_eq!(nonce.as_array().len(), 12);
+    }
+
+    #[test]
+    fn test_nonce_counter_current_counter_increments_after_next() {
+        let mut counter = NonceCounter::new([0u8; 8]);
+        counter.next().unwrap();
+        assert_eq!(counter.current_counter(), 1u32);
+    }
+
+    #[test]
+    fn test_nonce_counter_resume_starts_at_given_counter() {
+        let counter = NonceCounter::resume([0u8; 8], 42);
+        assert_eq!(counter.current_counter(), 42u32);
+    }
+
+    #[test]
+    fn test_nonce_counter_next_at_max_minus_one_succeeds() {
+        let mut counter = NonceCounter::resume([0u8; 8], u32::MAX - 1);
+        assert!(counter.next().is_ok());
+    }
+
+    #[test]
+    fn test_nonce_counter_next_at_max_returns_nonce_overflow() {
+        let mut counter = NonceCounter::resume([0u8; 8], u32::MAX);
+        let err = counter.next().unwrap_err();
+        assert!(matches!(err, DomainError::NonceOverflow));
+    }
+
+    #[test]
+    fn test_nonce_counter_next_prefix_bytes_match_random_prefix() {
+        let prefix = [0xABu8; 8];
+        let mut counter = NonceCounter::new(prefix);
+        let nonce = counter.next().unwrap();
+        assert_eq!(&nonce.as_array()[0..8], &prefix);
+    }
+
+    #[test]
+    fn test_nonce_counter_next_counter_bytes_are_big_endian() {
+        let mut counter = NonceCounter::new([0u8; 8]);
+        let n1 = counter.next().unwrap();
+        let n2 = counter.next().unwrap();
+        let n3 = counter.next().unwrap();
+        assert_eq!(
+            &n1.as_array()[8..12],
+            &[0x00u8, 0x00, 0x00, 0x00],
+            "1st: counter=0"
+        );
+        assert_eq!(
+            &n2.as_array()[8..12],
+            &[0x00u8, 0x00, 0x00, 0x01],
+            "2nd: counter=1"
+        );
+        assert_eq!(
+            &n3.as_array()[8..12],
+            &[0x00u8, 0x00, 0x00, 0x02],
+            "3rd: counter=2"
+        );
+    }
+}

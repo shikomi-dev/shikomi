@@ -155,3 +155,79 @@ pub enum VaultConsistencyReason {
     #[error("updated_at must not precede created_at")]
     InvalidUpdatedAt,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::protection_mode::ProtectionMode;
+
+    #[test]
+    fn test_display_invalid_protection_mode_contains_keyword() {
+        let err = DomainError::InvalidProtectionMode("x".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("unknown protection mode"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_display_unsupported_vault_version_contains_version_number() {
+        let err = DomainError::UnsupportedVaultVersion(99);
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("unsupported vault version") && msg.contains("99"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_display_invalid_record_label_contains_keyword() {
+        let err = DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty);
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid record label"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_display_vault_consistency_mode_mismatch_contains_keywords() {
+        let err = DomainError::VaultConsistencyError(VaultConsistencyReason::ModeMismatch {
+            vault_mode: ProtectionMode::Plaintext,
+            record_mode: ProtectionMode::Encrypted,
+        });
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("vault") && msg.contains("mode mismatch"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_display_nonce_overflow_contains_keyword() {
+        let err = DomainError::NonceOverflow;
+        let msg = format!("{}", err);
+        assert!(msg.contains("nonce counter exhausted"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_display_invalid_record_id_contains_keyword() {
+        let err = DomainError::InvalidRecordId(InvalidRecordIdReason::NilUuid);
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid record id"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_display_invalid_record_payload_contains_keyword() {
+        let err = DomainError::InvalidRecordPayload(InvalidRecordPayloadReason::CipherTextEmpty);
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid record payload"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_display_invalid_vault_header_contains_keyword() {
+        let err = DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::KdfSaltLength {
+            expected: 16,
+            got: 15,
+        });
+        let msg = format!("{}", err);
+        assert!(msg.contains("invalid vault header"), "got: {}", msg);
+    }
+}
