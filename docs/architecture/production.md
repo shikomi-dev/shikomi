@@ -93,10 +93,36 @@ flowchart LR
 | 境界 | 保護 | 検出 |
 |-----|------|------|
 | インストーラ → OS | OS 署名（Developer ID / Authenticode）＋ SHA-256 checksum + minisign | 改竄時は OS が起動拒否 |
-| プロセス → vault ファイル | AES-256-GCM の認証タグ | 改竄時は `fail fast` でアプリ起動中断、ユーザへ警告 |
-| プロセス → クリップボード | sensitive hint MIME（Win: `CanIncludeInClipboardHistory=0` 等 / KDE: `x-kde-passwordManagerHint=secret` / macOS: `application/x-nspasteboard-concealed-type`）＋ タイマー自動クリア | — |
+| プロセス → vault ファイル | AES-256-GCM の認証タグ + レコード AAD（レコード ID + version + 作成日時）。書込は **atomic write**（`.new` → `fsync` → `rename` / `ReplaceFileW`） | 改竄時は `fail fast`、`.new` 残存は起動時にリカバリ UI へ誘導 |
+| プロセス → クリップボード | sensitive hint MIME（Win: `CanIncludeInClipboardHistory=0` 等 / KDE: `x-kde-passwordManagerHint=secret` / macOS: `application/x-nspasteboard-concealed-type`）＋ タイマー自動クリア（既定 30 秒、`context.md` §7.2） | — |
 | プロセス → OS キーチェーン | `keyring` crate 経由、デフォルトオフ | — |
+| daemon ↔ CLI/GUI (IPC) | UDS `0700` / Named Pipe SDDL + ピア UID 検証 + セッショントークン（`context.md` §4.2） | 不正接続は即切断、`tracing::warn!` |
 | 他プロセス → shikomi | 同ユーザ権限内では OS 側保護は弱い（Wayland は compositor が制限、X11/macOS/Win は同ユーザプロセス間で可視） | メモリ保護は best-effort、残存リスクを SECURITY.md に明記 |
+
+### 4.2 初回インストール警告への対応方針（非技術者向け UX）
+
+**課題**: ペルソナ C（佐々木）のように、SmartScreen / Gatekeeper の警告ダイアログで怯んでインストールを中断する層が最大のリスク。署名・公証を全 OS で行っても、未登録評判の初期は OV 署名の SmartScreen 警告や macOS 初回起動警告は避けられない。
+
+**方針**: 「警告は出る前提で、出た時のガイドを完備する」
+
+| OS | 警告発生条件 | アプリ側対応 | 配布側対応 |
+|----|-----------|-----------|-----------|
+| Windows (OV 署名期間中) | SmartScreen reputation 未蓄積時に「Windows によって PC が保護されました」 | — | **公式サイトのインストール手順に警告ダイアログのスクリーンショット + 「詳細情報 → 実行」手順を明記**、警告回避のために EV 証明書移行を評判蓄積後に検討（`tech-stack.md` §2.2） |
+| Windows (署名なしビルドが流通した場合) | "unknown publisher" | **そもそも署名なしは Release では配布しない**（CI でガード） | 配布しない |
+| macOS (初回起動) | Gatekeeper「インターネットからダウンロードされたアプリケーション」 | 初回起動時に Finder 右クリック→「開く」の手順を **アプリ内ヘルプではなく公式サイトに誘導**（まだアプリが起動していないため、アプリ内誘導は不可能） | DMG に README.txt を同梱し、警告時の対処 1 文を明記 |
+| macOS (未公証配布の誤流通) | 「壊れているため開けません」 | — | **未公証バイナリは Release に上げない**（CI の `notarize` ステップが失敗したらタグを reject） |
+| Linux | 署名検証は distro 依存、通常はユーザが `gpg --verify` | — | `checksums.txt` + minisign 公開鍵を GitHub Releases に掲載、コマンド例を README で明示 |
+
+**公式サイトのトラブルシュート導線**（`https://shikomi.dev/install/` を GitHub Pages に構築想定）:
+- 「ダウンロードしたけど警告が出た」の FAQ を最上段に配置
+- OS 別タブで **実際の警告ダイアログのスクリーンショット + 赤枠で次に押すボタンをハイライト**
+- 「警告が怖い」層向けに「なぜこの警告が出るのか（技術者向けの免罪符ではなく、非技術者向けの『新しいアプリだからです』）」の 2 文説明
+- 問い合わせ先（GitHub Discussions）を明示
+
+**アプリ側 UX 要件（後続 feature `onboarding` で具体化）**:
+- 初回起動時に macOS Accessibility / Input Monitoring 権限が未付与なら、System Settings の該当ページを**直接 open**（`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility` URL scheme）してから、アプリ内の説明モーダルを表示
+- 権限拒否時のリカバリー: アプリ再起動後も同じモーダルを表示し、「権限がないとホットキーが動作しない」ことと再度 System Settings を開く動線を提供
+- 詳細な初回セットアップ UX フローは `environment-diff.md` §6 に規定
 
 ## 5. 更新・チャネル
 

@@ -108,7 +108,111 @@ flowchart TB
 | バックアップ | なし | GH Actions 履歴 90 日保持 | Releases 永続、ソースは Git 履歴 |
 | モニタリング | なし | CI ダッシュボード（Actions UI） | 該当なし — クライアントテレメトリなし方針 |
 
-## 5. 該当なし項目
+## 6. 初回セットアップ UX フロー（OS 別）
+
+本書では UX の骨格を示し、画面遷移・文言・ワイヤーフレームは後続 feature `onboarding` の `requirements.md` / `basic-design.md` で具体化する。ここでは OS 差分とエッジケースの網羅性を担保する。
+
+### 6.1 Windows 初回起動フロー
+
+```mermaid
+flowchart TB
+    DL[公式サイトからダウンロード<br/>.exe or .msi]
+    SS{SmartScreen 警告?}
+    DLHelp[公式サイトの<br/>ヘルプ誘導<br/>詳細情報→実行]
+    Install[インストーラ完了]
+    First[初回起動]
+    MasterSet[マスターパスワード作成<br/>Argon2id 計算 ~1 秒]
+    Recovery[リカバリコード表示<br/>印刷 or 保存を強く促す]
+    HotkeySetup[既定ホットキー Ctrl+Alt+1 設定]
+    Done[完了]
+
+    DL --> SS
+    SS -- 警告あり --> DLHelp --> Install
+    SS -- 警告なし --> Install
+    Install --> First --> MasterSet --> Recovery --> HotkeySetup --> Done
+```
+
+**注意点**:
+- SmartScreen 警告時の UX は**アプリ側では介入不能**（インストール前のため）。配布側（公式サイト・README・DMG 同梱 README）のみで対応（`production.md` §4.2）
+- 管理者権限は不要。ユーザ権限のみでインストール可能（`%LOCALAPPDATA%\shikomi\`）
+
+### 6.2 macOS 初回起動フロー
+
+```mermaid
+flowchart TB
+    DL[公式サイトから DMG DL]
+    Gate{Gatekeeper 警告?}
+    GateHelp[初回右クリック→開く手順を<br/>公式サイトで案内]
+    Install[DMG からアプリフォルダへドラッグ]
+    First[初回起動]
+    MasterSet[マスターパスワード作成]
+    Recovery[リカバリコード表示]
+    AXCheck{AXIsProcessTrusted?}
+    AXSettings[System Settings 自動 open<br/>Privacy > Accessibility]
+    AXDeny{権限付与された?}
+    AXRetry[アプリ内説明モーダル<br/>再度 Settings を開く]
+    IMCheck{Input Monitoring 必要?}
+    IMSettings[System Settings 自動 open<br/>Privacy > Input Monitoring]
+    HotkeySetup[Cmd+Option+1 設定]
+    Done[完了]
+
+    DL --> Gate
+    Gate -- 警告あり --> GateHelp --> Install
+    Gate -- 警告なし --> Install
+    Install --> First --> MasterSet --> Recovery --> AXCheck
+    AXCheck -- 未付与 --> AXSettings --> AXDeny
+    AXDeny -- 付与された --> IMCheck
+    AXDeny -- 拒否 --> AXRetry --> AXSettings
+    AXCheck -- 付与済 --> IMCheck
+    IMCheck -- 必要 --> IMSettings --> HotkeySetup
+    IMCheck -- 不要（MVPはAX のみ） --> HotkeySetup
+    HotkeySetup --> Done
+```
+
+**権限要求の段階設計**:
+- **MVP ではクリップボード投入のみを主モード**とし、キー注入フォールバック（`--paste-mode=inject`）は後続 feature でオプトイン化する。従って MVP の初回フローで必須なのは **Accessibility（ホットキー購読用）のみ**
+- **Input Monitoring は後続 feature 時に追加モーダルで要求**し、要求タイミングを明示（権限取得は「機能を使おうとしたとき」に遅延、オンボーディングを軽くする）
+- 権限拒否時のリカバリー: アプリ再起動後も初期化済み vault は保持、起動時に「権限未付与」バナーを常時表示し、タップで Settings に飛ぶ動線を維持
+- **Secure Event Input 下のサイレント失敗**: キー注入モード有効時、macOS で `IsSecureEventInputEnabled()` を呼び、`true` ならその旨をユーザに通知してクリップボード投入にフォールバック（ログと UI 両方で明示、Fail Fast / Fail Transparent）
+
+### 6.3 Linux 初回起動フロー
+
+```mermaid
+flowchart TB
+    DL[deb/rpm/AppImage DL]
+    Install[apt install / dnf install / chmod +x]
+    First[初回起動]
+    MasterSet[マスターパスワード作成]
+    Recovery[リカバリコード表示]
+    Session{XDG_SESSION_TYPE?}
+    X11Path[X11 経路<br/>XGrabKey で即登録]
+    WaylandPortal{Portal 同意ダイアログ<br/>BindShortcuts}
+    WaylandDeny[Portal 拒否時<br/>アプリ内モーダルで再要求動線]
+    HotkeySetup[Ctrl+Alt+1 設定]
+    Done[完了]
+
+    DL --> Install --> First --> MasterSet --> Recovery --> Session
+    Session -- x11 --> X11Path --> HotkeySetup
+    Session -- wayland --> WaylandPortal
+    WaylandPortal -- 許可 --> HotkeySetup
+    WaylandPortal -- 拒否 --> WaylandDeny --> WaylandPortal
+    HotkeySetup --> Done
+```
+
+**注意点**:
+- Wayland の `BindShortcuts` は compositor 側 UI を経由するため、**compositor により見た目が異なる**（GNOME / KDE / sway / Hyprland 等）。アプリ側は「compositor の同意画面を見てください」と誘導
+- Portal が利用不可な compositor（存在する）では明示エラー表示（「非対応 compositor です」）し fail fast
+
+### 6.4 全 OS 共通のリカバリー UX
+
+| シナリオ | 対応 |
+|---------|------|
+| マスターパスワード忘れ | **復旧不能**を UI・README・公式サイトで明示。ただし作成時に**リカバリコード**（BIP-39 ベース 12 語）を必ず生成・表示して保存を促す（MVP で必須。失念リスクはペルソナ A/C にとって致命的） |
+| vault ファイル破損（atomic write の `.new` 残存等） | 起動時に検出 → リカバリ UI（バックアップからの復元・新規作成・開発者向けエクスポート）を提示 |
+| 権限喪失（macOS Settings で切られた） | 起動時バナー + タップで Settings へ |
+| 派生鍵キャッシュが突然切れた（スクリーンロック連動） | 次のホットキー押下時に通知 + マスターパスワード再入力モーダル（daemon は常駐、GUI/CLI 不要でロック画面風モーダル表示） |
+
+## 7. 該当なし項目
 
 | 項目 | 理由 |
 |------|------|
@@ -116,3 +220,11 @@ flowchart TB
 | Multi-AZ / マルチリージョン | サーバなし |
 | VPC Endpoint / fck-nat | サーバなし |
 | DNS 切替（dev.shikomi / stg.shikomi） | サーバなし、公式サイトは単一の GitHub Pages を想定 |
+
+## 8. 参考一次情報（§6 UX フロー）
+
+- macOS System Settings URL scheme（`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`）: https://developer.apple.com/documentation/devicemanagement/systempreferences
+- `AXIsProcessTrusted` / `AXIsProcessTrustedWithOptions`: https://developer.apple.com/documentation/applicationservices/1462089-axisprocesstrusted
+- Apple TN2150（Secure Event Input）: https://developer.apple.com/library/archive/technotes/tn2150/_index.html
+- XDG Desktop Portal GlobalShortcuts v2: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html
+- BIP-39（リカバリコード候補）: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki

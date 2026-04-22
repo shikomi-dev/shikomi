@@ -57,7 +57,10 @@ flowchart LR
 
 - `cargo-deny` の `advisory` / `licenses` / `bans` / `sources` を全部有効化
 - Dependabot: Rust (`cargo`), npm (`shikomi-gui/ui`), GitHub Actions の 3 エコシステムに対し週次
-- **lock file ガード**: PR で `Cargo.lock` / `pnpm-lock.yaml` が `Cargo.toml` / `package.json` 変更なしに書き換わっていたら fail（`cargo install --locked` 相当の `cargo fetch --locked` を CI で実行）
+- **lock file ガード**: `cargo --locked` / `pnpm install --frozen-lockfile` は「lock 再生成の禁止」しか検知できない。Cargo.toml 無変更で lock が書き換わった PR を検知するには追加ステップが必要:
+  1. CI 冒頭で `cargo --locked fetch --offline` / `pnpm install --frozen-lockfile` を実行し、lock と manifest が一致しない場合 fail
+  2. **PR diff ガード**: `git diff --name-only origin/main...HEAD` で `Cargo.lock` / `pnpm-lock.yaml` が変更されているかつ `Cargo.toml` / `shikomi-*/Cargo.toml` / `package.json` に変更がない場合、**PR ラベル `deps-lockfile-only`** の付与をマージ条件に要求。ラベルは意図的な更新（`cargo update -p <crate>` 等）である根拠を PR 本文に記載した場合のみレビュアが付与する
+  3. 上記により「意図せず `cargo update` が発火して lock 全体が書換わる」事故を PR レビューで確実に止める
 - CVE 検知時: Dependabot alert → Severity High 以上は `security` ラベル付 Issue 自動起票、72h 以内にトリアージ
 
 ## 6. テスト戦略

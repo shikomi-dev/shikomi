@@ -11,21 +11,34 @@ flowchart TB
     subgraph Workspace[Cargo Workspace]
         direction TB
         Core[shikomi-core<br/>Pure Rust / no-io ドメイン]
-        Infra[shikomi-infra<br/>OS 依存アダプタ]
+        Infra[shikomi-infra<br/>OS 依存アダプタ<br/>全 Linux バックエンドを実行時選択]
         Cli[shikomi-cli<br/>clap + tokio]
         Gui[shikomi-gui<br/>Tauri v2 + SolidJS]
-        Daemon[shikomi-daemon<br/>ホットキー常駐]
+        Daemon[shikomi-daemon<br/>ホットキー常駐<br/>vault + IPC]
     end
 
-    Cli --> Core
-    Gui --> Core
+    Cli -. IPC .-> Daemon
+    Gui -. IPC .-> Daemon
     Daemon --> Core
     Core --> Infra
-    Infra -.->|conditional compile| PlatX11[linux-x11 feature]
-    Infra -.->|conditional compile| PlatWayland[linux-wayland feature<br/>ashpd Portal]
-    Infra -.->|conditional compile| PlatMac[macos feature]
-    Infra -.->|conditional compile| PlatWin[windows feature]
+
+    subgraph Linux[Linux バイナリ: 両経路を常時同梱]
+        direction TB
+        Runtime[起動時セッション判定<br/>XDG_SESSION_TYPE + ashpd probe]
+        X11[X11 経路<br/>tauri-plugin-global-shortcut]
+        Wayland[Wayland 経路<br/>ashpd + XDG GlobalShortcuts Portal]
+        Runtime --> X11
+        Runtime --> Wayland
+    end
+
+    Infra --> Linux
+    Infra --> MacOS[macOS 経路]
+    Infra --> Windows[Windows 経路]
 ```
+
+**Linux での feature flag は使わない**: Linux バイナリは X11 / Wayland 両経路を常時同梱し、**起動時に `HotkeyBackend` を選択**（Tell, Don't Ask）。これにより deb/rpm/AppImage は単一ビルドで両セッションをサポートし、将来 Flatpak 化する際も portal 経路が既に組み込まれているため追加ビルドマトリクスを生まない。
+
+**OS 境界の feature flag は残す**: `target_os = "linux" | "macos" | "windows"` の cfg 属性は Rust の標準機構で、異なる OS のコードを物理的に同一バイナリに入れる意味はないため `target_os` によるコンパイル時分岐のみ使用する。あくまで**Linux 内部での実行時分岐**のために `linux-x11` / `linux-wayland` のような独自 feature flag は設けない、という方針。
 
 ## 2. 技術選定表
 
@@ -43,7 +56,8 @@ flowchart TB
 | 入力シミュレーション（フォールバック） | `enigo` / `rdev` / `autopilot-rs` | **`enigo`（最小限のフォールバック用途のみ）** | Wayland/libei が experimental ながら前進、`rdev` は Wayland 不可と README 明記。ただし MVP では**クリップボード投入が第一優先**で、キー注入は macOS Secure Event Input によるサイレント失敗のリスクがあるため CLI の `--paste-mode=inject` など明示オプトインに留める<br/>出典: https://github.com/enigo-rs/enigo, https://github.com/enigo-rs/enigo/blob/main/Permissions.md, https://developer.apple.com/library/archive/technotes/tn2150/_index.html |
 | シークレット保護 | `zeroize` / `secrecy` / 自前 | **`secrecy` + `zeroize`** | `secrecy::SecretBox` で `Debug`/`Serialize`/`Clone` の誤実装リークを型レベルで封じる。`zeroize` は LLVM の最適化除去防止を `volatile write` + `compiler_fence` で保証<br/>出典: https://docs.rs/secrecy/latest/secrecy/, https://docs.rs/zeroize/latest/zeroize/ |
 | OS キーチェーン連携 | `keyring` / 自前 D-Bus / 自前 CFI | **`keyring` crate** | `apple-native` / `windows-native` / `linux-native` / `sync-secret-service` feature でプラットフォーム backend を明示選択可、デフォルト feature なし方針が安全<br/>出典: https://docs.rs/keyring/latest/keyring/ |
-| Vault 暗号 | AES-256-GCM / ChaCha20-Poly1305 | **AES-256-GCM（RustCrypto `aes-gcm`）+ Argon2id（`argon2` crate）** | AEAD で認証タグ検証による tampering 検出、OWASP Password Storage 推奨値 `m=19456 KiB, t=2, p=1`<br/>出典: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html |
+| Vault 暗号 | AES-256-GCM / ChaCha20-Poly1305 | **AES-256-GCM（RustCrypto `aes-gcm`）+ Argon2id（`argon2` crate）** | AEAD で認証タグ検証による tampering 検出、OWASP Password Storage 推奨値 `m=19456 KiB, t=2, p=1`。nonce 管理・AAD・派生鍵キャッシュは §2.4 に詳述<br/>出典: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html |
+| IPC シリアライズ | JSON / MessagePack / bincode / Protocol Buffers | **MessagePack（`rmp-serde`）** | 型付き `serde` 統合、バイナリ高速、文字列 escape のクロス OS バグを回避。スキーマは `shikomi-core` 型で共有し二重管理を避ける |
 | 永続化フォーマット | SQLite / JSON / TOML | **SQLite（`rusqlite` + SQLCipher 任意）** | 件数が増えても O(log n) で検索、`rusqlite` のバンドル feature で外部依存ゼロ、SQLCipher は任意オプション（OSS ビルドはバンドル版で足りる） |
 | ログ | `tracing` / `log` | **`tracing`** | 構造化ログ、`tracing-subscriber` で環境変数レベル制御、secret スパン属性の漏洩防止も `secrecy` 連携で可能 |
 
@@ -82,12 +96,44 @@ flowchart TB
 | DNS | 該当なし | ドメインは `shikomi-dev/shikomi` GitHub Pages で静的ページのみ（後続） |
 | リージョン | 該当なし | クラウドなし |
 
+### 2.4 暗号運用の詳細
+
+| 項目 | 方針 | 根拠 |
+|-----|------|-----|
+| KDF | **Argon2id**、パラメータ `m=19456 KiB (19 MiB), t=2, p=1` | OWASP Password Storage Cheat Sheet 推奨値。CPU/メモリの攻撃コスト均衡 |
+| KDF ソルト | vault ごとに 16 バイト CSPRNG、vault ヘッダに平文保管（秘匿不要） | ソルトはレインボーテーブル対策であり秘匿性を求めない |
+| マスターキー → 派生鍵 | KDF 出力 32 バイトを AES-256-GCM 鍵として使用 | — |
+| レコード暗号 | **AES-256-GCM、レコード単位**（Envelope Encryption ではない、MVP では vault 全体ではなくレコード単位の AEAD） | レコード削除時にタグ再計算が不要、部分復号で平文展開範囲を最小化 |
+| nonce（IV）生成 | **CSPRNG 由来 96 bit / レコード**。同一派生鍵での nonce 衝突確率を $2^{-32}$ 以下に抑えるため、**同一派生鍵での暗号化回数上限を $2^{32}$ に制限**（NIST SP 800-38D §8.3 "Uniqueness Requirement on IVs"）。上限接近時は KDF 再実行＝再派生を強制 | nonce 再利用は認証タグ偽造と平文漏洩に直結するため最厳戒 |
+| nonce 保存場所 | 各レコードの AEAD ciphertext の先頭 12 バイトに prepend（標準レイアウト） | rusqlite BLOB カラムに `nonce \|\| ciphertext \|\| tag` 形式で保存 |
+| AAD（追加認証データ） | レコード ID（UUIDv7）・バージョン番号・作成日時を AAD に含める | レコード入れ替え攻撃（ciphertext を別レコードへ移植する攻撃）を検出 |
+| 派生鍵キャッシュ | `secrecy::SecretBox<[u8; 32]>` として daemon プロセスメモリ上のみ、アイドル 15 分 / スクリーンロック / サスペンドで即 `zeroize`（`context.md` §4.3） | ホットキー p95 100 ms と Argon2id 実行時間の矛盾を解消 |
+| マスターパスワード保持 | KDF 実行直後に即 `zeroize`。**派生鍵のみ**を保持 | マスターパスワード自体はメモリ上で最小時間のみ存在 |
+| レート制限（認証） | 連続失敗 5 回で 30 秒の指数バックオフ、プロセスで blocking sleep（OWASP A07 対応） | 総当たり攻撃緩和、Fail Secure |
+| 更新パッケージ署名 | `minisign`（公開鍵はアプリにバンドル、検証失敗で更新中断） | `tauri-plugin-updater` 準拠 |
+
+出典:
+- OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- NIST SP 800-38D "Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC": https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38d.pdf
+- RustCrypto `aes-gcm`: https://docs.rs/aes-gcm/latest/aes_gcm/
+
 ## 3. プラットフォーム差分の扱い（アーキテクチャ方針）
 
 - `shikomi-core` は `no_std` 志向ではないが **I/O を持たない純粋ドメイン**とする
-- プラットフォーム依存は `shikomi-infra` crate に閉じ込め、feature flag（`linux-x11`, `linux-wayland`, `macos`, `windows`）で切替
+- プラットフォーム依存は `shikomi-infra` crate に閉じ込め、**OS 境界（`target_os`）のみコンパイル時分岐**、**同一 OS 内のバックエンド選択は実行時分岐**に統一する
 - `shikomi-core` から `shikomi-infra` への依存方向を**一方向**に保ち、Clean Architecture の依存ルールを守る
-- Linux では**起動時に Wayland/X11 セッション判定**を行い、Wayland なら `ashpd` Portal 経路、X11 なら `tauri-plugin-global-shortcut` 経路を選択（Tell, Don't Ask: `HotkeyBackend::register()` を呼び出すだけで、呼び出し側は実装差を意識しない）
+- **Linux は単一バイナリに X11 / Wayland 両経路を同梱**し、起動時に `XDG_SESSION_TYPE` と `ashpd::Session::is_available()` を組合せたプローブで `HotkeyBackend` / `ClipboardBackend` を選択する（Tell, Don't Ask: 呼び出し側は `backend.register(hotkey)` を呼ぶだけで実装差を意識しない）
+- Wayland セッション下で portal が利用不可な極端ケースは `HotkeyBackendError::Unavailable` を返し、ユーザに「Wayland + Portal 非対応 compositor」と明示して fail fast
+
+### 3.1 実行時バックエンド選択ロジック（概念）
+
+| 検出順 | 検査内容 | 採用バックエンド |
+|-------|---------|---------------|
+| 1 | `target_os = "linux"` かつ `XDG_SESSION_TYPE == "wayland"` | Wayland portal（`ashpd`） |
+| 2 | `target_os = "linux"` かつ `XDG_SESSION_TYPE == "x11"`／未設定 | X11（`tauri-plugin-global-shortcut`） |
+| 3 | `target_os = "linux"` かつ上記検出失敗 | D-Bus への `org.freedesktop.portal.Desktop` 存在プローブ → あれば Wayland 扱い、なければ X11 扱い |
+| 4 | `target_os = "macos"` | macOS backend（Carbon + Accessibility） |
+| 5 | `target_os = "windows"` | Windows backend（`RegisterHotKey`） |
 
 ## 4. クレートバージョンピン方針
 
