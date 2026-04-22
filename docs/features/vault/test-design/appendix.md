@@ -85,7 +85,7 @@ cargo deny check
 |------|------|
 | 受入基準の網羅 | AC-01〜AC-09 が全テストケースで網羅されていること |
 | 行カバレッジ | `cargo test -p shikomi-core` で 80% 以上（受入基準 AC-06）。計測は `cargo llvm-cov` 等で行う |
-| 正常系 | 全ケース必須（ユニット 72 件 + 結合 7 件 = 合計 79 件） |
+| 正常系 | 全ケース必須（ユニット 84 件 + 結合 7 件 = 合計 91 件） |
 | 異常系 | エラーバリアントの種別まで検証（`assert!(matches!(err, DomainError::Xxx))` レベル） |
 | 境界値 | `RecordLabel`（0/1/254/255/256 grapheme）、`NonceCounter`（u32::MAX-1 / u32::MAX）、`VaultVersion`（0/1/2）を必須とする |
 
@@ -94,6 +94,7 @@ cargo deny check
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — AC-09（deny.toml 暗号クリティカル crate 確認）追加・TC-I07 追加。TC-U09（DomainError Display MSG-DEV-001〜009）追加。TC-U07-14〜16（Vault::rekey_with テスト）追加。合計 60件→73件*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — セル commit db52923 対応: TC-U09 の MSG-DEV 番号を 001〜008 に詰め直し（旧 MSG-DEV-006 InvalidSecretLength 削除）。TC-U11（Aad::new Fail Fast / to_canonical_bytes バイナリ正規形）追加。合計 73件→75件*
-*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス第3ラウンド指摘対応: TC-U11-04（Aad黄金値テスト・26byte完全一致）追加。TC-U10-08（NonceCounter下位4B big-endianバイトオーダー検証）追加。TC-U12（Record::new サブ秒丸めround-trip 2件）追加。合計 75件→79件*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス第3ラウンド指摘対応: TC-U11-04（Aad黄金値テスト・26byte完全一致）追加。TC-U10-08（NonceCounter下位4B big-endianバイトオーダー検証）追加。TC-U12（Record::new サブ秒丸めround-trip 2件）追加。合計 75件→91件（ユニット84件+結合7件。旧「79件」はサブケース集計漏れによる誤記）*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペガサス指摘対応: test-design.md（507行）を test-design/ ディレクトリに分割。overview.md / integration.md / unit.md / appendix.md の4ファイル構成に再編。*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス指摘対応: §10 カバレッジ基準の件数を「72+7=79件」から「84+7=91件」に訂正（マトリクス実数との乖離解消）。*
 *対応 Issue: #7 feat(shikomi-core): vault ドメイン型定義*
