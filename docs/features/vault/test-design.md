@@ -91,10 +91,12 @@
 | TC-U09-03 | REQ-009 | AC-01 | `DomainError::InvalidRecordLabel(Empty)` の `Display` が `"invalid record label"` を含む（MSG-DEV-003） | 正常系 |
 | TC-U09-04 | REQ-009 | AC-01 | `DomainError::VaultConsistencyError(ModeMismatch { .. })` の `Display` が `"vault and record payload mode mismatch"` を含む（MSG-DEV-004） | 正常系 |
 | TC-U09-05 | REQ-009 | AC-01 | `DomainError::NonceOverflow` の `Display` が `"nonce counter exhausted"` を含む（MSG-DEV-005） | 正常系 |
-| TC-U09-06 | REQ-009 | AC-01 | `DomainError::InvalidSecretLength { expected:32, got:16 }` の `Display` が `"expected 32, got 16"` を含む（MSG-DEV-006） | 正常系 |
-| TC-U09-07 | REQ-009 | AC-01 | `DomainError::InvalidRecordId(NilUuid)` の `Display` が `"invalid record id"` を含む（MSG-DEV-007） | 正常系 |
-| TC-U09-08 | REQ-009 | AC-01 | `DomainError::InvalidRecordPayload(CipherTextEmpty)` の `Display` が `"invalid record payload"` を含む（MSG-DEV-008） | 正常系 |
-| TC-U09-09 | REQ-009 | AC-01 | `DomainError::InvalidVaultHeader(KdfSaltLength { expected:16, got:15 })` の `Display` が `"invalid vault header"` を含む（MSG-DEV-009） | 正常系 |
+| TC-U09-06 | REQ-009 | AC-01 | `DomainError::InvalidRecordId(NilUuid)` の `Display` が `"invalid record id"` を含む（MSG-DEV-006） | 正常系 |
+| TC-U09-07 | REQ-009 | AC-01 | `DomainError::InvalidRecordPayload(CipherTextEmpty)` の `Display` が `"invalid record payload"` を含む（MSG-DEV-007） | 正常系 |
+| TC-U09-08 | REQ-009 | AC-01 | `DomainError::InvalidVaultHeader(KdfSaltLength { expected:16, got:15 })` の `Display` が `"invalid vault header"` を含む（MSG-DEV-008） | 正常系 |
+| TC-U11-01 | REQ-006 | AC-01 | `Aad::new(record_id, vault_version, valid_created_at)` が `Ok(Aad)` を返す | 正常系 |
+| TC-U11-02 | REQ-006 | AC-01 | `Aad::new(record_id, vault_version, out_of_range_created_at)` が `InvalidRecordPayload(AadTimestampOutOfRange)` を返す（Fail Fast） | 異常系 |
+| TC-U11-03 | REQ-006 | AC-01 | `Aad::to_canonical_bytes()` が 26 byte 固定長の配列を返す | 正常系 |
 | TC-U08-01 | REQ-008 | AC-01 | `SecretString::from_string` でインスタンスを構築できる（失敗しない） | 正常系 |
 | TC-U08-02 | REQ-008 | AC-04 | `format!("{:?}", secret_string)` の出力が `"[REDACTED]"` である | 正常系 |
 | TC-U08-03 | REQ-008 | AC-04 | `SecretString::expose_secret()` が元の文字列を返す | 正常系 |
@@ -341,7 +343,8 @@
 
 **配置先**: `crates/shikomi-core/src/error.rs`
 
-> **検証方針**: `thiserror::Error` 由来の `Display` 実装が MSG-DEV-001〜009 のメッセージ文面を正しく返すことを確認する。完全一致ではなく、メッセージの主要キーワードを `contains()` で検証する（メッセージ文面の細部修正で CI が落ちないよう意図的に柔軟化）。
+> **検証方針**: `thiserror::Error` 由来の `Display` 実装が MSG-DEV-001〜008 のメッセージ文面を正しく返すことを確認する。完全一致ではなく、メッセージの主要キーワードを `contains()` で検証する（メッセージ文面の細部修正で CI が落ちないよう意図的に柔軟化）。
+> **注記**: 旧 MSG-DEV-006（InvalidSecretLength）は `detailed-design.md` セル commit `db52923` にて YAGNI 違反として削除済み。以降の番号は詰め直されている。
 
 | テストID | 前提条件 | 操作 | 期待結果 |
 |---------|---------|------|---------|
@@ -350,10 +353,9 @@
 | TC-U09-03 | — | `format!("{}", DomainError::InvalidRecordLabel(Empty))` | `"invalid record label"` を含む（MSG-DEV-003） |
 | TC-U09-04 | — | `format!("{}", DomainError::VaultConsistencyError(ModeMismatch { .. }))` | `"vault"` かつ `"mode mismatch"` を含む（MSG-DEV-004） |
 | TC-U09-05 | — | `format!("{}", DomainError::NonceOverflow)` | `"nonce counter exhausted"` を含む（MSG-DEV-005） |
-| TC-U09-06 | — | `format!("{}", DomainError::InvalidSecretLength { expected: 32, got: 16 })` | `"32"` かつ `"16"` を含む（MSG-DEV-006） |
-| TC-U09-07 | — | `format!("{}", DomainError::InvalidRecordId(NilUuid))` | `"invalid record id"` を含む（MSG-DEV-007） |
-| TC-U09-08 | — | `format!("{}", DomainError::InvalidRecordPayload(CipherTextEmpty))` | `"invalid record payload"` を含む（MSG-DEV-008） |
-| TC-U09-09 | — | `format!("{}", DomainError::InvalidVaultHeader(KdfSaltLength { expected: 16, got: 15 }))` | `"invalid vault header"` を含む（MSG-DEV-009） |
+| TC-U09-06 | — | `format!("{}", DomainError::InvalidRecordId(NilUuid))` | `"invalid record id"` を含む（MSG-DEV-006） |
+| TC-U09-07 | — | `format!("{}", DomainError::InvalidRecordPayload(CipherTextEmpty))` | `"invalid record payload"` を含む（MSG-DEV-007） |
+| TC-U09-08 | — | `format!("{}", DomainError::InvalidVaultHeader(KdfSaltLength { expected: 16, got: 15 }))` | `"invalid vault header"` を含む（MSG-DEV-008） |
 
 ### TC-U10: NonceCounter
 
@@ -368,6 +370,20 @@
 | TC-U10-05 | `resume([0u8;8], u32::MAX - 1)` | `next()` | `Ok(NonceBytes)` |
 | TC-U10-06 | `resume([0u8;8], u32::MAX)` | `next()` | `Err(DomainError::NonceOverflow)` |
 | TC-U10-07 | `new([0xAB; 8])` 後 | `next()` → `as_array()[0..8]` | `[0xAB; 8]`（上位 8B が random_prefix） |
+
+### TC-U11: Aad（追加認証データ）
+
+**配置先**: `crates/shikomi-core/src/vault/crypto_data.rs`
+
+> **根拠**: セル commit `db52923` にて `Aad::new` が `Result<Aad, DomainError>` に変更された（`record_created_at` を i64 マイクロ秒に変換する際の範囲外を Fail Fast 検知）。また `Aad::to_canonical_bytes()` の戻り値が 26 byte 固定長配列（`[u8; 26]`）と確定したため、バイナリ正規形の契約検証テストを追加する。
+
+| テストID | 前提条件 | 操作 | 期待結果 |
+|---------|---------|------|---------|
+| TC-U11-01 | — | `Aad::new(valid_record_id, VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH)` | `Ok(Aad)` |
+| TC-U11-02 | — | `Aad::new(valid_record_id, VaultVersion::CURRENT, out_of_range_created_at)` | `Err(DomainError::InvalidRecordPayload(AadTimestampOutOfRange))` |
+| TC-U11-03 | `Aad::new` 成功後 | `aad.to_canonical_bytes().len()` | `26`（26 byte 固定長） |
+
+> **out_of_range_created_at の設定**: i64 マイクロ秒が `i64::MAX` を超える未来日付、または `i64::MIN` を下回る過去日付を `OffsetDateTime` として構成する。詳細設計 §バイナリ正規形仕様に定める変換範囲外が対象。
 
 ## 7. モック方針
 
@@ -396,6 +412,7 @@ crates/shikomi-core/
       id.rs          # TC-U04
       record.rs      # TC-U05, TC-U06
       nonce.rs       # TC-U10
+      crypto_data.rs # TC-U11（Aad::new Fail Fast / to_canonical_bytes）
     secret/
       mod.rs         # TC-U08
     error.rs         # TC-U09（DomainError Display）
@@ -443,7 +460,7 @@ cargo deny check
 |------|------|
 | 受入基準の網羅 | AC-01〜AC-09 が全テストケースで網羅されていること |
 | 行カバレッジ | `cargo test -p shikomi-core` で 80% 以上（受入基準 AC-06）。計測は `cargo llvm-cov` 等で行う |
-| 正常系 | 全ケース必須（ユニット 66 件 + 結合 7 件 = 合計 73 件） |
+| 正常系 | 全ケース必須（ユニット 68 件 + 結合 7 件 = 合計 75 件） |
 | 異常系 | エラーバリアントの種別まで検証（`assert!(matches!(err, DomainError::Xxx))` レベル） |
 | 境界値 | `RecordLabel`（0/1/254/255/256 grapheme）、`NonceCounter`（u32::MAX-1 / u32::MAX）、`VaultVersion`（0/1/2）を必須とする |
 
@@ -451,4 +468,5 @@ cargo deny check
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — AC-09（deny.toml 暗号クリティカル crate 確認）追加・TC-I07 追加。TC-U09（DomainError Display MSG-DEV-001〜009）追加。TC-U07-14〜16（Vault::rekey_with テスト）追加。合計 60件→73件*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — セル commit db52923 対応: TC-U09 の MSG-DEV 番号を 001〜008 に詰め直し（旧 MSG-DEV-006 InvalidSecretLength 削除）。TC-U11（Aad::new Fail Fast / to_canonical_bytes バイナリ正規形）追加。合計 73件→75件*
 *対応 Issue: #7 feat(shikomi-core): vault ドメイン型定義*
