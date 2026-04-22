@@ -1,0 +1,36 @@
+# CODEOWNERS — shikomi
+#
+# 各パスの変更には対応するオーナーのレビューが必須です。
+# フォーマット: <pattern> <owner> [<owner> ...]
+# 詳細: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# デフォルト: 全ファイルはリポジトリオーナーが管轄
+*                               @kkm-horikawa
+
+# ルート直下のガバナンスファイル
+/README.md                      @kkm-horikawa
+/LICENSE                        @kkm-horikawa
+/CONTRIBUTING.md                @kkm-horikawa
+/SECURITY.md                    @kkm-horikawa
+/CODEOWNERS                     @kkm-horikawa
+
+# GitHub 設定・CI ワークフロー（全体オーナー）
+/.github/                       @kkm-horikawa
+
+# アーキテクチャ設計書（設計責任者）
+/docs/architecture/             @kkm-horikawa
+
+# ドメインコア（Rust チーム — 現在はリポジトリオーナー）
+/shikomi-core/                  @kkm-horikawa
+
+# OS 依存インフラアダプタ（Rust チーム）
+/shikomi-infra/                 @kkm-horikawa
+
+# CLI（Rust チーム）
+/shikomi-cli/                   @kkm-horikawa
+
+# GUI（Tauri / フロントエンド チーム）
+/shikomi-gui/                   @kkm-horikawa
+
+# デーモン（Rust チーム）
+/shikomi-daemon/                @kkm-horikawa
