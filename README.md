@@ -28,7 +28,12 @@ winget install shikomi-dev.shikomi
 
 または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から `shikomi-windows-x86_64.msi` をダウンロードして実行。
 
-> **Windows SmartScreen について**: shikomi のインストーラは EV/OV コード署名済みです。インストール時に「Windows によって PC が保護されました」という SmartScreen の警告が表示された場合は、「詳細情報」をクリックし「実行」を選択してください。署名元が `shikomi-dev` であることを確認してから実行してください。警告が出た場合の詳細は [SmartScreen 対処方法](https://github.com/shikomi-dev/shikomi/wiki/SmartScreen) を参照してください。
+> **Windows SmartScreen について**: shikomi のインストーラは EV/OV コード署名済みです。インストール時に「Windows によって PC が保護されました」という SmartScreen の警告が表示された場合は、次の手順で続行できます:
+> 1. 「詳細情報」をクリック
+> 2. 発行元が **`shikomi-dev`** であることを確認
+> 3. 「実行」をクリック
+>
+> 署名元が `shikomi-dev` 以外の場合は実行しないでください。
 
 ### macOS
 
