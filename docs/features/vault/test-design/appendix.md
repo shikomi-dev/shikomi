@@ -85,7 +85,7 @@ cargo deny check
 |------|------|
 | 受入基準の網羅 | AC-01〜AC-09 が全テストケースで網羅されていること |
 | 行カバレッジ | `cargo test -p shikomi-core` で 80% 以上（受入基準 AC-06）。計測は `cargo llvm-cov` 等で行う |
-| 正常系 | 全ケース必須（ユニット 84 件 + 結合 7 件 = 合計 91 件） |
+| 正常系 | 全ケース必須（ユニット 85 件 + 結合 7 件 = 合計 92 件） |
 | 異常系 | エラーバリアントの種別まで検証（`assert!(matches!(err, DomainError::Xxx))` レベル） |
 | 境界値 | `RecordLabel`（0/1/254/255/256 grapheme）、`NonceCounter`（u32::MAX-1 / u32::MAX）、`VaultVersion`（0/1/2）を必須とする |
 
@@ -97,4 +97,5 @@ cargo deny check
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス第3ラウンド指摘対応: TC-U11-04（Aad黄金値テスト・26byte完全一致）追加。TC-U10-08（NonceCounter下位4B big-endianバイトオーダー検証）追加。TC-U12（Record::new サブ秒丸めround-trip 2件）追加。合計 75件→91件（ユニット84件+結合7件。旧「79件」はサブケース集計漏れによる誤記）*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペガサス指摘対応: test-design.md（507行）を test-design/ ディレクトリに分割。overview.md / integration.md / unit.md / appendix.md の4ファイル構成に再編。*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス指摘対応: §10 カバレッジ基準の件数を「72+7=79件」から「84+7=91件」に訂正（マトリクス実数との乖離解消）。*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — ペテルギウス指摘対応（Boy Scout Rule）: MSG-DEV-004 改訂対応で TC-U09-04b（DuplicateId 不混入確認）追加。§10 件数を「84+7=91件」から「85+7=92件」に訂正。テストケース追加時は必ず appendix 件数を同時更新すること。*
 *対応 Issue: #7 feat(shikomi-core): vault ドメイン型定義*
