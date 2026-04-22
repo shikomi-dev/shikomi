@@ -93,12 +93,12 @@ flowchart LR
 | 境界 | 保護 | 検出 |
 |-----|------|------|
 | インストーラ → OS | OS 署名（Developer ID / Authenticode）＋ SHA-256 checksum + minisign | 改竄時は OS が起動拒否 |
-| プロセス → vault ファイル（**平文モード・デフォルト**） | OS ファイルパーミッション `0600`（Unix）/ 所有者 ACL（Windows）+ ディレクトリ `0700`。書込は **atomic write**（`.new` → `fsync` → `rename` / `ReplaceFileW`） | OS パーミッション突破・同ユーザ他プロセスによる読取は**検出不能**（vault は平文）。**ユーザ自己責任として `context.md` §7.0 で明示** |
+| プロセス → vault ファイル（**平文モード・デフォルト**） | OS ファイルパーミッション `0600`（Unix）/ 所有者 ACL（Windows）+ ディレクトリ `0700`。書込は **atomic write**（`.new` → `fsync` → `rename` / `ReplaceFileW`） | OS パーミッション突破・同ユーザ他プロセスによる読取は**検出不能**（vault は平文）。**ユーザ自己責任として `context/threat-model.md` §7.0 で明示** |
 | プロセス → vault ファイル（**暗号化モード・オプトイン**） | AES-256-GCM の認証タグ + レコード AAD（レコード ID + version + 作成日時）。書込は atomic write（同上） | 改竄時は AEAD タグ検証失敗で `fail fast`、`.new` 残存は起動時にリカバリ UI へ誘導 |
-| プロセス → クリップボード | sensitive hint MIME（Win: `CanIncludeInClipboardHistory=0` 等 / KDE: `x-kde-passwordManagerHint=secret` / macOS: `application/x-nspasteboard-concealed-type`）＋ タイマー自動クリア（既定 30 秒、`context.md` §7.2） | — |
+| プロセス → クリップボード | sensitive hint MIME（Win: `CanIncludeInClipboardHistory=0` 等 / KDE: `x-kde-passwordManagerHint=secret` / macOS: `application/x-nspasteboard-concealed-type`）＋ タイマー自動クリア（既定 30 秒、`context/threat-model.md` §7.2） | — |
 | プロセス → OS キーチェーン | 暗号化モード時のみ利用可能、`keyring` crate 経由、デフォルトオフ | — |
-| daemon ↔ CLI/GUI (IPC) | UDS `0700` / Named Pipe SDDL + ピア UID 検証 + セッショントークン（`context.md` §4.2） | 不正接続は即切断、`tracing::warn!` |
-| 他プロセス → shikomi | 同ユーザ権限内では OS 側保護は弱い（Wayland は compositor が制限、X11/macOS/Win は同ユーザプロセス間で可視）。**平文モードでは vault 直読みを阻止できない**、暗号化モードなら AEAD で保護 | メモリ保護は best-effort、残存リスクを SECURITY.md / `context.md` §7.0 に明記 |
+| daemon ↔ CLI/GUI (IPC) | UDS `0700` / Named Pipe SDDL + ピア UID 検証 + セッショントークン（`context/process-model.md` §4.2） | 不正接続は即切断、`tracing::warn!` |
+| 他プロセス → shikomi | 同ユーザ権限内では OS 側保護は弱い（Wayland は compositor が制限、X11/macOS/Win は同ユーザプロセス間で可視）。**平文モードでは vault 直読みを阻止できない**、暗号化モードなら AEAD で保護 | メモリ保護は best-effort、残存リスクを SECURITY.md / `context/threat-model.md` §7.0 に明記 |
 
 ### 4.2 初回インストール警告への対応方針（非技術者向け UX）
 

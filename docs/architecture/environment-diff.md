@@ -54,7 +54,7 @@ flowchart TB
 | Linux X11 | `arboard` → X Selection + `x-kde-passwordManagerHint = "secret"` MIME | Klipper / CopyQ が履歴保持を拒否（X11 対応クリップボードマネージャのみ、wl-clipboard は Wayland 専用のため X11 経路とは無関係） |
 | Linux Wayland | `arboard` の `wayland-data-control` feature、あるいは `Clipboard Portal` | 同上 hint を付与、Portal 経路は Flatpak/Snap サンドボックス下で必須 |
 
-出典: KeePassXC Clipboard.cpp、KDE Phabricator D12539（§context.md §6.2）
+出典: KeePassXC Clipboard.cpp、KDE Phabricator D12539（`context/threat-model.md` §8.2）
 
 ### 2.3 入力シミュレーション（フォールバック）
 
