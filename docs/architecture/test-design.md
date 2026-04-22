@@ -40,18 +40,20 @@
 | TC-U14 | REPO-01 | `SECURITY.md` に脆弱性報告窓口の記載を含む | ユニット | 正常系 |
 | TC-U15 | REPO-01 | `CODEOWNERS` に `docs/architecture/` の責務割当を含む | ユニット | 正常系 |
 | TC-U16 | REPO-05 | `CONTRIBUTING.md` に `feature/*` → `develop` のマージ先が明記されている | ユニット | 正常系 |
-| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks・force push 禁止・merge commit のみ・会話解決必須・bypass list | 結合 | 正常系 |
-| TC-I02 | REPO-02 | `develop` ブランチ保護: PR 必須・1名レビュー・status checks・force push 禁止 | 結合 | 正常系 |
+| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks（branch-policy/pr-title-check含む）・force push 禁止・会話解決必須・bypass list | 結合 | 正常系 |
+| TC-I02 | REPO-02 | `develop` ブランチ保護: PR 必須・1名レビュー・status checks（branch-policy/pr-title-check含む）・force push 禁止 | 結合 | 正常系 |
 | TC-I03 | REPO-02 | `main` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
 | TC-I04 | REPO-02 | `develop` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
 | TC-I05 | REPO-02 | `main`: PR ソース制限（`release/*` / `hotfix/*` のみ許可する branch-policy ワークフローが存在する） | 結合 | 正常系 |
 | TC-I06 | REPO-05 | `develop` ブランチが存在する | 結合 | 正常系 |
 | TC-I07 | REPO-02 | `main` / `develop`: enforce_admins = true + bypass list にセキュリティ緊急例外アクターが設定されている | 結合 | 正常系 |
 | TC-I08 | REPO-02 | `main` への直接 PR を許可しない branch-policy ワークフローの静的確認（ファイル存在・ソース制限ロジック） | 結合 | 異常系 |
-| TC-I09 | REPO-02 | `main` マージ戦略: merge commit のみ許可（squash merge / rebase merge 禁止） | 結合 | 正常系 |
+| TC-I09 | REPO-02 | `main` マージ方法規約の文書化確認（CONTRIBUTING.md に merge commit 使用規約が明記されているか） | 結合 | 正常系 |
 | TC-I10 | REPO-02 | `develop` マージ戦略: squash merge + merge commit 許可（rebase merge 禁止） | 結合 | 正常系 |
 | TC-I11 | REPO-02 | `main` / `develop`: required_conversation_resolution == true | 結合 | 正常系 |
 | TC-I12 | REPO-02 | bypass list にセキュリティ緊急対応アクター（チームまたはユーザー）が 1 件以上設定されている | 結合 | 正常系 |
+| TC-I13 | REPO-02 | `.github/workflows/pr-title-check.yml` の存在確認 | 結合 | 正常系 |
+| TC-I14 | REPO-02 | `.github/workflows/back-merge-check.yml` の存在確認 | 結合 | 正常系 |
 | TC-E01 | REPO-01, REPO-03, REPO-04 | 新規コントリビューターが必要情報を取得できるシナリオ | E2E | 正常系 |
 | TC-E02 | REPO-05, REPO-06 | コアメンバーが GitFlow に従い develop へ PR を作成できるシナリオ | E2E | 正常系 |
 
@@ -102,7 +104,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `main` ブランチ保護が GitHub 上で設定済み |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` を実行 |
-| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_pull_request_reviews.bypass_pull_request_allowances` に 1 件以上のアクター（teams または users）が設定されている<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `build-preview`, `back-merge-check` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false<br>- `required_conversation_resolution.enabled` == true |
+| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_pull_request_reviews.bypass_pull_request_allowances` に 1 件以上のアクター（teams または users）が設定されている<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `build-preview`, `back-merge-check`, `branch-policy`, `pr-title-check` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false<br>- `required_conversation_resolution.enabled` == true |
 
 ### TC-I02: develop ブランチ保護ルール確認
 
@@ -114,7 +116,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `develop` ブランチ保護が GitHub 上で設定済み |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/develop/protection` を実行 |
-| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 1<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false |
+| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 1<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `branch-policy`, `pr-title-check` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false |
 
 ### TC-I03: main ブランチの signed commits 必須確認
 
@@ -190,7 +192,9 @@
 | 操作 | 1. `gh api repos/shikomi-dev/shikomi/contents/.github/workflows/branch-policy.yml` でワークフローファイル取得<br>2. base64 デコードし内容確認<br>3. `gh api repos/shikomi-dev/shikomi/branches/main/protection` で required_status_checks を確認 |
 | 期待結果 | - `branch-policy.yml` が存在し、`github.base_ref == 'main'`（または同等条件）と source branch のパターン検査（`release/*` / `hotfix/*` 以外を拒否）の記述を含む<br>- `main` の保護設定の `required_status_checks.checks` に branch-policy の check context が含まれる |
 
-### TC-I09: main マージ戦略確認（merge commit のみ）
+### TC-I09: main マージ方法規約の文書化確認
+
+> **置換理由**: GitHub はリポジトリ単位でのみマージ方法を設定するため、main 専用の「merge commit のみ」制限は `allow_squash_merge` フラグでは技術的に実現不能（TC-I10 と矛盾する）。main での merge commit 使用は規約として CONTRIBUTING.md に文書化し、TC-I08 の branch-policy による PR ソース制限（`release/*` / `hotfix/*` のみ）と組み合わせることで実質的な運用制約を実現する。
 
 | 項目 | 内容 |
 |------|------|
@@ -198,9 +202,9 @@
 | 対応する受入基準ID | REPO-02 |
 | 対応する工程 | 基本設計（dev.md §7.5） |
 | 種別 | 正常系 |
-| 前提条件 | リポジトリ設定が完了済み |
-| 操作 | `gh api repos/shikomi-dev/shikomi` でリポジトリ設定を取得 |
-| 期待結果 | - `allow_merge_commit` == true<br>- `allow_squash_merge` == false<br>- `allow_rebase_merge` == false<br>（§7.5「release/hotfix → main は merge commit のみ」に準拠） |
+| 前提条件 | `CONTRIBUTING.md` が存在する |
+| 操作 | `gh api repos/shikomi-dev/shikomi/contents/CONTRIBUTING.md` を取得し base64 デコードして内容確認 |
+| 期待結果 | `grep -iP "merge.commit"` または `grep -i "merge commit"` がマッチする行が 1 件以上存在する（main への PR は merge commit を使用するという規約が文書化されている） |
 
 ### TC-I10: develop マージ戦略確認（squash + merge commit 許可）
 
@@ -214,7 +218,7 @@
 | 操作 | `gh api repos/shikomi-dev/shikomi` でリポジトリ設定を取得（リポジトリ全体設定で squash/merge commit 両方許可かつ rebase 禁止） |
 | 期待結果 | - `allow_merge_commit` == true（release/hotfix back-merge に使用）<br>- `allow_squash_merge` == true（feature → develop の squash に使用）<br>- `allow_rebase_merge` == false<br>（§7.5「feature→develop は squash、release/hotfix は merge commit」に準拠） |
 
-> **注意**: GitHub はリポジトリ単位でマージ戦略を設定する。TC-I09 と TC-I10 は同一 API レスポンスから検証するが、「main と develop で異なるマージ方法を使い分ける」という §7.5 の仕様上、squash + merge commit 両方が有効である必要がある。
+> **注意**: GitHub はリポジトリ単位でマージ戦略を設定するため、「develop のみ squash merge」という per-branch 制限は技術的に不可能。TC-I10 は「squash + merge commit 両方が有効（rebase は禁止）」を確認する。feature→develop での squash 使用・release/hotfix→main での merge commit 使用はいずれも TC-I09 で文書化規約として補完する。
 
 ### TC-I11: required_conversation_resolution 確認
 
@@ -239,6 +243,30 @@
 | 前提条件 | `main` 保護設定済み、セキュリティ緊急対応チームが GitHub 上に存在する |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` を実行し `bypass_pull_request_allowances` を確認 |
 | 期待結果 | `required_pull_request_reviews.bypass_pull_request_allowances.teams` または `.users` に 1 件以上のアクターが存在する<br>（セキュリティ脆弱性 hotfix 時に `enforce_admins=true` を維持しつつ特定チームのみバイパス可能とする §7.4 緊急例外ルートが技術的に実現されている） |
+
+### TC-I13: pr-title-check.yml の存在確認
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I13 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §3, §7.5） |
+| 種別 | 正常系 |
+| 前提条件 | `feature/repo-setup` → `develop` マージ済み |
+| 操作 | `gh api repos/shikomi-dev/shikomi/contents/.github/workflows/pr-title-check.yml` |
+| 期待結果 | HTTP 200。content に Conventional Commits パターン（`feat`/`fix`/`docs` 等）を検証する正規表現の記述を含む |
+
+### TC-I14: back-merge-check.yml の存在確認
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I14 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §3, §7.6） |
+| 種別 | 正常系 |
+| 前提条件 | `feature/repo-setup` → `develop` マージ済み |
+| 操作 | `gh api repos/shikomi-dev/shikomi/contents/.github/workflows/back-merge-check.yml` |
+| 期待結果 | HTTP 200。content に `develop` への back-merge PR 存在確認ロジック（`release/*` または `hotfix/*` のマージ後に develop への PR を検査する記述）を含む |
 
 ## 6. ユニットテスト設計（ファイル存在・内容検証）
 
@@ -334,7 +362,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `CONTRIBUTING.md` が存在する |
 | 操作 | `CONTRIBUTING.md` を取得し内容確認 |
-| 期待結果 | `feature` と `develop` が共起しており、`feature/*` ブランチのマージ先が `develop` であることを読み取れる記述を含む（例: 「feature ブランチは develop にマージ」「feature/* → develop」等） |
+| 期待結果 | `grep -P "feature.*develop"` がマッチする行が 1 件以上存在する。または `grep -P "feature/"` と `grep -P "develop"` が前後 3 行以内に共起する記述が存在する<br>具体的な合格例: `feature/* → develop`、`feature ブランチは develop にマージ`、`feature/xxx を develop にマージ` 等の記述 |
 
 ## 7. モック方針
 
@@ -371,15 +399,36 @@ gh api repos/shikomi-dev/shikomi/branches/main/protection | jq '{
 }'
 ```
 
-### 実行コマンド例（結合テスト TC-I09/TC-I10: マージ戦略確認）
+### 実行コマンド例（結合テスト TC-I09: merge commit 規約確認）
 
 ```bash
-# リポジトリ設定のマージ戦略確認
+# CONTRIBUTING.md の merge commit 規約明記確認
+gh api repos/shikomi-dev/shikomi/contents/CONTRIBUTING.md \
+  | jq -r '.content' | base64 -d \
+  | grep -iP "merge.commit" && echo "PASS" || echo "FAIL"
+```
+
+### 実行コマンド例（結合テスト TC-I10: マージ戦略確認）
+
+```bash
+# リポジトリ設定のマージ戦略確認（squash + merge commit 両方有効・rebase 禁止）
 gh api repos/shikomi-dev/shikomi | jq '{
   allow_merge_commit: .allow_merge_commit,
   allow_squash_merge: .allow_squash_merge,
   allow_rebase_merge: .allow_rebase_merge
 }'
+```
+
+### 実行コマンド例（結合テスト TC-I13/TC-I14: ワークフロー存在確認）
+
+```bash
+# pr-title-check.yml 存在確認
+gh api repos/shikomi-dev/shikomi/contents/.github/workflows/pr-title-check.yml \
+  | jq '.name'
+
+# back-merge-check.yml 存在確認
+gh api repos/shikomi-dev/shikomi/contents/.github/workflows/back-merge-check.yml \
+  | jq '.name'
 ```
 
 ### 実行コマンド例（ユニットテスト TC-U08 〜 TC-U13）
@@ -420,3 +469,4 @@ echo "$CONTENT" | grep -q "hotfix"   && echo "PASS" || echo "FAIL"
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
 *改訂: 涅マユリ（テスト担当）/ 2026-04-22 — TC-E03→TC-I08再分類、TC-I09〜TC-I12追加、TC-U13強化、TC-U16追加、bypass list検証追記*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — TC-I09を矛盾する allow_squash_merge==false から merge commit 規約文書化確認に置換、TC-I01/I02の必須 status checks に branch-policy/pr-title-check 追加、TC-I13/I14（ワークフロー存在確認）新設、TC-U16 期待結果を具体的 grep パターンに変更*
