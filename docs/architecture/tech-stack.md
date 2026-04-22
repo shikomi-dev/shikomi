@@ -248,29 +248,36 @@ flowchart LR
 | `[licenses] allow` | `MIT`, `Apache-2.0`, `Apache-2.0 WITH LLVM-exception`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-DFS-2016`, `Unicode-3.0`, `Zlib`, `CC0-1.0` | OSS デスクトップ配布で商用互換性を保つ範囲。GPL 系は shikomi 本体のライセンス（MIT）と衝突するため allow しない |
 | `[licenses] confidence-threshold` | `0.93` | デフォルト値。極端に低くすると誤検知が出る |
 | `[advisories] vulnerability` | `deny` | RustSec advisory DB 由来の脆弱性は CI で即 fail |
-| `[advisories] unmaintained` | `warn`（Issue #4 時点のみ）→ **#5 shikomi-core ドメイン型定義 PR マージと同時に `deny` 昇格** | §4.3.1 に昇格トリガを厳密化。shikomi-infra（SQLite / `keyring` / `aes-gcm` / `argon2` 等の実 crate 導入）より前に必ず `deny` とする |
+| `[advisories] unmaintained` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から全 crate に `deny` を適用し、どうしても外せない個別 crate のみ `[advisories].ignore` に RustSec advisory ID を登録して**一時的に例外化**する（§4.3.1）。暗号クリティカル crate は **ignore リストへの追加を禁止**（§4.3.2） |
 | `[advisories] yanked` | `deny` | yanked 版を引いたままのビルドは再現不能 |
-| `[bans] multiple-versions` | `warn`（Issue #4 時点のみ）→ **`shikomi-infra` の初回 PR マージ直後に `deny` 昇格** | 外部 crate を本格導入する shikomi-infra の完成時点で version drift を禁止。§4.3.1 参照 |
+| `[bans] multiple-versions` | **`deny`（Issue #4 時点から）** | 反転方式: 初期から `deny`。外せない重複は `[bans].skip` で個別 crate と version を列挙して暫定除外（§4.3.1）。外部 crate を持たない Issue #4 時点では `skip` リストは空 |
 | `[bans] wildcards` | `deny` | `*` バージョン指定は Cargo.lock との整合を破壊する |
 | `[sources] unknown-registry` / `unknown-git` | `deny` | crates.io 以外からの取得は明示的に `allow` リストへ追加する運用 |
 
-**セキュリティクリティカル crate の個別扱い**: 以下は **Issue #4 時点から例外として即 `deny`** を適用する（`[advisories]` の `unmaintained` が workspace 全体で `warn` のときも、この列挙 crate だけは `unmaintained = deny` 相当の扱い）。手段は `deny.toml` の `[bans].deny` リストに「unmaintained になった時点で必ず fail する crate 名」として明示登録するか、`cargo-deny` の `[advisories].unmaintained-ignore` を空に保ったまま「このリストの crate は shikomi-infra 導入と同時に全体 `deny` になるのを先取りする」ポリシーを `deny.toml` の先頭コメントに宣言する方式をとる。
+### 4.3.1 反転方式の運用（`warn` 段階を持たない `deny` + 一時 `ignore` 方式）
+
+**前回ドラフトで検討した「初期 `warn` → 後続 Issue で `deny` 昇格」方式は採用しない**（Boy Scout Rule 違反かつ、後続 Issue での昇格忘れ検知が人間の注意力に依存し Fail Fast でないため）。代わりに **cargo-deny 標準機能である個別 ignore リストで運用する反転方式**を採用する。
+
+| 方向 | 初期値 | 一時例外手段 | 例外解除トリガ |
+|-----|-------|-------------|---------------|
+| `[advisories] unmaintained` | `deny` | `[advisories].ignore` に RustSec advisory ID（例: `"RUSTSEC-2024-XXXX"`）を列挙 | ignore に記載した ID ごとに「代替 crate 移行 Issue」を `gh issue create` で発行。**Issue の acceptance criteria に `deny.toml` から該当 ID 削除を必須項目化** |
+| `[bans] multiple-versions` | `deny` | `[bans].skip = [{ name = "foo", version = "=1.2.3" }]` に個別登録 | 同上。依存元を新しい major に追随した Issue で `skip` エントリを削除 |
+
+**ignore / skip リストは PR 内でインラインコメント必須**（`# RUSTSEC-YYYY-NNNN: <crate>, 解除 Issue #NNN` 等）。コメントなしの匿名 ignore は服部が PR レビュー時に却下する。
+
+**Issue #4 時点の ignore / skip リスト初期値**: いずれも**空**。workspace にはまだ外部 crate が無いため、暫定例外を登録する対象がない。
+
+### 4.3.2 セキュリティクリティカル crate のリスト（ignore 禁止）
+
+下記 crate が将来 `unmaintained` 警告を受けた場合、**`[advisories].ignore` への追加を禁止**する。必ず代替 crate への移行 Issue を優先する（`unmaintained` = `deny` のまま維持、ビルド失敗を受けて即時対応）。
 
 対象 crate: `aes-gcm` / `argon2` / `zeroize` / `secrecy` / `hkdf` / `pbkdf2` / `bip39` / `rand_core` / `subtle`
 
-根拠: 暗号運用（§2.4）は **unmaintained crate を引きずるだけでゼロデイ脆弱性放置と同義**。パスワードを扱うアプリである shikomi は、暗号周辺の unmaintained を「いずれ昇格」では遅い。
+根拠: 暗号運用（§2.4）は **unmaintained crate を引きずるだけでゼロデイ脆弱性放置と同義**。パスワードを扱うアプリである shikomi は、暗号周辺の unmaintained を「一時 ignore」で済ませない。構造的には「workspace 全体で `unmaintained = deny` が有効で、かつこのリストは `ignore` への登録を禁止」の二重防護とする。
 
-### 4.3.1 昇格トリガー一覧（曖昧さ排除）
+**検知手段**: `deny.toml` の `[advisories].ignore` に本リストの crate の RustSec ID が入った場合、服部が PR レビューで却下する。機械的検知を追加するには、CI に「`deny.toml` をパースし、`ignore` 配列に本リスト crate 名を含む advisory ID が登録されていないか」を検査するスクリプトジョブを置く選択肢もあるが、当面は服部の目視レビュー + 本節への明示で運用する（YAGNI: 実被害が出るまで自動化しない）。
 
-| 項目 | 初期値 | 昇格後の値 | 昇格タイミング（PR マージ完了時点） | 昇格責任者 |
-|------|-------|-----------|----------------------------------|----------|
-| `[advisories] unmaintained`（workspace 全体） | `warn` | `deny` | **次の Issue「shikomi-core ドメイン型定義」PR マージ時点** | セキュリティ担当（服部） — 同 Issue のチェックリストに「`deny.toml` の `unmaintained` を `deny` に昇格」を**必須項目**として追加 |
-| `[bans] multiple-versions` | `warn` | `deny` | **`shikomi-infra` の初回 PR マージ直後** | セキュリティ担当（服部） — 同 Issue に同上の必須項目 |
-| 暗号クリティカル crate 列挙 | **既に `deny` 相当** | — | Issue #4 で確定 | 設計担当（セル）が `deny.toml` 初期コミットに明記 |
-
-**昇格を忘れた場合の検知**: 上記の 2 項目は、該当 Issue の acceptance criteria に `deny.toml` 差分行を要求することで PR レビュアが fail fast 判断できる。昇格トリガを跨いで `warn` のまま残っている場合、服部は当該 PR を却下する。
-
-出典: https://embarkstudios.github.io/cargo-deny/
+出典: https://embarkstudios.github.io/cargo-deny/ (`[advisories].ignore` / `[bans].skip` セクション)
 
 ### 4.4 クレートバージョンピン方針
 
