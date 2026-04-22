@@ -17,7 +17,7 @@
 | REPO-02 | ブランチ保護ルールが §7.2 の仕様通りに GitHub に設定されている | 結合 |
 | REPO-03 | LICENSE に MIT 文言と著作権表記が含まれる | ユニット |
 | REPO-04 | README.md にインストール手順・権限要件・使い方が含まれる | ユニット |
-| REPO-05 | `develop` ブランチが存在し、`feature/*` のデフォルトマージ先が `develop` である | 結合 |
+| REPO-05 | `develop` ブランチが存在し、`feature/*` のデフォルトマージ先が `develop` であることが CONTRIBUTING.md に明記されている | 結合 + ユニット |
 | REPO-06 | `.github/` テンプレート群が存在し、Issue/PR 作成時に自動適用される | E2E |
 
 ## 3. テストマトリクス（トレーサビリティ）
@@ -36,21 +36,26 @@
 | TC-U10 | REPO-04 | `README.md` にインストール手順セクションを含む | ユニット | 正常系 |
 | TC-U11 | REPO-04 | `README.md` に権限要件の記載を含む | ユニット | 正常系 |
 | TC-U12 | REPO-04 | `README.md` に使い方（Usage）の記載を含む | ユニット | 正常系 |
-| TC-U13 | REPO-01 | `CONTRIBUTING.md` に GitFlow ブランチモデルの記載を含む | ユニット | 正常系 |
+| TC-U13 | REPO-01 | `CONTRIBUTING.md` に GitFlow 4ブランチ（feature/develop/release/hotfix）**全て**の記載を含む | ユニット | 正常系 |
 | TC-U14 | REPO-01 | `SECURITY.md` に脆弱性報告窓口の記載を含む | ユニット | 正常系 |
 | TC-U15 | REPO-01 | `CODEOWNERS` に `docs/architecture/` の責務割当を含む | ユニット | 正常系 |
-| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks・force push 禁止 | 結合 | 正常系 |
+| TC-U16 | REPO-05 | `CONTRIBUTING.md` に `feature/*` → `develop` のマージ先が明記されている | ユニット | 正常系 |
+| TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks・force push 禁止・merge commit のみ・会話解決必須・bypass list | 結合 | 正常系 |
 | TC-I02 | REPO-02 | `develop` ブランチ保護: PR 必須・1名レビュー・status checks・force push 禁止 | 結合 | 正常系 |
 | TC-I03 | REPO-02 | `main` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
 | TC-I04 | REPO-02 | `develop` ブランチ: signed commits 必須設定 | 結合 | 正常系 |
 | TC-I05 | REPO-02 | `main`: PR ソース制限（`release/*` / `hotfix/*` のみ許可する branch-policy ワークフローが存在する） | 結合 | 正常系 |
 | TC-I06 | REPO-05 | `develop` ブランチが存在する | 結合 | 正常系 |
-| TC-I07 | REPO-02 | `main` / `develop`: include_administrators = true（管理者も保護ルール適用） | 結合 | 正常系 |
+| TC-I07 | REPO-02 | `main` / `develop`: enforce_admins = true + bypass list にセキュリティ緊急例外アクターが設定されている | 結合 | 正常系 |
+| TC-I08 | REPO-02 | `main` への直接 PR を許可しない branch-policy ワークフローの静的確認（ファイル存在・ソース制限ロジック） | 結合 | 異常系 |
+| TC-I09 | REPO-02 | `main` マージ戦略: merge commit のみ許可（squash merge / rebase merge 禁止） | 結合 | 正常系 |
+| TC-I10 | REPO-02 | `develop` マージ戦略: squash merge + merge commit 許可（rebase merge 禁止） | 結合 | 正常系 |
+| TC-I11 | REPO-02 | `main` / `develop`: required_conversation_resolution == true | 結合 | 正常系 |
+| TC-I12 | REPO-02 | bypass list にセキュリティ緊急対応アクター（チームまたはユーザー）が 1 件以上設定されている | 結合 | 正常系 |
 | TC-E01 | REPO-01, REPO-03, REPO-04 | 新規コントリビューターが必要情報を取得できるシナリオ | E2E | 正常系 |
 | TC-E02 | REPO-05, REPO-06 | コアメンバーが GitFlow に従い develop へ PR を作成できるシナリオ | E2E | 正常系 |
-| TC-E03 | REPO-02 | `feature/*` から `main` への直接 PR が branch-policy チェックで失敗するシナリオ | E2E | 異常系 |
 
-## 4. E2Eテスト設計（受入基準 REPO-01, 02, 05, 06 の振る舞い検証）
+## 4. E2Eテスト設計（受入基準 REPO-01, 05, 06 の振る舞い検証）
 
 > **ツール選択根拠**: このシステムは GitHub リポジトリそのもの（CLI/公開 API が主インターフェース）。
 > Playwright は不要。`gh` CLI + `gh api` でブラックボックス検証する。
@@ -67,7 +72,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `feature/repo-setup` が `develop` にマージ済み。GitHub 上でリポジトリが公開状態 |
 | 操作 | 1. `gh repo view shikomi-dev/shikomi` でリポジトリ概要を取得<br>2. `gh api repos/shikomi-dev/shikomi/contents/LICENSE` で LICENSE を確認<br>3. `gh api repos/shikomi-dev/shikomi/contents/README.md` で README を確認<br>4. `gh api repos/shikomi-dev/shikomi/contents/CONTRIBUTING.md` で CONTRIBUTING を確認<br>5. `gh api repos/shikomi-dev/shikomi/contents/SECURITY.md` で SECURITY を確認 |
-| 期待結果 | - 全ファイルの取得が成功する（HTTP 200、content フィールドに base64 データあり）<br>- LICENSE の内容に「MIT License」と「Copyright」を含む<br>- README の内容にインストール手順・権限要件・使い方のキーワードを含む<br>- CONTRIBUTING の内容に GitFlow / feature / develop のキーワードを含む<br>- SECURITY の内容に脆弱性報告（security / vulnerability / report 等）のキーワードを含む |
+| 期待結果 | - 全ファイルの取得が成功する（HTTP 200、content フィールドに base64 データあり）<br>- LICENSE の内容に「MIT License」と「Copyright」を含む<br>- README の内容にインストール手順・権限要件・使い方のキーワードを含む<br>- CONTRIBUTING の内容に feature / develop / release / hotfix の全ワードを含む<br>- SECURITY の内容に脆弱性報告（security / vulnerability / report 等）のキーワードを含む |
 
 ### TC-E02: コアメンバーの GitFlow ワークフローシナリオ
 
@@ -83,20 +88,6 @@
 | 操作 | 1. `gh api repos/shikomi-dev/shikomi/branches/develop` で develop ブランチの存在確認<br>2. `gh api repos/shikomi-dev/shikomi/contents/.github/pull_request_template.md` で PR テンプレート取得<br>3. `gh api repos/shikomi-dev/shikomi/contents/.github/ISSUE_TEMPLATE` で Issue テンプレート一覧取得 |
 | 期待結果 | - develop ブランチが HTTP 200 で取得できる<br>- PR テンプレートが取得でき、content が空でない<br>- Issue テンプレートが 1 件以上存在する（配列が空でない） |
 
-### TC-E03: main への直接 PR がブランチポリシーで拒否されるシナリオ
-
-**ペルソナ**: コアメンバー（誤って main に直接 PR を作成しようとした）
-
-| 項目 | 内容 |
-|------|------|
-| テストID | TC-E03 |
-| 対応する受入基準ID | REPO-02 |
-| 対応する工程 | 要件定義 |
-| 種別 | 異常系 |
-| 前提条件 | `.github/workflows/branch-policy.yml` が存在する。`main` ブランチ保護が設定済み |
-| 操作 | 1. `gh api repos/shikomi-dev/shikomi/contents/.github/workflows/branch-policy.yml` でワークフローファイルの存在確認<br>2. ワークフロー内容に PR の source branch を検査する記述が含まれることを確認<br>3. `gh api repos/shikomi-dev/shikomi/branches/main/protection` で保護設定を確認し、required_status_checks に branch-policy が含まれることを確認 |
-| 期待結果 | - `branch-policy.yml` が存在し、内容に `github.base_ref == 'main'` かつ source branch 検査の記述を含む<br>- `main` の保護設定の required_status_checks に branch-policy 相当のチェックが含まれる |
-
 ## 5. 結合テスト設計（GitHub API による設定値の契約検証）
 
 > **検証スタイル**: `gh api` で実際の GitHub 設定値を取得し、§7.2 の仕様と具体的に照合する（contract testing）。
@@ -111,7 +102,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `main` ブランチ保護が GitHub 上で設定済み |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` を実行 |
-| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `build-preview`, `back-merge-check` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false |
+| 期待結果 | - `required_pull_request_reviews.required_approving_review_count` == 2<br>- `required_pull_request_reviews.require_code_owner_reviews` == true<br>- `required_pull_request_reviews.dismiss_stale_reviews` == true<br>- `required_pull_request_reviews.bypass_pull_request_allowances` に 1 件以上のアクター（teams または users）が設定されている<br>- `required_status_checks.checks` に `lint`, `unit-core`, `test-infra`, `audit`, `build-preview`, `back-merge-check` が含まれる<br>- `enforce_admins.enabled` == true<br>- `allow_force_pushes.enabled` == false<br>- `allow_deletions.enabled` == false<br>- `required_conversation_resolution.enabled` == true |
 
 ### TC-I02: develop ブランチ保護ルール確認
 
@@ -173,7 +164,7 @@
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/develop` |
 | 期待結果 | HTTP 200、`name` == `"develop"` |
 
-### TC-I07: 管理者保護ルール適用確認（include_administrators）
+### TC-I07: 管理者保護ルール適用 + bypass list 確認
 
 | 項目 | 内容 |
 |------|------|
@@ -183,7 +174,71 @@
 | 種別 | 正常系 |
 | 前提条件 | `main` / `develop` 保護設定済み |
 | 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` および `develop/protection` |
-| 期待結果 | `enforce_admins.enabled` == true（両ブランチとも） |
+| 期待結果 | - `enforce_admins.enabled` == true（両ブランチとも）<br>- `main` の `required_pull_request_reviews.bypass_pull_request_allowances.teams` または `.users` に 1 件以上のアクターが設定されている（セキュリティ hotfix 緊急例外ルート確保） |
+
+### TC-I08: main への直接 PR を拒否する branch-policy の静的確認（旧 TC-E03）
+
+> **分類変更理由**: 「実際に PR を投げて CI が fail する」のは完全 E2E だが、CI 実行は制御外（外部副作用）のため静的ファイル検査として結合テストに分類する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I08 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §7.2） |
+| 種別 | 異常系 |
+| 前提条件 | `.github/workflows/branch-policy.yml` が存在する。`main` ブランチ保護が設定済み |
+| 操作 | 1. `gh api repos/shikomi-dev/shikomi/contents/.github/workflows/branch-policy.yml` でワークフローファイル取得<br>2. base64 デコードし内容確認<br>3. `gh api repos/shikomi-dev/shikomi/branches/main/protection` で required_status_checks を確認 |
+| 期待結果 | - `branch-policy.yml` が存在し、`github.base_ref == 'main'`（または同等条件）と source branch のパターン検査（`release/*` / `hotfix/*` 以外を拒否）の記述を含む<br>- `main` の保護設定の `required_status_checks.checks` に branch-policy の check context が含まれる |
+
+### TC-I09: main マージ戦略確認（merge commit のみ）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I09 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §7.5） |
+| 種別 | 正常系 |
+| 前提条件 | リポジトリ設定が完了済み |
+| 操作 | `gh api repos/shikomi-dev/shikomi` でリポジトリ設定を取得 |
+| 期待結果 | - `allow_merge_commit` == true<br>- `allow_squash_merge` == false<br>- `allow_rebase_merge` == false<br>（§7.5「release/hotfix → main は merge commit のみ」に準拠） |
+
+### TC-I10: develop マージ戦略確認（squash + merge commit 許可）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I10 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §7.5） |
+| 種別 | 正常系 |
+| 前提条件 | リポジトリ設定が完了済み |
+| 操作 | `gh api repos/shikomi-dev/shikomi` でリポジトリ設定を取得（リポジトリ全体設定で squash/merge commit 両方許可かつ rebase 禁止） |
+| 期待結果 | - `allow_merge_commit` == true（release/hotfix back-merge に使用）<br>- `allow_squash_merge` == true（feature → develop の squash に使用）<br>- `allow_rebase_merge` == false<br>（§7.5「feature→develop は squash、release/hotfix は merge commit」に準拠） |
+
+> **注意**: GitHub はリポジトリ単位でマージ戦略を設定する。TC-I09 と TC-I10 は同一 API レスポンスから検証するが、「main と develop で異なるマージ方法を使い分ける」という §7.5 の仕様上、squash + merge commit 両方が有効である必要がある。
+
+### TC-I11: required_conversation_resolution 確認
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I11 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §7.2） |
+| 種別 | 正常系 |
+| 前提条件 | `main` / `develop` 保護設定済み |
+| 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` および `develop/protection` |
+| 期待結果 | `required_conversation_resolution.enabled` == true（両ブランチとも） |
+
+### TC-I12: bypass list アクター設定確認（セキュリティ緊急例外ルート）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I12 |
+| 対応する受入基準ID | REPO-02 |
+| 対応する工程 | 基本設計（dev.md §7.4） |
+| 種別 | 正常系 |
+| 前提条件 | `main` 保護設定済み、セキュリティ緊急対応チームが GitHub 上に存在する |
+| 操作 | `gh api repos/shikomi-dev/shikomi/branches/main/protection` を実行し `bypass_pull_request_allowances` を確認 |
+| 期待結果 | `required_pull_request_reviews.bypass_pull_request_allowances.teams` または `.users` に 1 件以上のアクターが存在する<br>（セキュリティ脆弱性 hotfix 時に `enforce_admins=true` を維持しつつ特定チームのみバイパス可能とする §7.4 緊急例外ルートが技術的に実現されている） |
 
 ## 6. ユニットテスト設計（ファイル存在・内容検証）
 
@@ -233,7 +288,7 @@
 **前提条件**: `README.md` が存在する
 **操作**: README.md を取得し、各キーワードが含まれているか確認（大文字小文字区別なし）
 
-### TC-U13: CONTRIBUTING.md GitFlow 記載確認
+### TC-U13: CONTRIBUTING.md GitFlow 4ブランチ記載確認
 
 | 項目 | 内容 |
 |------|------|
@@ -243,7 +298,7 @@
 | 種別 | 正常系 |
 | 前提条件 | `CONTRIBUTING.md` が存在する |
 | 操作 | `CONTRIBUTING.md` を取得し内容確認 |
-| 期待結果 | 「feature」「develop」「GitFlow」または「ブランチ」のいずれかを含む |
+| 期待結果 | 「feature」「develop」「release」「hotfix」の**4ワード全て**を含む（いずれか 1 つでは不合格。GitFlow の全ブランチ種別が説明されていることを保証する） |
 
 ### TC-U14: SECURITY.md 脆弱性報告窓口確認
 
@@ -269,13 +324,25 @@
 | 操作 | `CODEOWNERS` を取得し内容確認 |
 | 期待結果 | `docs/architecture/` のパターンに対する所有者割当が存在する |
 
+### TC-U16: CONTRIBUTING.md への feature/* → develop マージ先明記確認
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U16 |
+| 対応する受入基準ID | REPO-05 |
+| 対応する工程 | 要件定義 |
+| 種別 | 正常系 |
+| 前提条件 | `CONTRIBUTING.md` が存在する |
+| 操作 | `CONTRIBUTING.md` を取得し内容確認 |
+| 期待結果 | `feature` と `develop` が共起しており、`feature/*` ブランチのマージ先が `develop` であることを読み取れる記述を含む（例: 「feature ブランチは develop にマージ」「feature/* → develop」等） |
+
 ## 7. モック方針
 
 | 検証対象 | モック要否 | 理由 |
 |---------|---------|------|
 | GitHub API（ブランチ保護・ファイル取得） | **不要**（本物を使用） | このテストの目的は「GitHub 上に正しく設定されているか」の確認。モックでは意味をなさない |
 | ファイルの内容 | **不要** | リポジトリの実ファイルを直接確認する |
-| GitHub Actions の実行 | **対象外** | branch-policy.yml の動作は TC-E03 で「ファイルの存在と内容」として確認する。CI 実行そのものはテスト設計の対象外 |
+| GitHub Actions の実行 | **対象外** | branch-policy.yml の動作は TC-I08 で「ファイルの存在と内容」の静的確認として検証する。CI 実行そのものはテスト設計の対象外 |
 
 外部依存はすべて本物を使用する。assumed mock は禁止。
 
@@ -295,14 +362,27 @@ gh api repos/shikomi-dev/shikomi/branches/main/protection | jq '{
   required_approving_review_count: .required_pull_request_reviews.required_approving_review_count,
   require_code_owner_reviews: .required_pull_request_reviews.require_code_owner_reviews,
   dismiss_stale_reviews: .required_pull_request_reviews.dismiss_stale_reviews,
+  bypass_actors: .required_pull_request_reviews.bypass_pull_request_allowances,
   enforce_admins: .enforce_admins.enabled,
   allow_force_pushes: .allow_force_pushes.enabled,
   allow_deletions: .allow_deletions.enabled,
+  conversation_resolution: .required_conversation_resolution.enabled,
   required_status_checks: [.required_status_checks.checks[].context]
 }'
 ```
 
-### 実行コマンド例（ユニットテスト TC-U08 〜 TC-U12）
+### 実行コマンド例（結合テスト TC-I09/TC-I10: マージ戦略確認）
+
+```bash
+# リポジトリ設定のマージ戦略確認
+gh api repos/shikomi-dev/shikomi | jq '{
+  allow_merge_commit: .allow_merge_commit,
+  allow_squash_merge: .allow_squash_merge,
+  allow_rebase_merge: .allow_rebase_merge
+}'
+```
+
+### 実行コマンド例（ユニットテスト TC-U08 〜 TC-U13）
 
 ```bash
 # LICENSE 内容確認
@@ -312,6 +392,13 @@ gh api repos/shikomi-dev/shikomi/contents/LICENSE | jq -r '.content' | base64 -d
 gh api repos/shikomi-dev/shikomi/contents/README.md | jq -r '.content' | base64 -d | grep -iE "install|インストール"
 gh api repos/shikomi-dev/shikomi/contents/README.md | jq -r '.content' | base64 -d | grep -iE "permission|権限|0600|ACL"
 gh api repos/shikomi-dev/shikomi/contents/README.md | jq -r '.content' | base64 -d | grep -iE "usage|使い方"
+
+# CONTRIBUTING GitFlow 4ブランチ全確認（全て含む場合のみ合格）
+CONTENT=$(gh api repos/shikomi-dev/shikomi/contents/CONTRIBUTING.md | jq -r '.content' | base64 -d)
+echo "$CONTENT" | grep -q "feature"  && \
+echo "$CONTENT" | grep -q "develop"  && \
+echo "$CONTENT" | grep -q "release"  && \
+echo "$CONTENT" | grep -q "hotfix"   && echo "PASS" || echo "FAIL"
 ```
 
 ### 証跡
@@ -326,9 +413,10 @@ gh api repos/shikomi-dev/shikomi/contents/README.md | jq -r '.content' | base64 
 |------|------|
 | 受入基準の網羅 | REPO-01 〜 REPO-06 が全テストケースで網羅されていること |
 | 正常系 | 全ケース必須 |
-| 異常系 | TC-E03（branch-policy による拒否）を必須で確認 |
+| 異常系 | TC-I08（branch-policy による拒否の静的確認）を必須で確認 |
 | 境界値 | ISSUE_TEMPLATE が 0 件の場合（TC-U06 異常系）は必要に応じて追加 |
 
 ---
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-22*
+*改訂: 涅マユリ（テスト担当）/ 2026-04-22 — TC-E03→TC-I08再分類、TC-I09〜TC-I12追加、TC-U13強化、TC-U16追加、bypass list検証追記*
