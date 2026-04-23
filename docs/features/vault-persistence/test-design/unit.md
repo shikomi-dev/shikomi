@@ -7,17 +7,17 @@
 
 ---
 
-## TC-U01: VaultPaths::new — パス導出
+## TC-U01: VaultPaths::new — 正常パスのパス導出
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-U01 |
 | 対応する受入基準ID | — |
-| 対応する工程 | 詳細設計（REQ-P08、VaultPaths） |
+| 対応する工程 | 詳細設計（REQ-P08, P15、VaultPaths、7段階バリデーション） |
 | 種別 | 正常系 |
-| 前提条件 | — |
-| 操作 | `VaultPaths::new(PathBuf::from("/tmp/shikomi_test"))` を呼び、`dir()` / `vault_db()` / `vault_db_new()` を確認 |
-| 期待結果 | `dir()` == `"/tmp/shikomi_test"` / `vault_db()` == `"/tmp/shikomi_test/vault.db"` / `vault_db_new()` == `"/tmp/shikomi_test/vault.db.new"` |
+| 前提条件 | tempdir が実際に存在する（`tempfile::TempDir` で作成）。絶対パスで `..` を含まず、シンボリックリンクでなく、保護領域でもないこと |
+| 操作 | `VaultPaths::new(tempdir.path().to_path_buf())` を呼び（`Result<VaultPaths, PersistenceError>` を返す）、`dir()` / `vault_db()` / `vault_db_new()` / `vault_db_lock()` を確認 |
+| 期待結果 | `Ok(paths)` が返る。`paths.dir()` が tempdir の絶対パス / `paths.vault_db()` が `<tempdir>/vault.db` / `paths.vault_db_new()` が `<tempdir>/vault.db.new` / `paths.vault_db_lock()` が `<tempdir>/vault.db.lock` |
 
 ---
 
@@ -172,6 +172,62 @@
 | 前提条件 | `#[cfg(unix)]`。tempdir 内に空ファイルを `chmod 0o644` で作成済み |
 | 操作 | `PermissionGuard::verify_file(file_path)` |
 | 期待結果 | `Err(PersistenceError::InvalidPermission { expected: "0600", .. })` |
+
+---
+
+## TC-U13: VaultPaths::new — 相対パス → NotAbsolute
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U13 |
+| 対応する受入基準ID | AC-16 |
+| 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::NotAbsolute、バリデーション step ①） |
+| 種別 | 異常系 |
+| 前提条件 | — |
+| 操作 | `VaultPaths::new(PathBuf::from("relative/path"))` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidVaultDir { path: PathBuf::from("relative/path"), reason: VaultDirReason::NotAbsolute })` |
+
+---
+
+## TC-U14: VaultPaths::new — `..` 含むパス → PathTraversal
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U14 |
+| 対応する受入基準ID | AC-16 |
+| 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::PathTraversal、バリデーション step ②） |
+| 種別 | 異常系 |
+| 前提条件 | — |
+| 操作 | `VaultPaths::new(PathBuf::from("/tmp/shikomi/../../etc/passwd"))` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::PathTraversal, .. })` が返る。`canonicalize` を呼ぶ前の早期拒否であること（`/etc/passwd` が実際に存在していても拒否される） |
+
+---
+
+## TC-U15: VaultPaths::new — シンボリックリンク → SymlinkNotAllowed（Unix）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U15 |
+| 対応する受入基準ID | AC-16 |
+| 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::SymlinkNotAllowed、バリデーション step ③） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(unix)]`。`std::os::unix::fs::symlink(real_dir, symlink_path)` でシンボリックリンクを作成済み。実際のディレクトリ（`real_dir`）が存在する |
+| 操作 | `VaultPaths::new(symlink_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::SymlinkNotAllowed, .. })` |
+
+---
+
+## TC-U16: VaultPaths::new — 保護領域 → ProtectedSystemArea（Unix）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U16 |
+| 対応する受入基準ID | AC-16 |
+| 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::ProtectedSystemArea、バリデーション step ⑤） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(unix)]`。`/etc/shikomi_test_dir` は実際に作成しない（`canonicalize` 失敗の前にバリデーションで拒否されるため） |
+| 操作 | `VaultPaths::new(PathBuf::from("/etc/shikomi_test_dir"))` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::ProtectedSystemArea { prefix: "/etc" }, .. })` |
 
 ---
 

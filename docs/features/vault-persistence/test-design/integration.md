@@ -12,10 +12,10 @@
 |------|------|
 | テストID | TC-I01 |
 | 対応する受入基準ID | AC-01 |
-| 対応する工程 | 基本設計（モジュール構成、REQ-P01〜P12） |
+| 対応する工程 | 基本設計（モジュール構成、REQ-P01〜P15） |
 | 種別 | 正常系 |
 | 前提条件 | `feat/issue-10-vault-persistence` ブランチで実装コミット済み |
-| 操作 | `cargo doc -p shikomi-infra --no-deps` を実行し、出力 HTML に `VaultRepository` / `SqliteVaultRepository` / `PersistenceError` / `CorruptedReason` / `AtomicWriteStage` / `VaultPaths` の各型が記載されていることを確認 |
+| 操作 | `cargo doc -p shikomi-infra --no-deps` を実行し、出力 HTML に `VaultRepository` / `SqliteVaultRepository` / `PersistenceError` / `CorruptedReason` / `AtomicWriteStage` / `VaultDirReason` / `VaultPaths` の各型が記載されていることを確認 |
 | 期待結果 | exit code == 0。`target/doc/shikomi_infra/persistence/` 配下に上記型のドキュメントが生成される |
 
 ---
@@ -285,6 +285,48 @@
 | 前提条件 | `Connection::open` で tempdir の vault.db を作成し、`CREATE TABLE IF NOT EXISTS vault_header ...`（本 Issue のスキーマ）を実行済み |
 | 操作 | `conn.execute("INSERT INTO vault_header(id, protection_mode, vault_version, created_at, kdf_salt, wrapped_vek_by_pw, wrapped_vek_by_recovery) VALUES (1, 'plaintext', 1, '2026-01-01T00:00:00Z', X'DEADBEEF', NULL, NULL)", [])` — CHECK 制約（`plaintext` かつ `kdf_salt IS NOT NULL`）に違反する生 SQL を実行 |
 | 期待結果 | `rusqlite::Error::SqliteFailure` が返る（`SQLITE_CONSTRAINT_CHECK` 相当）。アプリケーション層でも同種の不整合が防がれることを確認 |
+
+---
+
+## TC-I21: VaultLock 競合検知（別プロセスが排他ロック保持中）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I21 |
+| 対応する受入基準ID | AC-17 |
+| 対応する工程 | 詳細設計（REQ-P13、VaultLock::acquire_exclusive、save アルゴリズム step 3） |
+| 種別 | 異常系 |
+| 前提条件 | tempdir に vault.db が存在する。`std::process::Command` で子プロセスを起動し、子プロセスが `VaultLock::acquire_exclusive` でロックを保持したまま `std::io::stdin().read` でブロックする状態を作れること。親プロセスと子プロセスが同一 tempdir を共有する |
+| 操作 | 1. 子プロセスを起動し vault ディレクトリの排他ロックを取得させる 2. 親プロセスで `repo.save(&vault)` を呼ぶ（子プロセスがロックを保持したまま） 3. 親プロセスの save 結果を確認後、子プロセスを kill して終了させる |
+| 期待結果 | `Err(PersistenceError::Locked { path, holder_hint })` が返る。`path` が `vault.db.lock` の絶対パスと一致する。`holder_hint` は Unix では子プロセスの PID（`Some(pid)`）または `None`、Windows では `None`。親プロセスの `vault.db` は変更されていない |
+
+---
+
+## TC-I22: VaultPaths::new — SHIKOMI_VAULT_DIR 7 段階バリデーション（Unix）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I22 |
+| 対応する受入基準ID | AC-16 |
+| 対応する工程 | 詳細設計（REQ-P15、VaultPaths::new バリデーション、VaultDirReason） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(unix)]` ガード付き。`serial_test` クレートで `std::env::set_var` の競合を防ぐ |
+| 操作 | 以下の各パターンを `SHIKOMI_VAULT_DIR` に設定し `SqliteVaultRepository::new()` を呼ぶ（テストを個別関数に分割する）: A. 相対パス（`"relative/path"`）B. `..` を含むパス（`"/tmp/shikomi/../../etc"`）C. シンボリックリンクを経由するパス（`tempfile::TempDir` に `std::os::unix::fs::symlink` で作成）D. `/etc/` 配下のパス（`"/etc/shikomi"`） |
+| 期待結果 | A: `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::NotAbsolute, .. })` / B: `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::PathTraversal, .. })` / C: `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::SymlinkNotAllowed, .. })` / D: `Err(PersistenceError::InvalidVaultDir { reason: VaultDirReason::ProtectedSystemArea { prefix: "/etc" }, .. })`。全ケースで `panic!` しない |
+
+---
+
+## TC-I23: tracing-test による秘密漏洩ゼロ検証
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I23 |
+| 対応する受入基準ID | AC-15 |
+| 対応する工程 | 詳細設計（REQ-P14、audit.rs 監査ログ規約） |
+| 種別 | 正常系 |
+| 前提条件 | `Cargo.toml` の `[dev-dependencies]` に `tracing-test = "0.2"` を追加済み。平文モードの `Vault`（レコード `plaintext_value` に秘密文字列 `"TOP_SECRET_VALUE"` を設定）を tempdir に save 済み |
+| 操作 | 1. `tracing_test::init()` または `#[traced_test]` アトリビュートで tracing ログを収集 2. `repo.save(&vault)` / `repo.load()` / `repo.exists()` を順に実行 3. 収集したログ文字列全体に対して、秘密値パターン（`"TOP_SECRET_VALUE"` / `"expose_secret"` / `"plaintext_value"` / `"kdf_salt"` / `"wrapped_vek"` の生値）が含まれないことを `assert!(!logs.contains(...))` で検証 |
+| 期待結果 | 全操作のログに秘密値パターンがマッチしない。`audit::exit_err` で `PersistenceError` を記録する際も、`Display` が秘密値を含まないことを確認する |
 
 ---
 
