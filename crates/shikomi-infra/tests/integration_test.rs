@@ -11,7 +11,7 @@ use shikomi_core::{
     VaultHeader, VaultVersion, WrappedVek,
 };
 use shikomi_infra::persistence::{
-    CorruptedReason, PersistenceError, SqliteVaultRepository, VaultDirReason, VaultRepository,
+    PersistenceError, SqliteVaultRepository, VaultDirReason, VaultRepository,
 };
 use tempfile::TempDir;
 use time::OffsetDateTime;

@@ -195,10 +195,7 @@ mod tests {
         let msg = format!("{err}");
         // #[error("{0}")] により VaultConsistencyReason の Display が素通しになる。
         // ModeMismatch の Display: "vault is in ... mode but record payload is ..."
-        assert!(
-            msg.contains("vault") && msg.contains("mode"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("vault") && msg.contains("mode"), "got: {msg}");
     }
 
     #[test]

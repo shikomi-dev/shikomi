@@ -6,8 +6,6 @@ mod header;
 mod params;
 mod record;
 
-pub(crate) use params::{HeaderParams, RecordParams};
-
 // -------------------------------------------------------------------
 // Mapping
 // -------------------------------------------------------------------
