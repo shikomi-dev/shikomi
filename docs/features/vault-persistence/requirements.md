@@ -84,7 +84,7 @@
 | 入力 | SQLite から取り出した生値（`String`, `i64`, `Vec<u8>` 等） |
 | 処理 | 各 newtype の `try_new` / `try_from_str` 経由で `shikomi-core` ドメイン型に組み立てる。`RecordId::try_from_str` / `RecordLabel::try_new` / `VaultVersion::try_new` / `VaultHeader::new_*` / `RecordPayloadEncrypted::new` / `NonceBytes::try_new` / `KdfSalt::try_new` / `WrappedVek::try_new` / `CipherText::try_new` の順に通す。`Vault::add_record` でモード整合も検証される |
 | 出力 | 正常: `Vault` |
-| エラー時 | 検証失敗を `PersistenceError::Corrupted { table, row_key, domain_error }` にラップ。ドメインエラーの詳細は source として保持 |
+| エラー時 | 検証失敗を `PersistenceError::Corrupted { table: &'static str, row_key: Option<String>, reason: CorruptedReason, source: Option<shikomi_core::DomainError> }` にラップ。旧 `domain_error` フィールドは `reason` + `#[source] source` に分離（設計判断メモ §12 で `DomainError` バリアントを `Corrupted` に統合した結果、`detailed-design/classes.md` 参照）。ドメインエラーの詳細は `#[source]` チェーンで辿れる |
 
 ### REQ-P10: `PersistenceError` 型
 
@@ -229,7 +229,7 @@
 | `windows` | 最新安定（Windows のみ） | `Win32_Security_Authorization`, `Win32_Foundation`, `Win32_Storage_FileSystem` | Windows ACL 設定・検証・`ReplaceFileW`・`LockFileEx` |
 | `fs4` | 0.12 以上 | `sync` | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用。**`fs2` ではなく `fs4` を採用**した根拠: `fs2` は 2018-01 以降メンテ停止（OWASP A06 Vulnerable Components 該当）。`fs4` は同 API 面で fork された後継で、2024 年以降も継続的に release されている（`cargo deny advisories` で検証） |
 | `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design.md` §セキュリティ設計 §監査ログ規約参照 |
-| `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-13） |
+| `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-15） |
 | `serial_test` | 3.x（dev-deps） | — | `std::env::set_var` を触るテストの直列化（test-design §実行環境） |
 
 全て `Cargo.toml` ルートの `[workspace.dependencies]` 経由で指定し、`crates/shikomi-infra/Cargo.toml` では `{ workspace = true }` で参照する（`docs/architecture/tech-stack.md` §4.1 / §4.4）。

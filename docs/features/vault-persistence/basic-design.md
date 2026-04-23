@@ -174,30 +174,38 @@ classDiagram
 - **`VaultRepository` は trait**: `shikomi-daemon` が `&dyn VaultRepository` で受けられるようにし、将来 in-memory 実装や暗号化対応実装への差替を可能にする（Open-Closed、Dependency Inversion）
 - **`SqliteVaultRepository` は構造体 1 つ**: 内部で `VaultPaths` / `AtomicWriter` / `PermissionGuard` / `Mapping` / `Schema` を**委譲ベースで利用**する。継承は使わない（Composition over Inheritance）
 - **`AtomicWriter` / `PermissionGuard` / `Mapping` は公開しない**: `pub(crate)` で `persistence` モジュール内部実装。外部から個別に呼び出せるのは `SqliteVaultRepository` 経由のみ
-- **`PersistenceError` は `shikomi-core::DomainError` と独立**: ただし `DomainError` をラップするバリアントを持つ。ドメイン層エラーを握り潰さず保持する（Fail Fast + 原因追跡）
+- **`PersistenceError` は `shikomi-core::DomainError` と独立**: 下位ドメインエラーは `Corrupted` バリアント内の `#[source] source: Option<DomainError>` で保持する（旧 `DomainError` バリアント廃止・`Corrupted` に統合、詳細は `detailed-design/classes.md` §設計判断 §12）。ドメイン層エラーを握り潰さず `#[source]` チェーンで辿れる（Fail Fast + 原因追跡）
 
 ## 処理フロー
 
-### REQ-P01 / REQ-P02 / REQ-P06 / REQ-P11: `SqliteVaultRepository::load()`
+### REQ-P01 / REQ-P02 / REQ-P06 / REQ-P11 / REQ-P13 / REQ-P14: `SqliteVaultRepository::load()`
 
 1. `VaultPaths` を取得（コンストラクタで既に解決済み）
-2. `PermissionGuard::verify_dir(paths.dir)` でディレクトリパーミッション検証（不正なら `InvalidPermission` で即 return、Fail Fast）
-3. `AtomicWriter::detect_orphan(paths.vault_db_new)` で `.new` 残存検出（残っていれば `OrphanNewFile` で即 return、REQ-P05）
-4. `paths.vault_db` が存在しなければ `Ok(Vault::new(VaultHeader::new_plaintext(CURRENT, now)?))` 相当の**空 vault** を返さず、`Err(PersistenceError::Io(NotFound))` を返す（「初回起動」は呼出側が `exists()` で判断する責務、REQ-P01）
-5. `paths.vault_db` のファイルパーミッション検証（不正なら `InvalidPermission`、REQ-P06）
-6. `rusqlite::Connection::open(paths.vault_db)` で読み取り専用オープン（`OpenFlags::SQLITE_OPEN_READ_ONLY \| SQLITE_OPEN_NO_MUTEX`）
-7. `PRAGMA application_id` と `PRAGMA user_version` を検証し、shikomi 形式と一致しなければ `SchemaMismatch` / `Corrupted` を返す
-8. `vault_header` テーブルから 1 行取得、`Mapping::row_to_vault_header` で `VaultHeader` を構築
-9. `vault_header.protection_mode = 'encrypted'` なら **`UnsupportedYet` を即 return**（REQ-P11）
-10. `records` テーブルから全行取得、`Mapping::row_to_record` で `Record` を構築し `Vault::add_record` で集約に追加（ドメイン整合が自動検証）
-11. `Vault` を返却
+2. `audit::entry_load(&self.paths)` を発行（REQ-P14、開始ログ）
+3. `PermissionGuard::verify_dir(paths.dir)` でディレクトリパーミッション検証（不正なら `InvalidPermission` で即 return、Fail Fast）
+4. **`VaultLock::acquire_shared(&self.paths)?`** で共有ロック取得（REQ-P13）。別プロセスが排他ロック保持中なら `Locked` で即 return（非ブロッキング、待機しない）。取得した `VaultLock` は step 14 までスコープに生存し、drop 時に自動解放（RAII）
+5. `AtomicWriter::detect_orphan(paths.vault_db_new)` で `.new` 残存検出（残っていれば `OrphanNewFile` で即 return、REQ-P05）
+6. `paths.vault_db` が存在しなければ `Err(PersistenceError::Io(NotFound))` を返す（「初回起動」は呼出側が `exists()` で判断する責務、REQ-P01）
+7. `paths.vault_db` のファイルパーミッション検証（不正なら `InvalidPermission`、REQ-P06）
+8. `rusqlite::Connection::open(paths.vault_db)` で読み取り専用オープン（`OpenFlags::SQLITE_OPEN_READ_ONLY \| SQLITE_OPEN_NO_MUTEX`）
+9. `PRAGMA application_id` と `PRAGMA user_version` を検証し、shikomi 形式と一致しなければ `SchemaMismatch` / `Corrupted` を返す
+10. `vault_header` テーブルから 1 行取得、`Mapping::row_to_vault_header` で `VaultHeader` を構築
+11. `vault_header.protection_mode = 'encrypted'` なら **`UnsupportedYet` を即 return**（REQ-P11）
+12. `records` テーブルから全行取得、`Mapping::row_to_record` で `Record` を構築し `Vault::add_record` で集約に追加（ドメイン整合が自動検証）
+13. `audit::exit_ok_load(record_count, protection_mode, elapsed_ms)` を発行（REQ-P14、成功ログ）
+14. `VaultLock` が drop され共有ロックが自動解放される
+15. `Vault` を返却
 
-### REQ-P01 / REQ-P02 / REQ-P04 / REQ-P11: `SqliteVaultRepository::save(vault)`
+（任意 step で `Err` を return する直前に `audit::exit_err(&err, elapsed_ms)` を発行する、REQ-P14）
 
-1. `vault.protection_mode()` が `Encrypted` なら **`UnsupportedYet` を即 return**（REQ-P11、Fail Fast）
-2. `PermissionGuard::ensure_dir(paths.dir)` でディレクトリ作成（既存なら `0o700` を強制、Windows は ACL 強制）
-3. `AtomicWriter::detect_orphan(paths.vault_db_new)` で `.new` 残存検出（残っていれば `OrphanNewFile` を返し中断、ユーザ明示操作を待つ）
-4. `AtomicWriter::write_new(paths.vault_db_new)` のスコープで一時 SQLite DB を作成:
+### REQ-P01 / REQ-P02 / REQ-P04 / REQ-P11 / REQ-P13 / REQ-P14: `SqliteVaultRepository::save(vault)`
+
+1. `audit::entry_save(&self.paths, vault.record_count())` を発行（REQ-P14、開始ログ）
+2. `vault.protection_mode()` が `Encrypted` なら **`UnsupportedYet` を即 return**（REQ-P11、Fail Fast）
+3. `PermissionGuard::ensure_dir(paths.dir)` でディレクトリ作成（既存なら `0o700` を強制、Windows は ACL 強制）
+4. **`VaultLock::acquire_exclusive(&self.paths)?`** で排他ロック取得（REQ-P13）。別プロセスが排他/共有ロックを保持中なら `Locked` で即 return（非ブロッキング、待機・再試行しない）。取得した `VaultLock` は step 7 までスコープに生存し、drop 時に自動解放（RAII）
+5. `AtomicWriter::detect_orphan(paths.vault_db_new)` で `.new` 残存検出（残っていれば `OrphanNewFile` を返し中断、ユーザ明示操作を待つ、AC-14 の save 側検証）
+6. `AtomicWriter::write_new(paths.vault_db_new)` のスコープで一時 SQLite DB を作成:
    - `Connection::open_with_flags(OpenFlags::SQLITE_OPEN_CREATE \| SQLITE_OPEN_READ_WRITE \| SQLITE_OPEN_NO_MUTEX)`
    - **作成直後**にファイルパーミッションを `0o600` に設定（Unix） / 所有者 ACL 設定（Windows）
    - `PRAGMA application_id = 0x73686B6D`、`PRAGMA user_version = 1`、`PRAGMA journal_mode = DELETE` を発行
@@ -205,12 +213,16 @@ classDiagram
    - **単一トランザクション**で `vault_header` に 1 行 insert、`records` に全レコード insert（`tx.execute_batch` ではなく `params!` バインドで個別 insert）
    - COMMIT
    - `Connection` drop（SQLite 内部 flush）
-5. `AtomicWriter::fsync_and_rename`:
+7. `AtomicWriter::fsync_and_rename`:
    - `.new` を再 open し `File::sync_all()`
    - 親ディレクトリを open し `File::sync_all()`（Unix で rename メタデータの永続化に必要、POSIX 2008）
    - `std::fs::rename(paths.vault_db_new, paths.vault_db)`（Unix）または `windows::Win32::Storage::FileSystem::ReplaceFileW`（Windows）
    - rename 失敗時は `.new` を削除し `AtomicWriteFailed { stage: Rename, ... }` を返す
-6. `Ok(())`
+8. `audit::exit_ok_save(record_count, bytes_written, elapsed_ms)` を発行（REQ-P14、成功ログ）
+9. `VaultLock` が drop され排他ロックが自動解放される
+10. `Ok(())`
+
+（任意 step で `Err` を return する直前に `audit::exit_err(&err, elapsed_ms)` を発行する、REQ-P14）
 
 ### REQ-P01: `SqliteVaultRepository::exists()`
 
@@ -221,10 +233,7 @@ classDiagram
 
 1. `new()`: `std::env::var("SHIKOMI_VAULT_DIR")` を優先、なければ `dirs::data_dir()` で `$XDG_DATA_HOME/shikomi/` 等を解決。いずれも失敗なら `CannotResolveVaultDir` を返す。得られた候補パスを **`VaultPaths::new(dir)`（検証あり）** に通し、バリデーション違反は `InvalidVaultDir` を伝播する（§vault ディレクトリ検証）
 2. `with_dir(dir)`: 受け取った `dir` を**無検証で** `VaultPaths::new_unchecked(dir)` に通して `VaultPaths` を構築する。**`#[doc(hidden)]` で公開 doc から隠蔽された内部・テスト専用 API**（一般開発者向けの正規 API は `new()`）。パス検証（パストラバーサル / シンボリックリンク）は呼出側の責務。パーミッション検証は `load`/`save` 冒頭で別途行う。詳細は `detailed-design/data.md` §モジュール別公開メソッド §`SqliteVaultRepository` を参照
-3. 構築手段の分離:
-   - `VaultPaths::new(dir) -> Result<Self, PersistenceError>` — **公開 API**、`new()` 専用。7 段階バリデーション（§vault ディレクトリ検証）を通す
-   - `pub(crate) fn VaultPaths::new_unchecked(dir: PathBuf) -> Self` — **crate 内専用・infallible**。`with_dir` 専用。バリデーションをスキップしパスだけを派生させる（tempdir に対する無用な検証失敗を回避するため）。`pub(crate)` で crate 外からは呼べない
-   - **根拠**: バリデーション済みパス前提の型（`VaultPaths`）が Result なしで構築されると、呼出側で検証漏れが起きる。`new_unchecked` を `pub(crate)` + 明示名で分けることで「検証を意図的にスキップしている」ことが型名で分かる（Tell, Don't Ask / Fail Safe by naming）
+3. 構築手段の分離: `VaultPaths::new`（公開・検証あり、`new()` 専用）と `VaultPaths::new_unchecked`（`pub(crate)` infallible、`with_dir` 専用、検証スキップ）を明示名で分ける。バリデーション済みパス前提の型が Result なしで構築されると検証漏れが起きるため、`new_unchecked` を明示名にして「意図的スキップ」を型で可視化（Fail Safe by naming）。詳細は `detailed-design/data.md` §`VaultPaths`
 
 ## シーケンス図
 
@@ -243,28 +252,20 @@ sequenceDiagram
 
     Caller->>Repo: save(vault)
     Repo->>Audit: entry_save(paths, record_count)
-    Repo->>Repo: vault.protection_mode() 検査
-    Note over Repo: Encrypted なら UnsupportedYet<br/>で即 return（REQ-P11）
-    Repo->>Perm: ensure_dir(dir)
-    Perm->>FS: mkdir dir with 0o700 / ACL
+    Note over Repo: protection_mode=Encrypted なら<br/>UnsupportedYet で即 return（REQ-P11）
+    Repo->>Perm: ensure_dir(dir, 0o700/ACL)
     Perm-->>Repo: Ok
     Repo->>Lock: acquire_exclusive(paths)
-    Lock->>FS: open vault.db.lock + flock LOCK_EX NB
-    Note over Lock: 失敗時は Locked { holder_hint }<br/>で即 return（Fail Fast）
+    Note over Lock: flock LOCK_EX NB<br/>失敗 → Locked (Fail Fast)
     Lock-->>Repo: Ok(guard)
     Repo->>Atomic: detect_orphan(.new)
     Atomic-->>Repo: not found
     Repo->>Atomic: write_new(.new)
-    Atomic->>SQL: open (CREATE+RW) .new
+    Atomic->>SQL: open CREATE+RW, PRAGMA, DDL, INSERT in Tx, COMMIT, close
     Atomic->>FS: set permission 0o600
-    Atomic->>SQL: PRAGMA & DDL & INSERT (in Tx)
-    SQL-->>Atomic: COMMIT
-    Atomic->>SQL: close connection
     Atomic-->>Repo: Ok
-    Repo->>Atomic: fsync_and_rename(.new → vault.db)
-    Atomic->>FS: File::sync_all(.new)
-    Atomic->>FS: File::sync_all(dir)
-    Atomic->>FS: rename(.new, vault.db)
+    Repo->>Atomic: fsync_and_rename
+    Atomic->>FS: sync_all(.new), sync_all(dir), rename(.new→vault.db)
     Atomic-->>Repo: Ok
     Repo->>Audit: exit_ok_save(record_count, bytes_written, elapsed_ms)
     Note over Lock: VaultLock が Drop<br/>flock 自動解放（RAII）
@@ -279,11 +280,9 @@ sequenceDiagram
     participant Atomic as AtomicWriter
     participant FS as ファイルシステム
 
-    Repo->>Atomic: fsync_and_rename(.new → vault.db)
-    Atomic->>FS: rename(.new, vault.db)
-    FS-->>Atomic: Err(EACCES)
-    Atomic->>Atomic: cleanup_new(.new)
-    Atomic->>FS: remove_file(.new)
+    Repo->>Atomic: fsync_and_rename
+    Atomic->>FS: rename(.new, vault.db) → Err(EACCES)
+    Atomic->>FS: cleanup_new: remove_file(.new) (best-effort)
     Atomic-->>Repo: Err(AtomicWriteFailed { stage: Rename, source: EACCES })
     Note over Repo,FS: vault.db 本体は<br/>変更されないまま保たれる
 ```
@@ -301,21 +300,24 @@ sequenceDiagram
 
     Caller->>Repo: load()
     Repo->>Audit: entry_load(paths)
-    Repo->>Lock: acquire_shared(paths)
-    Lock->>FS: flock LOCK_SH NB
+    Repo->>Lock: acquire_shared(paths) [flock LOCK_SH NB]
     alt 別プロセスが排他ロック保持
-        Lock-->>Repo: Err(Locked)
-        Repo->>Audit: exit_err(Locked, elapsed_ms)
-        Repo-->>Caller: Err(Locked)
+        Lock-->>Repo: Err(Locked) → exit_err → return
     else ロック取得成功
         Lock-->>Repo: Ok(guard)
     end
     Repo->>Atomic: detect_orphan(.new)
-    Atomic->>FS: exists(.new)
-    FS-->>Atomic: true
-    Atomic-->>Repo: OrphanNewFile(path)
-    Repo-->>Caller: Err(OrphanNewFile)
-    Note over Caller: 呼び出し側は<br/>GUI リカバリ画面へ誘導<br/>（本 Issue 範囲外）
+    alt .new が残存
+        Atomic-->>Repo: OrphanNewFile(path)
+        Repo->>Audit: exit_err(OrphanNewFile, elapsed_ms)
+        Repo-->>Caller: Err(OrphanNewFile)
+        Note over Caller: GUI リカバリ画面へ誘導（別 Issue）
+    else 正常系
+        Atomic-->>Repo: Ok（.new 非存在）
+        Note over Repo: PRAGMA/Header/Records 読込 → Vault 再構築<br/>（詳細は §処理フロー §load step 7-15）
+        Repo->>Audit: exit_ok_load(record_count, protection_mode, elapsed_ms)
+        Repo-->>Caller: Ok(vault) [VaultLock Drop → flock 解放 RAII]
+    end
 ```
 
 ## アーキテクチャへの影響
@@ -327,7 +329,15 @@ sequenceDiagram
 - `context/threat-model.md` §7.1 で atomic write 手順が確定済み。本 Issue は実装
 - `local.md` / `dev.md` / `production.md` / `environment-diff.md` はデスクトップ OSS で「該当なし」確定済み
 
-ただし、本 Issue で新規に `[workspace.dependencies]` に追加する crate（`rusqlite` バンドル版・`dirs`・`windows`・`tempfile`）について、`Cargo.toml` への追記は本 PR に含める。`docs/architecture/tech-stack.md` の依存一覧セクション（もし該当項目があれば）に情報が追加されるが、**本 Issue で同一 PR 内に記載を更新する方針**（外部レビューで tech-stack が最新化されていることを人間が確認できるよう）。
+ただし、本 Issue で新規に `[workspace.dependencies]` に追加する crate を `Cargo.toml` に追記する。バージョン・feature・用途の完全表は `requirements.md` §依存関係を参照。本 PR で追加する crate の要約:
+
+- **本体**: `rusqlite`（bundled）/ `dirs` / `thiserror` / `cfg-if` / `time` / `uuid`
+- **REQ-P13**: `fs4`（`sync` feature、プロセス間 advisory lock。`fs2` は 2018 以降停止のため fork 後継の `fs4` を採用、OWASP A06 対応）
+- **REQ-P14**: `tracing`（監査ログ、`audit.rs` 経由のみ使用）
+- **Windows のみ**: `windows`（`Win32_Security_Authorization` / `Win32_Storage_FileSystem`、NTFS ACL・`ReplaceFileW`・`LockFileEx`）
+- **dev-deps**: `tempfile`（tempdir）／ `tracing-test`（AC-15 秘密漏洩検証）／ `serial_test`（`std::env::set_var` の直列化）
+
+`docs/architecture/tech-stack.md` への情報追加は同一 PR 内で行う方針（外部レビューで tech-stack の最新化を確認可能にする）。
 
 ## 外部連携
 
@@ -362,7 +372,7 @@ sequenceDiagram
 | 起動時のドメイン整合性違反 | vault.db の行が壊れている | ドメイン不変条件 | **復元時検証**（REQ-P09）: 全 newtype の `try_new` を通す。`RecordId` / `RecordLabel` / `VaultHeader` / `RecordPayloadEncrypted` / `NonceBytes` / `KdfSalt` / `WrappedVek` 全て検証済み型でしか `Vault` に入らない |
 | `SHIKOMI_VAULT_DIR` の悪用 | 環境変数で `../../etc` / `/proc/self/root` / シンボリックリンクを指定 | システム保護領域・任意ディレクトリへの書込、TOCTOU 差替え | **`VaultPaths::new` バリデーション**（§vault ディレクトリ検証）: 絶対パス必須、`..` 早期拒否、シンボリックリンク全面禁止、`canonicalize` 後の保護領域 prefix 一致拒否、ディレクトリ判定 |
 | 並行書込レース（daemon 未起動時） | CLI / リカバリツール / 別 CLI が同時に `save` を呼ぶ | vault.db 壊れ、`.new` 錯綜 | **プロセス間 advisory lock**（`VaultLock::acquire_exclusive`）: `fs4` / `LockFileEx` で非ブロッキング排他取得、失敗時は `Locked { holder_hint }` で即 return（待機・再試行しない、Fail Fast） |
-| ログ経由の秘密漏洩 | 開発者がデバッグで vault 内容を `tracing::info!("{:?}", record)` してしまう | plaintext_value / ciphertext / VEK が journal に流れる | 多層防御 — ①`SecretString`/`SecretBytes` の `Debug` は `"[REDACTED]"`（Issue #7）、②`audit.rs` 経由以外の tracing 呼出を clippy lint で禁止、③`PersistenceError::Display` は全バリアント秘密を含めない、④`tracing-test` による CI 検証（AC-13） |
+| ログ経由の秘密漏洩 | 開発者がデバッグで vault 内容を `tracing::info!("{:?}", record)` してしまう | plaintext_value / ciphertext / VEK が journal に流れる | 多層防御 — ①`SecretString`/`SecretBytes` の `Debug` は `"[REDACTED]"`（Issue #7）、②`audit.rs` 経由以外の tracing 呼出を clippy lint で禁止、③`PersistenceError::Display` は全バリアント秘密を含めない、④`tracing-test` による CI 検証（AC-15） |
 
 ### 監査ログ規約（`tracing` の使用ルール、OWASP A09 対応）
 
@@ -381,17 +391,10 @@ sequenceDiagram
 **秘密値マスクの型保証**:
 
 - `SecretString` / `SecretBytes` の `Debug` 実装は `shikomi-core` で `"[REDACTED]"` 固定（Issue #7 完了済み）。`tracing::info!` の `?value` / `%value` に誤って渡しても平文は出ない
-- **防衛線として**: `audit.rs` モジュールが公開するのは以下の **5 関数**のみ（requirements.md REQ-P14 と整合）:
-  - `audit::entry_load(paths: &VaultPaths)` — `load` 冒頭の info イベント発行
-  - `audit::entry_save(paths: &VaultPaths, record_count: usize)` — `save` 冒頭の info イベント発行
-  - `audit::exit_ok_load(record_count: usize, protection_mode: ProtectionMode, elapsed_ms: u64)` — load 成功時
-  - `audit::exit_ok_save(record_count: usize, bytes_written: u64, elapsed_ms: u64)` — save 成功時
-  - `audit::exit_err(err: &PersistenceError, elapsed_ms: u64)` — 全エラー経路の終了イベント（内部でバリアント→レベル写像）
-
-  これら関数のシグネチャは `&VaultPaths`, `&PersistenceError`, `usize`, `u64`, `ProtectionMode` など**秘密を含まない型**のみ受け付ける。呼出側は `audit` モジュール経由でのみログを出す（直接 `tracing::info!` を vault payload に対して発行することを禁止、clippy の `disallowed-methods` lint で機械的に検証）
-- **load と save の終了ログを分離する根拠**: load 成功時は `protection_mode` を記録（後続 daemon のモード遷移判定に使う）、save 成功時は `bytes_written` を記録（ディスク消費監視）。共通の `exit_ok` にまとめると `Option` まみれになり、型保証が緩む（YAGNI より Fail Safe by type を優先）
-- `PersistenceError::Display` 実装は**全バリアント**で秘密値を含めない。バリアント内包値の `Display` が潜在的に秘密を漏らすケース（`Sqlite` の下位エラー等）は `display_redacted()` で SQL パラメータプレースホルダー（`?1`）と値マスク（`***`）に置換
-- **検証（AC-13）**: `tracing-test` で 1 テスト内の全ログ文字列を収集 → `plaintext_value` / `ciphertext` / `SecretString::expose_secret` で得られる生文字列が 1 文字も現れないことを grep 検証
+- **防衛線として**: `audit.rs` モジュールが公開する **5 関数**（`entry_load` / `entry_save` / `exit_ok_load` / `exit_ok_save` / `exit_err`）のみ呼出可。シグネチャは `&VaultPaths` / `usize` / `u64` / `ProtectionMode` / `&PersistenceError` など**秘密を含まない型**のみ（完全シグネチャは `detailed-design/data.md` §`Audit` 参照）。直接 `tracing::info!` を vault payload に対して発行することは clippy `disallowed-methods` lint で機械的禁止
+- **load と save の終了ログを分離する根拠**: load 成功時は `protection_mode`（daemon のモード遷移判定）、save 成功時は `bytes_written`（ディスク消費監視）を記録。共通の `exit_ok` にまとめると `Option` まみれで型保証が緩む（Fail Safe by type > YAGNI）
+- `PersistenceError::Display` は全バリアントで秘密を含めない。`Sqlite` 下位エラー等は `display_redacted()` で SQL パラメータを `?1` と `***` にマスク
+- **検証（AC-15）**: `tracing-test` で全ログ文字列を収集 → 秘密値の生文字列が 1 文字も現れないことを grep 検証
 
 **監査ログと通常 I/O の分離**:
 
@@ -402,22 +405,22 @@ sequenceDiagram
 
 **目的**: `SHIKOMI_VAULT_DIR` 環境変数による任意パス指定機能が悪用されないよう、危険なパスパターンを入口で拒否する。パストラバーサル・シンボリックリンク経由の権限昇格・システム保護領域への書込を設計レベルで排除する。
 
-**検証アルゴリズム**（`VaultPaths::new(dir: PathBuf) -> Result<Self, PersistenceError>`）:
+**検証アルゴリズム**（`VaultPaths::new(dir: PathBuf) -> Result<Self, PersistenceError>`、7 段階）:
 
-1. **絶対パス必須**: `dir.is_absolute()` が false なら `InvalidVaultDir { reason: NotAbsolute }` を即 return。相対パス起点で`..` を辿られる攻撃面を消す
-2. **`..` 要素早期拒否**: `dir.components()` を走査し `Component::ParentDir` を含むなら `PathTraversal` で即 return。`canonicalize` 前の生値で判定することで、「存在しないパス経由の `..`」も確実に拒否
-3. **シンボリックリンク検出**: `dir` 自身と全親要素に対し `fs::symlink_metadata` → `is_symlink()` で検査。1 つでもリンクが含まれれば `SymlinkNotAllowed` で即 return（`canonicalize` 後のリンク解決結果が保護領域外でも拒否、リンク先張替え攻撃対策）
-4. **`canonicalize` 適用**: `fs::canonicalize(&dir)` で正規化。失敗なら `Canonicalize { source }`。ただしディレクトリがまだ存在しない初回起動シナリオでは、親ディレクトリの最長存在部分までを canonicalize し、存在しない末尾要素は通常の path join で結合（設計 §9: `SqliteVaultRepository::new` の初期化経路と整合）
-5. **保護領域チェック**: canonicalize 結果のパスが `PROTECTED_PATH_PREFIXES_UNIX` / `PROTECTED_PATH_PREFIXES_WIN` のいずれかの prefix に match したら `ProtectedSystemArea { prefix }` で即 return。`C:\Windows` 等は case-insensitive 比較（Windows のパス規約）
-6. **ディレクトリ判定**: 存在するなら `fs::metadata(&canonical)?.is_dir()` を検証、ファイルなら `NotADirectory` で即 return
-7. **合格**: `VaultPaths { dir: canonical, vault_db: canonical.join("vault.db"), vault_db_new: canonical.join("vault.db.new"), vault_db_lock: canonical.join("vault.db.lock") }` を返す
+1. **絶対パス必須** → `NotAbsolute`（相対パス経由の `..` 辿り攻撃面を消す）
+2. **`..` 要素早期拒否** → `PathTraversal`（`canonicalize` 前の生値判定で、存在しないパス経由の `..` も拒否）
+3. **シンボリックリンク検出** → `SymlinkNotAllowed`（`dir` 自身と全親要素に `fs::symlink_metadata` / `is_symlink`。リンク先張替え攻撃対策）
+4. **`canonicalize` 適用** → `Canonicalize { source }`（初回起動でディレクトリ未存在なら親の最長存在部分のみ正規化）
+5. **保護領域チェック** → `ProtectedSystemArea { prefix }`（`PROTECTED_PATH_PREFIXES_{UNIX,WIN}` と prefix 照合、Windows は case-insensitive）
+6. **ディレクトリ判定** → `NotADirectory`（存在するなら `is_dir()` を要求）
+7. **合格** → `VaultPaths` に `vault.db` / `vault.db.new` / `vault.db.lock` を派生結合して返す
 
 **設計判断**:
 
-- **`canonicalize` 前後で二段階検査**: `..` の早期拒否と `canonicalize` 後の保護領域チェックを両方行う理由は、`canonicalize` がシンボリックリンクを追って別の無害なパスに化ける可能性があるため（例: `/tmp/shikomi → /etc/shikomi`）。リンク自体を拒否することで TOCTOU を封じる
-- **シンボリックリンク完全禁止**: 「vault ディレクトリは**ユーザーのデータディレクトリ直下の実ディレクトリ**である」という単純な契約を強制。リンク経由のパスは攻撃面として不要（個人利用 OSS の YAGNI）
-- **`SHIKOMI_VAULT_DIR` 以外への適用**: `dirs::data_dir()` の戻り値も同じバリデーションを通す。OS が返すパスだから無検証で通すのは信頼の置き場所を誤る（Zero Trust）
-- **`with_dir(PathBuf)`**: `#[doc(hidden)]` の内部 API は**バリデーションを通さない**。テスト tempdir を通す正当用途で無用な失敗を避ける。正規公開 API（`new()`）のみがバリデーションの責任を負う
+- **二段階検査**: `..` の早期拒否 + `canonicalize` 後の保護領域チェックを両方行うのは、`canonicalize` がシンボリックリンクを追って無害に見えるパスに化ける（例: `/tmp/shikomi → /etc/shikomi`）のを防ぐため。リンク自体を拒否することで TOCTOU を封じる
+- **リンク完全禁止**: vault ディレクトリは「ユーザーデータ直下の実ディレクトリ」という単純契約（個人利用 OSS の YAGNI）
+- **Zero Trust**: `dirs::data_dir()` の戻り値も同じバリデーションを通す（OS の戻り値だからと無検証にしない）
+- **`with_dir`**: `#[doc(hidden)]` の内部 API はバリデーションを通さない（tempdir の無用な失敗回避）。正規 API（`new()`）のみが検証責任を負う
 
 ### OWASP Top 10 対応
 
@@ -431,7 +434,7 @@ sequenceDiagram
 | A06 | Vulnerable Components | `rusqlite` バンドル版（`features = ["bundled"]`）で外部 SQLite に依存しない。SQLite 本体のアドバイザリは `cargo deny` で検出。`windows` crate は Microsoft 公式 |
 | A07 | Auth Failures | 対象外 — 本 Issue は認証ロジックを持たない。認証は暗号化モード（別 Issue）でマスターパスワード経由 |
 | A08 | Data Integrity Failures | **主対応（部分）** — atomic write で部分書込を防ぐ。ドメイン再構築時に全 newtype 検証（REQ-P09）で整合性を担保。**暗号学的改竄検出**は本 Issue 範囲外（平文モードには AEAD がない、§7.0 で明示） |
-| A09 | Logging Failures | **主対応** — `§監査ログ規約` で記録対象・レベル・秘密マスクルールを網羅。`audit.rs` 経由のみログを許可し clippy `disallowed-methods` で直接 `tracing::info!` 呼出を禁止。秘密型の `Debug` は Issue #7 で `"[REDACTED]"` 固定、`PersistenceError::Display` は全バリアントで秘密を含めない。検証は AC-13 で `tracing-test` により機械的に行う |
+| A09 | Logging Failures | **主対応** — `§監査ログ規約` で記録対象・レベル・秘密マスクルールを網羅。`audit.rs` 経由のみログを許可し clippy `disallowed-methods` で直接 `tracing::info!` 呼出を禁止。秘密型の `Debug` は Issue #7 で `"[REDACTED]"` 固定、`PersistenceError::Display` は全バリアントで秘密を含めない。検証は AC-15 で `tracing-test` により機械的に行う |
 | A10 | SSRF | 対象外 — HTTP リクエストを発行しない |
 
 ## ER図
@@ -479,7 +482,7 @@ erDiagram
 |---------|---------|----------------|
 | ファイル I/O 失敗（NotFound 以外） | `PersistenceError::Io` にラップ、`#[source]` で下位保持、即 return | 開発者向けエラー文面（UI は別 Issue で i18n 写像） |
 | SQLite エラー（BUSY / LOCKED 含む） | `PersistenceError::Sqlite` にラップ、即 return | 同上 |
-| ドメイン整合性違反（復元時） | `PersistenceError::Corrupted { table, row_key, domain_error }` にラップ | 同上。`row_key` で何番目の行が壊れているか特定可能 |
+| ドメイン整合性違反（復元時） | `PersistenceError::Corrupted { table, row_key, reason: CorruptedReason, source: Option<DomainError> }` にラップ | 同上。`row_key` で何番目の行が壊れているか特定可能、`reason` で分類、`#[source]` で下位 error を追跡 |
 | パーミッション異常 | `PersistenceError::InvalidPermission` で即 return。**自動修復しない**（ユーザ明示操作を要求、Fail Secure） | 同上 |
 | `.new` 残存 | `PersistenceError::OrphanNewFile` で即 return。**自動削除しない** | 同上。リカバリ UI で案内（別 Issue） |
 | atomic write 失敗 | 発生 stage を `AtomicWriteStage` 列挙で区別、`.new` はベストエフォートで削除、`PersistenceError::AtomicWriteFailed` を返す | 同上 |
@@ -490,9 +493,4 @@ erDiagram
 | プロセス間 advisory lock 競合 | `PersistenceError::Locked { path, holder_hint }` で即 return（`VaultLock::acquire_{shared,exclusive}` 失敗時）。**待機・再試行しない**（ユーザに別プロセス終了を促す、Fail Fast） | 同上。CLI は holder_hint を表示して「`shikomi-daemon` などが稼働していないか確認してください」とガイド |
 | 内部バグ（不変条件違反） | `debug_assert!` で検出、production では `tracing::error!` 後 panic | daemon がキャプチャ（別 Issue） |
 
-**本 Issue での禁止事項**:
-
-- `Result<T, String>` / `Result<T, Box<dyn Error>>` のようなエラー情報を失う型を公開 API で使わない
-- `unwrap()` / `expect()` を本番コードパスで使わない（テスト以外）
-- エラーを握り潰さない（`let _ = ...`, `if let Err(_) = ... {}` の無言通過禁止）
-- `AtomicWriter::cleanup_new` でエラーが出た場合のみ `tracing::warn!` でログし続行（cleanup は best-effort、ただし元のエラーは必ず呼出側に伝播）
+**本 Issue での禁止事項**: `Result<T, String>` / `Result<T, Box<dyn Error>>` 等のエラー情報を失う型の公開 API 使用／本番コードパスの `unwrap()` `expect()`／エラー握り潰し（`let _ = ...` 等の無言通過）。`AtomicWriter::cleanup_new` のみベストエフォート（`tracing::warn!` でログ、元のエラーは必ず呼出側に伝播）
