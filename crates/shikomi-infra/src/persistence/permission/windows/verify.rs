@@ -10,9 +10,9 @@ use windows_sys::Win32::Security::{
     ACL_SIZE_INFORMATION, SE_DACL_PROTECTED,
 };
 
-use crate::persistence::error::PersistenceError;
 use super::helper::sid_to_string;
 use super::ACE_TYPE_ACCESS_ALLOWED;
+use crate::persistence::error::PersistenceError;
 
 // ---------------------------------------------------------------------------
 // verify_dacl_owner_only — 4 不変条件の検証

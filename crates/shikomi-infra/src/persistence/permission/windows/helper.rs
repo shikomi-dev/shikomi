@@ -13,8 +13,8 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{GetSecurityDescriptorControl, ACL};
 
+use super::guard::{LocalFreeAclGuard, SecurityDescriptorGuard};
 use crate::persistence::error::PersistenceError;
-use super::guard::{SecurityDescriptorGuard, LocalFreeAclGuard};
 
 // ---------------------------------------------------------------------------
 // ヘルパ：SID → 文字列
@@ -22,8 +22,8 @@ use super::guard::{SecurityDescriptorGuard, LocalFreeAclGuard};
 
 /// SID を `ConvertSidToStringSidW` で文字列化する。失敗時は `"<unknown>"` を返す。
 pub(super) fn sid_to_string(sid: PSID) -> String {
-    use windows_sys::Win32::Security::ConvertSidToStringSidW;
     use super::guard::SidStringGuard;
+    use windows_sys::Win32::Security::ConvertSidToStringSidW;
 
     if sid.is_null() {
         return String::from("<null>");

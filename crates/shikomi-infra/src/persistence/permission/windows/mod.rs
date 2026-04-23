@@ -5,12 +5,12 @@
 //! `unsafe_code` lint を許容する。他モジュールは `forbid` を保持。
 //! 参照: https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow
 
+mod ensure;
 mod guard;
 mod helper;
-mod verify;
-mod ensure;
 #[cfg(test)]
 mod tests;
+mod verify;
 
 pub(super) use ensure::{ensure_dir, ensure_file, verify_dir, verify_file};
 

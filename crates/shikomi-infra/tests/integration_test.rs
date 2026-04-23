@@ -927,4 +927,3 @@ fn tc_i23_no_secret_leakage_in_logs() {
         );
     }
 }
-

@@ -1,11 +1,11 @@
 use std::path::Path;
 
-use crate::persistence::error::PersistenceError;
 use super::helper::{
     apply_protected_dacl, build_owner_only_dacl, fetch_dacl_and_owner, fetch_owner_sid_from_path,
 };
 use super::verify::verify_dacl_owner_only;
-use super::{EXPECTED_FILE_MASK, EXPECTED_DIR_MASK, EXPECTED_FILE_STR, EXPECTED_DIR_STR};
+use super::{EXPECTED_DIR_MASK, EXPECTED_DIR_STR, EXPECTED_FILE_MASK, EXPECTED_FILE_STR};
+use crate::persistence::error::PersistenceError;
 
 // ---------------------------------------------------------------------------
 // 公開 API（`permission/mod.rs` の cfg_if! ディスパッチ先）

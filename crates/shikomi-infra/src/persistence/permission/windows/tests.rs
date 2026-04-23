@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 
+use std::mem;
 use std::path::Path;
 use std::ptr;
 
@@ -7,18 +8,18 @@ use crate::persistence::error::PersistenceError;
 use tempfile::TempDir;
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, PSID};
 use windows_sys::Win32::Security::Authorization::{
-    SetEntriesInAclW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION,
-    EXPLICIT_ACCESS_W, NO_INHERITANCE, NO_MULTIPLE_TRUSTEE,
-    PROTECTED_DACL_SECURITY_INFORMATION, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
-    TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    SetEntriesInAclW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, EXPLICIT_ACCESS_W,
+    NO_INHERITANCE, NO_MULTIPLE_TRUSTEE, PROTECTED_DACL_SECURITY_INFORMATION, SET_ACCESS,
+    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    AllocateAndInitializeSid, FreeSid, ACL, SID_IDENTIFIER_AUTHORITY,
+    AddAccessAllowedAceEx, AllocateAndInitializeSid, FreeSid, GetLengthSid, InitializeAcl, ACL,
+    SID_IDENTIFIER_AUTHORITY,
 };
 use windows_sys::Win32::System::Memory::LocalFree;
 
-use super::{ensure_dir, ensure_file, verify_dir, verify_file, EXPECTED_FILE_MASK};
 use super::helper::{fetch_owner_sid_from_path, path_to_wide};
+use super::{ensure_dir, ensure_file, verify_dir, verify_file, EXPECTED_FILE_MASK};
 
 // -----------------------------------------------------------------------
 // テストヘルパー
@@ -356,6 +357,116 @@ fn tc_u25_verify_file_trustee_mismatch_invariant_violation() {
             assert!(
                 actual.starts_with("trustee_mismatch:"),
                 "actual ラベルが不変条件③ に一致しない: {actual:?}"
+            );
+        }
+        other => panic!("InvalidPermission を期待したが: {:?}", other),
+    }
+}
+
+// -----------------------------------------------------------------------
+// テストヘルパー（TC-U26 用）
+// -----------------------------------------------------------------------
+
+/// ACE に指定した `AceFlags` を設定した DACL を `AddAccessAllowedAceEx` 経由で適用する。
+///
+/// `apply_dacl_for_test` は `grfInheritance = NO_INHERITANCE` のみ扱うため、
+/// `AceFlags != 0`（継承フラグ付き ACE）のテストにはこちらを使う。
+///
+/// # Safety
+/// `sid` は `SetNamedSecurityInfoW` 完了まで有効でなければならない。
+unsafe fn apply_dacl_with_ace_flags_for_test(
+    path: &Path,
+    sid: PSID,
+    mask: u32,
+    ace_flags: u8,
+    protected: bool,
+) {
+    // ACL サイズ計算:
+    //   ACL ヘッダ(8) + ACE ヘッダ(4) + AccessMask(4) + SID(GetLengthSid)
+    //   → 4 バイト境界に揃える + 余裕 8 バイト
+    let sid_len = GetLengthSid(sid) as usize;
+    let ace_size = (8 + sid_len + 3) & !3; // 4-byte aligned
+    let acl_size = mem::size_of::<ACL>() + ace_size + 8;
+
+    let mut acl_buf = vec![0u8; acl_size];
+    let acl_ptr = acl_buf.as_mut_ptr() as *mut ACL;
+
+    // ACL を初期化する
+    let ok = InitializeAcl(acl_ptr, acl_size as u32, 2 /* ACL_REVISION */);
+    assert!(ok != 0, "InitializeAcl が失敗");
+
+    // 指定した AceFlags で ACCESS_ALLOWED ACE を追加する
+    let ok = AddAccessAllowedAceEx(
+        acl_ptr,
+        2, /* ACL_REVISION */
+        ace_flags as u32,
+        mask,
+        sid,
+    );
+    assert!(ok != 0, "AddAccessAllowedAceEx が失敗");
+
+    let mut wide = path_to_wide(path);
+    let security_info = DACL_SECURITY_INFORMATION
+        | if protected {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            0
+        };
+    let ret = SetNamedSecurityInfoW(
+        wide.as_mut_ptr(),
+        SE_FILE_OBJECT,
+        security_info,
+        ptr::null_mut(),
+        ptr::null_mut(),
+        acl_ptr,
+        ptr::null_mut(),
+    );
+    assert_eq!(ret, ERROR_SUCCESS, "SetNamedSecurityInfoW が失敗: {ret}");
+    // acl_buf は Vec 管理。SetNamedSecurityInfoW が内部コピーするため LocalFree 不要
+}
+
+// -----------------------------------------------------------------------
+// TC-U26: AceFlags != 0（継承フラグ付き ACE）→ AceFlags==0 違反 [negative]
+// -----------------------------------------------------------------------
+
+/// TC-U26 — `ensure_file` 後に owner SID + `EXPECTED_FILE_MASK` で ACE=1 PROTECTED DACL を設定するが
+///          `AceFlags = CONTAINER_INHERIT_ACE (0x02)` を付加すると、`verify_file` が
+///          `actual.starts_with("ace_count: 1 (expected 1); ace[0]: ace_flags=")` の
+///          `InvalidPermission` を返す。
+///
+/// AceFlags==0 検証の単独ネガティブテスト。
+/// ① PROTECTED: pass / ② AceCount=1: pass / ② AceType=ACCESS_ALLOWED: pass
+/// ② AceFlags=0x02 ≠ 0x00: 違反（③ EqualSid / ④ AccessMask には到達しない）。
+#[test]
+fn tc_u26_verify_file_ace_flags_nonzero_invariant_violation() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("vault.db");
+    std::fs::write(&file, b"").unwrap();
+    ensure_file(&file).expect("ensure_file が失敗");
+
+    // 所有者 SID を取得する（_sd_guard は owner_sid の生存期間中保持）
+    let (_sd_guard, owner_sid) =
+        fetch_owner_sid_from_path(&file).expect("fetch_owner_sid_from_path が失敗");
+
+    // CONTAINER_INHERIT_ACE (0x02) を AceFlags に設定した ACE=1 PROTECTED DACL を適用する
+    // owner SID + EXPECTED_FILE_MASK で ①③④ の他の条件はすべて通過させる
+    // ② AceFlags = 0x02 ≠ 0x00 でのみ違反させる
+    unsafe {
+        apply_dacl_with_ace_flags_for_test(
+            &file,
+            owner_sid,
+            EXPECTED_FILE_MASK,
+            0x02, // CONTAINER_INHERIT_ACE
+            true, // protected
+        );
+    }
+
+    let result = verify_file(&file);
+    match result {
+        Err(PersistenceError::InvalidPermission { actual, .. }) => {
+            assert!(
+                actual.starts_with("ace_count: 1 (expected 1); ace[0]: ace_flags="),
+                "actual ラベルが AceFlags 違反に一致しない: {actual:?}"
             );
         }
         other => panic!("InvalidPermission を期待したが: {:?}", other),
