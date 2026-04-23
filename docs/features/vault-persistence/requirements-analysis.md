@@ -106,7 +106,7 @@ Issue #7 マージ直後の工程1で以下を合意:
 | AC-08 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | 結合 |
 | AC-09 | 生 SQL 連結を使っていない（`rusqlite::params!` マクロ経由でのみバインドしている） | 結合（静的 grep） |
 | AC-10 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | 結合（CI） |
-| AC-11 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | 結合（CI） |
+| AC-11 | `cargo clippy --workspace`（`[workspace.lints.clippy]` の `all="deny"` 違反ゼロ、`pedantic="warn"` は意図的に warn として維持し CI を fail させない） / `cargo fmt --check` / `cargo deny check` が全て pass | 結合（CI） |
 | AC-12 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | 結合（Unix） |
 | AC-13 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` または `PersistenceError::Sqlite` が返り panic しない | 結合 |
 | AC-14 | `vault.db.new` が残存した状態で `save()` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、REQ-P05） | 結合 |

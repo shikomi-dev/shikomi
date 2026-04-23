@@ -36,7 +36,7 @@
 | AC-08 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | 結合 |
 | AC-09 | 生 SQL 連結を使っていない（`rusqlite::params!` マクロ経由でのみバインドしている） | 結合（静的 grep） |
 | AC-10 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | 結合（CI） |
-| AC-11 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | 結合（CI） |
+| AC-11 | `cargo clippy --workspace`（`[workspace.lints.clippy]` の `all="deny"` 違反ゼロ、`pedantic="warn"` は意図的に warn として維持し CI を fail させない） / `cargo fmt --check` / `cargo deny check` が全て pass | 結合（CI） |
 | AC-12 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | 結合（Unix） |
 | AC-13 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` または `PersistenceError::Sqlite` が返り panic しない | 結合 |
 | AC-14 | `vault.db.new` が残存した状態で `save()` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、REQ-P05） | 結合 |
@@ -62,7 +62,7 @@
 | TC-I08 | AC-08 | REQ-P09, P12 | 絵文字・CJK・アラビア文字を含む label の save → load round-trip でバイト同一を確認 | 結合 | 境界値 |
 | TC-I09 | AC-09 | REQ-P12 | SQL 文字列連結パターンの静的 grep → マッチ行ゼロ | 結合（静的） | 正常系 |
 | TC-I10 | AC-10 | — | `cargo test -p shikomi-infra` が pass かつ行カバレッジ ≥ 80% | 結合（CI） | 正常系 |
-| TC-I11 | AC-11 | — | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check --all` / `cargo deny check` が全て pass | 結合（CI） | 正常系 |
+| TC-I11 | AC-11 | — | `cargo clippy --workspace`（`[workspace.lints.clippy] all="deny"` 違反ゼロ、`pedantic="warn"` は warn のまま）／ `cargo fmt --check --all` ／ `cargo deny check` が全て pass | 結合（CI） | 正常系 |
 | TC-I12 | AC-12 | REQ-P06 | save 完了後 `stat(vault.db).mode() & 0o777 == 0o600` を確認（Unix） | 結合 | 正常系 |
 | TC-I13 | AC-13 | REQ-P09, P10 | ゼロバイト vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
 | TC-I14 | AC-13 | REQ-P09, P10 | 不正バイト列 vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
@@ -149,7 +149,9 @@ cargo doc -p shikomi-infra --no-deps 2>&1
 echo "TC-I01: PASS"
 
 echo "=== TC-I11: clippy / fmt / deny ==="
-cargo clippy --workspace -- -D warnings 2>&1
+# -D warnings は使わない。workspace.lints.clippy.all="deny" が deny カテゴリを exit 非0 で弾く。
+# pedantic="warn" は意図的設計なので CI を fail させない。
+cargo clippy --workspace 2>&1
 echo "  clippy: PASS"
 cargo fmt --check --all 2>&1
 echo "  fmt: PASS"

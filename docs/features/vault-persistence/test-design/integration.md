@@ -157,8 +157,8 @@
 | 対応する工程 | — |
 | 種別 | 正常系 |
 | 前提条件 | `deny.toml` がリポジトリルートに存在する |
-| 操作 | `cargo clippy --workspace -- -D warnings`、`cargo fmt --check --all`、`cargo deny check` を順に実行 |
-| 期待結果 | 全コマンドが exit code == 0 |
+| 操作 | `cargo clippy --workspace`、`cargo fmt --check --all`、`cargo deny check` を順に実行。**`-D warnings` は付けない**（`[workspace.lints.clippy]` が `all="deny"` / `pedantic="warn"` の 2 段構えのため、deny カテゴリ違反は cargo clippy 自体が exit 非 0 で弾く。`pedantic` の warn は意図的設計で CI を fail させない） |
+| 期待結果 | 全コマンドが exit code == 0。`workspace.lints.clippy.all="deny"` カテゴリの違反がゼロであることが clippy の exit code で担保される |
 
 ---
 
