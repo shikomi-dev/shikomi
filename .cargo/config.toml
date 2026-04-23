@@ -1,7 +1,0 @@
-[target.aarch64-unknown-linux-gnu]
-linker = "/home/agent/bin/cc"
-
-[env]
-CC = "/home/agent/bin/cc"
-AR = "/home/agent/bin/ar"
-LD_LIBRARY_PATH = "/tmp/clang-root/usr/lib/aarch64-linux-gnu:/tmp/clang-root/usr/lib/llvm-19/lib:/tmp/gcc-root/usr/lib/aarch64-linux-gnu:/tmp/gcc-root/usr/lib/gcc/aarch64-linux-gnu/14:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu"

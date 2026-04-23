@@ -25,6 +25,9 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
     "Zlib",
+    # hashlink 0.9.x（rusqlite 0.31 の依存）が MPL-2.0 ライセンス。
+    # Issue #10 で導入した rusqlite による一時例外。rusqlite バージョン更新時に再評価すること。
+    "MPL-2.0",
 ]
 
 [bans]
@@ -47,6 +50,31 @@ skip = [
     # Issue #10 で導入した rusqlite による一時例外。rusqlite バージョン更新時に再評価すること。
     { name = "hashbrown", version = "0.14" },
     { name = "hashbrown", version = "0.15" },
+    { name = "hashbrown", version = "0.17" },
+    # thiserror 1.x は一部の間接依存が旧バージョンを使用する。ワークスペースは 2.x を採用。
+    # Issue #10 で顕在化。各依存クレートのバージョン更新時に再評価すること。
+    { name = "thiserror", version = "1" },
+    { name = "thiserror-impl", version = "1" },
+    # windows-sys / windows-targets / windows_* は各クレートが異なるバージョンを要求するため共存する。
+    # fs4 0.9 / dirs 5 / rusqlite 0.31 の依存チェーンによる。Issue #10 で導入。
+    { name = "windows-sys", version = "0.48" },
+    { name = "windows-sys", version = "0.52" },
+    { name = "windows-sys", version = "0.59" },
+    { name = "windows-targets", version = "0.48" },
+    { name = "windows_aarch64_gnullvm", version = "0.48" },
+    { name = "windows_aarch64_msvc", version = "0.48" },
+    { name = "windows_i686_gnu", version = "0.48" },
+    { name = "windows_i686_msvc", version = "0.48" },
+    { name = "windows_x86_64_gnu", version = "0.48" },
+    { name = "windows_x86_64_gnullvm", version = "0.48" },
+    { name = "windows_x86_64_msvc", version = "0.48" },
+    # rustix / linux-raw-sys は fs4 0.9 が新旧両バージョンを間接依存として持つ。
+    # Issue #10 で導入した fs4 による一時例外。fs4 バージョン更新時に再評価すること。
+    { name = "rustix", version = "0.38" },
+    { name = "linux-raw-sys", version = "0.4" },
+    # getrandom 0.2.x は uuid 1.x の依存。0.4.x は wit-bindgen 経由の新規依存。
+    # Issue #7/#10 で導入。バージョン更新時に再評価すること。
+    { name = "getrandom", version = "0.2" },
 ]
 skip-tree = []
 

@@ -84,7 +84,7 @@ impl AtomicWriter {
                 .unchecked_transaction()
                 .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
-            let header_params = Mapping::vault_header_to_params(vault.header());
+            let header_params = Mapping::vault_header_to_params(vault.header())?;
             tx.execute(
                 SchemaSql::INSERT_VAULT_HEADER,
                 rusqlite::params![
@@ -99,7 +99,7 @@ impl AtomicWriter {
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
             for record in vault.records() {
-                let p = Mapping::record_to_params(record);
+                let p = Mapping::record_to_params(record)?;
                 tx.execute(
                     SchemaSql::INSERT_RECORD,
                     rusqlite::params![
