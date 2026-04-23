@@ -100,17 +100,19 @@ fn tc_i24_save_vault_db_dacl_all_4invariants_ok_on_load() {
 #[test]
 fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
     use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, PSID};
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, PSID};
     use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION,
-        EXPLICIT_ACCESS_W, NO_INHERITANCE, NO_MULTIPLE_TRUSTEE,
-        PROTECTED_DACL_SECURITY_INFORMATION, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
-        TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+        GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
+        NO_MULTIPLE_TRUSTEE, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
+        TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
         AllocateAndInitializeSid, FreeSid, ACL, SID_IDENTIFIER_AUTHORITY,
     };
-    use windows_sys::Win32::System::Memory::LocalFree;
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
+    // SECURITY_INFORMATION フラグのリテラル値（windows-sys 0.52 互換）
+    const DACL_SEC_INFO: u32 = 0x0000_0004; // DACL_SECURITY_INFORMATION
+    const PROTECTED_DACL_SEC_INFO: u32 = 0x8000_0000; // PROTECTED_DACL_SECURITY_INFORMATION
 
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -127,7 +129,7 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
         let ret = GetNamedSecurityInfoW(
             wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            DACL_SEC_INFO,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             &mut p_dacl,
@@ -149,7 +151,7 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
         let ea = EXPLICIT_ACCESS_W {
             grfAccessPermissions: 0x0012_019F, // EXPECTED_FILE_MASK
             grfAccessMode: SET_ACCESS,
-            grfInheritance: NO_INHERITANCE,
+            grfInheritance: 0, // NO_INHERITANCE = 0
             Trustee: TRUSTEE_W {
                 pMultipleTrustee: std::ptr::null_mut(),
                 MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -168,7 +170,7 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
         let ret = SetNamedSecurityInfoW(
             wide_mut.as_mut_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            DACL_SEC_INFO | PROTECTED_DACL_SEC_INFO,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             new_acl,
@@ -176,9 +178,10 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
         );
         assert_eq!(ret, ERROR_SUCCESS, "SetNamedSecurityInfoW が失敗: {ret}");
 
-        LocalFree(new_acl as HLOCAL);
+        // LocalAlloc（= HeapAlloc(GetProcessHeap())）確保領域を解放する
+        HeapFree(GetProcessHeap(), 0, new_acl as *const core::ffi::c_void);
         FreeSid(users_sid);
-        LocalFree(p_sd as HLOCAL);
+        HeapFree(GetProcessHeap(), 0, p_sd as *const core::ffi::c_void);
     }
 
     // load は verify_file を呼ぶ → AceCount=2 で不変条件② 違反
@@ -205,12 +208,11 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
 #[test]
 fn tc_i26_save_dir_dacl_has_protected_bit() {
     use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL};
-    use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, SE_FILE_OBJECT,
-    };
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{GetSecurityDescriptorControl, ACL, SE_DACL_PROTECTED};
-    use windows_sys::Win32::System::Memory::LocalFree;
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
+    const DACL_SEC_INFO: u32 = 0x0000_0004; // DACL_SECURITY_INFORMATION
 
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -231,7 +233,7 @@ fn tc_i26_save_dir_dacl_has_protected_bit() {
         let ret = GetNamedSecurityInfoW(
             wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            DACL_SEC_INFO,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             &mut p_dacl,
@@ -246,7 +248,8 @@ fn tc_i26_save_dir_dacl_has_protected_bit() {
         let ok = GetSecurityDescriptorControl(p_sd, &mut control, &mut revision);
         let protected = ok != 0 && (control & SE_DACL_PROTECTED) != 0;
 
-        LocalFree(p_sd as HLOCAL);
+        // LocalAlloc（= HeapAlloc(GetProcessHeap())）確保領域を解放する
+        HeapFree(GetProcessHeap(), 0, p_sd as *const core::ffi::c_void);
         protected
     };
 
@@ -268,12 +271,13 @@ fn tc_i26_save_dir_dacl_has_protected_bit() {
 #[test]
 fn tc_i27_load_detects_dir_dacl_not_protected() {
     use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL};
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::Security::Authorization::{
-        GetNamedSecurityInfoW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, SE_FILE_OBJECT,
+        GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::ACL;
-    use windows_sys::Win32::System::Memory::LocalFree;
+    use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
+    const DACL_SEC_INFO: u32 = 0x0000_0004; // DACL_SECURITY_INFORMATION
 
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -294,7 +298,7 @@ fn tc_i27_load_detects_dir_dacl_not_protected() {
         let ret = GetNamedSecurityInfoW(
             wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            DACL_SEC_INFO,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             &mut p_dacl,
@@ -309,7 +313,7 @@ fn tc_i27_load_detects_dir_dacl_not_protected() {
         let ret = SetNamedSecurityInfoW(
             wide.as_mut_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | 0x2000_0000u32, // UNPROTECTED_DACL_SECURITY_INFORMATION
+            DACL_SEC_INFO | 0x2000_0000u32, // DACL | UNPROTECTED_DACL_SECURITY_INFORMATION
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             p_dacl,
@@ -317,7 +321,8 @@ fn tc_i27_load_detects_dir_dacl_not_protected() {
         );
         assert_eq!(ret, ERROR_SUCCESS, "SetNamedSecurityInfoW が失敗: {ret}");
 
-        LocalFree(p_sd as HLOCAL);
+        // LocalAlloc（= HeapAlloc(GetProcessHeap())）確保領域を解放する
+        HeapFree(GetProcessHeap(), 0, p_sd as *const core::ffi::c_void);
     }
 
     // load は verify_dir を呼ぶ → SE_DACL_PROTECTED 未設定で不変条件① 違反

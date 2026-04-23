@@ -6,17 +6,20 @@ use std::ptr;
 
 use crate::persistence::error::PersistenceError;
 use tempfile::TempDir;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, PSID};
+use windows_sys::Win32::Foundation::{ERROR_SUCCESS, PSID};
 use windows_sys::Win32::Security::Authorization::{
-    SetEntriesInAclW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION, EXPLICIT_ACCESS_W,
-    NO_INHERITANCE, NO_MULTIPLE_TRUSTEE, PROTECTED_DACL_SECURITY_INFORMATION, SET_ACCESS,
+    SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS,
     SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, AllocateAndInitializeSid, FreeSid, GetLengthSid, InitializeAcl, ACL,
     SID_IDENTIFIER_AUTHORITY,
 };
-use windows_sys::Win32::System::Memory::LocalFree;
+use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
+
+// SECURITY_INFORMATION フラグ: helper.rs と同じリテラル定義（windows-sys 0.52 互換）
+const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
 
 use super::helper::{fetch_owner_sid_from_path, path_to_wide};
 use super::{ensure_dir, ensure_file, verify_dir, verify_file, EXPECTED_FILE_MASK};
@@ -33,7 +36,7 @@ unsafe fn make_ea(sid: PSID, mask: u32) -> EXPLICIT_ACCESS_W {
     EXPLICIT_ACCESS_W {
         grfAccessPermissions: mask,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
+        grfInheritance: 0, // NO_INHERITANCE = 0: ACE フラグなし
         Trustee: TRUSTEE_W {
             pMultipleTrustee: ptr::null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -78,7 +81,8 @@ unsafe fn apply_dacl_for_test(path: &Path, aces: &[EXPLICIT_ACCESS_W], protected
         ret, ERROR_SUCCESS,
         "SetNamedSecurityInfoW が失敗: error={ret}"
     );
-    LocalFree(new_acl as HLOCAL);
+    // SetEntriesInAclW が LocalAlloc（= HeapAlloc(GetProcessHeap())）で確保した ACL を解放する
+    HeapFree(GetProcessHeap(), 0, new_acl as *const core::ffi::c_void);
 }
 
 /// BUILTIN\Users (S-1-5-32-545) の SID を `AllocateAndInitializeSid` で確保する。

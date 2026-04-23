@@ -1,8 +1,7 @@
 #![allow(unsafe_code)]
 
-use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Security::ACL;
-use windows_sys::Win32::System::Memory::LocalFree;
+use windows_sys::Win32::System::Memory::{GetProcessHeap, HeapFree};
 
 // ---------------------------------------------------------------------------
 // RAII ガード
@@ -10,8 +9,10 @@ use windows_sys::Win32::System::Memory::LocalFree;
 
 /// `GetNamedSecurityInfoW` が `LocalAlloc` で返した `PSECURITY_DESCRIPTOR` の RAII ラッパ。
 ///
-/// `Drop` で `LocalFree(ptr)` を呼ぶ。早期 return / panic でも確実に解放する
+/// `Drop` で `HeapFree(GetProcessHeap(), 0, ptr)` を呼ぶ。早期 return / panic でも確実に解放する
 /// （Microsoft Learn 明記のメモリ解放責務を型で強制）。
+/// `LocalAlloc(LMEM_FIXED, ...)` は内部的に `HeapAlloc(GetProcessHeap(), 0, ...)` と同義であるため
+/// `HeapFree(GetProcessHeap(), 0, ...)` で安全に解放できる。
 pub(super) struct SecurityDescriptorGuard {
     pub(super) ptr: *mut core::ffi::c_void,
 }
@@ -19,12 +20,13 @@ pub(super) struct SecurityDescriptorGuard {
 impl Drop for SecurityDescriptorGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            // SAFETY: ptr は GetNamedSecurityInfoW が LocalAlloc で確保した領域。
-            // LocalFree による解放が Microsoft Learn に規定されている。
+            // SAFETY: ptr は GetNamedSecurityInfoW が LocalAlloc（= HeapAlloc(GetProcessHeap())）で
+            // 確保した領域。HeapFree(GetProcessHeap(), 0, ptr) で解放する。
             // Drop 内では panic しない（二重 panic 防止）。
-            let result = unsafe { LocalFree(self.ptr as HLOCAL) };
-            if result != 0 {
-                tracing::warn!("LocalFree(SecurityDescriptorGuard) failed");
+            let result =
+                unsafe { HeapFree(GetProcessHeap(), 0, self.ptr as *const core::ffi::c_void) };
+            if result == 0 {
+                tracing::warn!("HeapFree(SecurityDescriptorGuard) failed");
             }
         }
     }
@@ -32,7 +34,7 @@ impl Drop for SecurityDescriptorGuard {
 
 /// `SetEntriesInAclW` が `LocalAlloc` で確保した新 ACL の RAII ラッパ。
 ///
-/// `Drop` で `LocalFree(ptr)` を呼ぶ。
+/// `Drop` で `HeapFree(GetProcessHeap(), 0, ptr)` を呼ぶ。
 pub(super) struct LocalFreeAclGuard {
     pub(super) ptr: *mut ACL,
 }
@@ -47,10 +49,11 @@ impl LocalFreeAclGuard {
 impl Drop for LocalFreeAclGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            // SAFETY: ptr は SetEntriesInAclW が LocalAlloc で確保した領域。
-            let result = unsafe { LocalFree(self.ptr as HLOCAL) };
-            if result != 0 {
-                tracing::warn!("LocalFree(LocalFreeAclGuard) failed");
+            // SAFETY: ptr は SetEntriesInAclW が LocalAlloc（= HeapAlloc(GetProcessHeap())）で確保した領域。
+            let result =
+                unsafe { HeapFree(GetProcessHeap(), 0, self.ptr as *const core::ffi::c_void) };
+            if result == 0 {
+                tracing::warn!("HeapFree(LocalFreeAclGuard) failed");
             }
         }
     }
@@ -58,7 +61,7 @@ impl Drop for LocalFreeAclGuard {
 
 /// `ConvertSidToStringSidW` が `LocalAlloc` で確保した SID 文字列の RAII ラッパ。
 ///
-/// `Drop` で `LocalFree(ptr)` を呼ぶ。診断文字列生成に使う。
+/// `Drop` で `HeapFree(GetProcessHeap(), 0, ptr)` を呼ぶ。診断文字列生成に使う。
 pub(super) struct SidStringGuard {
     pub(super) ptr: *mut u16,
 }
@@ -83,10 +86,11 @@ impl SidStringGuard {
 impl Drop for SidStringGuard {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            // SAFETY: ptr は ConvertSidToStringSidW が LocalAlloc で確保した領域。
-            let result = unsafe { LocalFree(self.ptr as HLOCAL) };
-            if result != 0 {
-                tracing::warn!("LocalFree(SidStringGuard) failed");
+            // SAFETY: ptr は ConvertSidToStringSidW が LocalAlloc（= HeapAlloc(GetProcessHeap())）で確保した領域。
+            let result =
+                unsafe { HeapFree(GetProcessHeap(), 0, self.ptr as *const core::ffi::c_void) };
+            if result == 0 {
+                tracing::warn!("HeapFree(SidStringGuard) failed");
             }
         }
     }

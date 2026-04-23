@@ -6,12 +6,24 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{ERROR_SUCCESS, PSID};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, DACL_SECURITY_INFORMATION,
-    EXPLICIT_ACCESS_W, NO_INHERITANCE, NO_MULTIPLE_TRUSTEE, OWNER_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
-    TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
+    NO_MULTIPLE_TRUSTEE, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{GetSecurityDescriptorControl, ACL};
+
+// ---------------------------------------------------------------------------
+// SECURITY_INFORMATION フラグ（OBJECT_SECURITY_INFORMATION 型定数）
+// windows-sys 0.52 では Win32::Security::Authorization ではなく
+// Win32::Security モジュールに定義されているため、リテラル値で定義する。
+// Win32 SDK: winnt.h
+// ---------------------------------------------------------------------------
+
+/// `OWNER_SECURITY_INFORMATION` — 所有者 SID を対象とする。
+const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
+/// `DACL_SECURITY_INFORMATION` — DACL を対象とする。
+const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+/// `PROTECTED_DACL_SECURITY_INFORMATION` — DACL を継承から保護する。
+const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
 
 use super::guard::{LocalFreeAclGuard, SecurityDescriptorGuard};
 use crate::persistence::error::PersistenceError;
@@ -23,7 +35,7 @@ use crate::persistence::error::PersistenceError;
 /// SID を `ConvertSidToStringSidW` で文字列化する。失敗時は `"<unknown>"` を返す。
 pub(super) fn sid_to_string(sid: PSID) -> String {
     use super::guard::SidStringGuard;
-    use windows_sys::Win32::Security::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 
     if sid.is_null() {
         return String::from("<null>");
@@ -126,7 +138,7 @@ pub(super) fn build_owner_only_dacl(
     let ea = EXPLICIT_ACCESS_W {
         grfAccessPermissions: access_mask,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
+        grfInheritance: 0, // NO_INHERITANCE = 0: ACE フラグなし（継承させない）
         Trustee: trustee,
     };
 
