@@ -277,6 +277,39 @@ impl Record {
         Ok(self)
     }
 
+    /// 永続化層からレコードを復元する（rehydration コンストラクタ）。
+    ///
+    /// `Record::new` と異なり `created_at` / `updated_at` を引数から直接設定する。
+    /// サブマイクロ秒成分はマイクロ秒精度に切り捨てる。
+    /// 副作用なし・ビジネスロジックなし。時刻順序の検証のみ行う。
+    ///
+    /// # Errors
+    /// `updated_at < created_at` の場合 `DomainError::VaultConsistencyError(InvalidUpdatedAt)`
+    pub fn rehydrate(
+        id: RecordId,
+        kind: RecordKind,
+        label: RecordLabel,
+        payload: RecordPayload,
+        created_at: OffsetDateTime,
+        updated_at: OffsetDateTime,
+    ) -> Result<Self, DomainError> {
+        let created_at = truncate_to_microsecond(created_at);
+        let updated_at = truncate_to_microsecond(updated_at);
+        if updated_at < created_at {
+            return Err(DomainError::VaultConsistencyError(
+                crate::error::VaultConsistencyReason::InvalidUpdatedAt,
+            ));
+        }
+        Ok(Self {
+            id,
+            kind,
+            label,
+            payload,
+            created_at,
+            updated_at,
+        })
+    }
+
     /// ペイロードを更新した新しい `Record` を返す（self を消費）。
     ///
     /// 内部で `updated_at` をマイクロ秒精度に切り捨てる。

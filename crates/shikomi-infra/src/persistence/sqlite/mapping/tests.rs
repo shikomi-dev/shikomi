@@ -331,3 +331,106 @@ fn tc_u09_roundtrip_plaintext_record() {
         record.created_at().format(&Rfc3339).unwrap()
     );
 }
+
+// --- TC-U10: Mapping — save→load ラウンドトリップ（updated_at ≠ created_at、µs 非ゼロ）---
+
+#[test]
+fn tc_u10_roundtrip_record_updated_at_differs_from_created_at() {
+    use crate::persistence::sqlite::schema::SchemaSql;
+    use time::format_description::well_known::Rfc3339;
+
+    let conn = open_in_memory();
+    setup_schema(&conn);
+
+    let header =
+        VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc()).unwrap();
+    let vault = Vault::new(header.clone());
+
+    // µs 非ゼロ: 1_234_567_890_123_456_000 ns → sub-second ns = 123_456_000 → µs = 123_456
+    let created_at =
+        OffsetDateTime::from_unix_timestamp_nanos(1_234_567_890_123_456_000).unwrap();
+    // updated_at = created_at + 1 秒（created_at と明確に異なる値）
+    let updated_at = created_at + time::Duration::seconds(1);
+
+    let record_id = RecordId::new(Uuid::now_v7()).unwrap();
+    let label = RecordLabel::try_new("roundtrip-label".to_string()).unwrap();
+    let secret = SecretString::from_string("roundtrip-value".to_string());
+    let record = Record::rehydrate(
+        record_id,
+        RecordKind::Secret,
+        label,
+        RecordPayload::Plaintext(secret),
+        created_at,
+        updated_at,
+    )
+    .unwrap();
+
+    // 事前確認: created_at と updated_at が異なること
+    assert_ne!(record.created_at(), record.updated_at());
+    // µs 非ゼロ確認（microsecond() は [0, 999_999] の範囲）
+    assert_ne!(
+        record.created_at().microsecond(),
+        0,
+        "created_at の µs 成分が 0 になっている"
+    );
+
+    // INSERT header
+    let hp = Mapping::vault_header_to_params(vault.header()).unwrap();
+    conn.execute(
+        SchemaSql::INSERT_VAULT_HEADER,
+        rusqlite::params![
+            hp.protection_mode,
+            hp.vault_version,
+            hp.created_at_rfc3339,
+            hp.kdf_salt,
+            hp.wrapped_vek_by_pw,
+            hp.wrapped_vek_by_recovery,
+        ],
+    )
+    .unwrap();
+
+    // INSERT record
+    let rp = Mapping::record_to_params(&record).unwrap();
+    conn.execute(
+        SchemaSql::INSERT_RECORD,
+        rusqlite::params![
+            rp.id,
+            rp.kind,
+            rp.label,
+            rp.payload_variant,
+            rp.plaintext_value,
+            rp.nonce,
+            rp.ciphertext,
+            rp.aad_bytes.map(|b| b.to_vec()),
+            rp.created_at,
+            rp.updated_at,
+        ],
+    )
+    .unwrap();
+
+    // SELECT & verify
+    let mut stmt = conn
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .unwrap();
+    let loaded = stmt
+        .query_row([], |row| Ok(Mapping::row_to_record(row).unwrap()))
+        .unwrap();
+
+    assert_eq!(loaded.id().to_string(), record.id().to_string());
+    assert_eq!(loaded.label().as_str(), "roundtrip-label");
+    assert_eq!(
+        loaded.created_at().format(&Rfc3339).unwrap(),
+        record.created_at().format(&Rfc3339).unwrap(),
+        "created_at の RFC3339 ラウンドトリップ失敗"
+    );
+    assert_eq!(
+        loaded.updated_at().format(&Rfc3339).unwrap(),
+        record.updated_at().format(&Rfc3339).unwrap(),
+        "updated_at の RFC3339 ラウンドトリップ失敗"
+    );
+    assert_ne!(
+        loaded.created_at(),
+        loaded.updated_at(),
+        "復元後も created_at ≠ updated_at であること"
+    );
+}

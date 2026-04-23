@@ -306,24 +306,15 @@ impl Mapping {
             }
         };
 
-        // Record::new sets both created_at = updated_at = now (truncated to µs)
-        let record = Record::new(record_id, kind, label.clone(), payload, created_at);
-
-        // If updated_at differs from created_at, apply it via with_updated_label
-        let record = if updated_at != record.created_at() {
-            record.with_updated_label(label, updated_at).map_err(|e| {
-                PersistenceError::Corrupted {
-                    table: "records",
-                    row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::InvalidRowCombination {
-                        detail: format!("failed to restore updated_at: {e}"),
-                    },
-                    source: Some(e),
-                }
-            })?
-        } else {
-            record
-        };
+        let record = Record::rehydrate(record_id, kind, label, payload, created_at, updated_at)
+            .map_err(|e| PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRowCombination {
+                    detail: format!("failed to rehydrate record: {e}"),
+                },
+                source: Some(e),
+            })?;
 
         Ok(record)
     }

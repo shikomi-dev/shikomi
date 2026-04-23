@@ -477,10 +477,10 @@ mod tests {
         let id = record.id().clone();
         vault.add_record(record).unwrap();
         let new_label = RecordLabel::try_new("updated".to_string()).unwrap();
+        // make_plaintext_record() uses UNIX_EPOCH as created_at; use 1s later as update time
+        let later = OffsetDateTime::from_unix_timestamp(1).unwrap();
         vault
-            .update_record(&id, |r| {
-                r.with_updated_label(new_label, OffsetDateTime::UNIX_EPOCH)
-            })
+            .update_record(&id, |r| r.with_updated_label(new_label, later))
             .unwrap();
         let found = vault.find_record(&id).unwrap();
         assert_eq!(found.label().as_str(), "updated");
