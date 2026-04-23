@@ -193,7 +193,7 @@ fn tc_i25_load_detects_broken_file_dacl_ace_count_2() {
                 "actual ラベルが ace_count 不変条件② に一致しない: {actual:?}"
             );
         }
-        other => panic!("InvalidPermission を期待したが: {:?}", other),
+        other => panic!("InvalidPermission を期待したが Err={:?}", other.err()),
     }
 }
 
@@ -334,6 +334,6 @@ fn tc_i27_load_detects_dir_dacl_not_protected() {
                 "actual ラベルが不変条件① に一致しない: {actual:?}"
             );
         }
-        other => panic!("InvalidPermission を期待したが: {:?}", other),
+        other => panic!("InvalidPermission を期待したが Err={:?}", other.err()),
     }
 }
