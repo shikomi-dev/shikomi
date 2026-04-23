@@ -218,3 +218,84 @@ classDiagram
 - `Corrupted { table, row_key, reason, source: Option<shikomi_core::DomainError> }` 単独で `table`・`row_key`・分類理由（`CorruptedReason`）・下位エラー（`#[source]`）が全て揃う。診断性は `DomainError` バリアントと同等以上
 - バリアント総数は当初 10 → 統合で 9 → その後 `Locked` / `InvalidVaultDir` 追加で **最終 11**。呼出側 `match` は依然簡素（Tell, Don't Ask / YAGNI）
 - `From<shikomi_core::DomainError>` は `Corrupted { reason: InvalidRowCombination, source: Some(e), .. }` へマップする手動実装とする（`?` の透過伝播は限定的に残す、ただし `table`/`row_key` 情報が付かないので呼出側が明示で `Corrupted { .. }` を組み立てる方を推奨）
+
+**13. Windows `permission/windows.rs` の内部クラス構成（REQ-P07 実装、本 Issue で追加）**: 公開 API（`ensure_dir` / `ensure_file` / `verify_dir` / `verify_file`）は OS 非依存 trait と同一シグネチャで、**unsafe はシグネチャに出さない**。内部ヘルパは以下の責務で分解する（全て `pub(super)`、`permission/windows.rs` 内に閉じる）:
+
+| 型 / 関数 | 責務 | 備考 |
+|----------|------|------|
+| `struct SecurityDescriptorGuard { ptr: *mut c_void }` | `GetNamedSecurityInfoW` が返した `PSECURITY_DESCRIPTOR` を RAII で保持 | `Drop` で `LocalFree(ptr as HLOCAL)` を呼ぶ。早期 return / panic でも確実に解放（Fail Safe、Microsoft Learn 明記のメモリ責務） |
+| `struct LocalFreeAclGuard { ptr: *mut ACL }` | `SetEntriesInAclW` が返した新 ACL を RAII で保持 | 同上。`SetNamedSecurityInfoW` への引き渡し後も本 guard の寿命中は生存 |
+| `struct SidStringGuard { ptr: PWSTR }` | `ConvertSidToStringSidW` が返した SID 文字列バッファを RAII で保持 | `Drop` で `LocalFree`。`Display` 実装で `&str` に写して `InvalidPermission.actual` に含める |
+| `fn fetch_owner_sid_from_path(path: &Path) -> Result<(SecurityDescriptorGuard, PSID), PersistenceError>` | ファイル側の `OWNER_SECURITY_INFORMATION` を `GetNamedSecurityInfoW` で取得 | 取得した `PSECURITY_DESCRIPTOR` はガード型で保持（SID ポインタは SD 内部、SD より長生きにしない）|
+| `fn build_owner_only_dacl(owner_sid: PSID, access_mask: u32) -> Result<LocalFreeAclGuard, PersistenceError>` | `EXPLICIT_ACCESS_W` 1 個を組み立て `SetEntriesInAclW` で新 DACL を生成 | `access_mask` は呼出側（ファイル or ディレクトリ）が決定。ACE は 1 個のみ、`AceFlags = 0`、`grfAccessMode = SET_ACCESS`、`Trustee.TrusteeForm = TRUSTEE_IS_SID` |
+| `fn apply_protected_dacl(path: &Path, acl: &LocalFreeAclGuard) -> Result<(), PersistenceError>` | `SetNamedSecurityInfoW(SE_FILE_OBJECT, DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で適用 | 所有者は touch しない（既存の `OWNER_SECURITY_INFORMATION` をそのまま使う）|
+| `fn fetch_dacl_and_owner(path: &Path) -> Result<(SecurityDescriptorGuard, PSID, *mut ACL, u32 /*control*/), PersistenceError>` | 検証用：`GetNamedSecurityInfoW` で DACL / 所有者 / Control Flags を 1 回で取得 | Control Flags から `SE_DACL_PROTECTED` bit を抽出 |
+| `fn verify_dacl_owner_only(dacl: *mut ACL, control: u32, owner_sid: PSID, expected_mask: u32) -> Result<(), PersistenceError>` | §`basic-design.md` §Windows owner-only DACL の 4 つの不変条件を検証 | 失敗時は `InvalidPermission { expected, actual: <ACE 列挙文字列> }` を構築。ACE 列挙の文字列化は `SidStringGuard::fmt_aces` に集約 |
+| `const EXPECTED_FILE_MASK: u32 = FILE_GENERIC_READ \| FILE_GENERIC_WRITE` | ファイル用期待 AccessMask | 定数で中央管理、`verify_*` と `build_*` で共有（DRY）|
+| `const EXPECTED_DIR_MASK: u32 = FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE` | ディレクトリ用期待 AccessMask | 同上 |
+
+**設計原則の適用**:
+
+- **unsafe 境界の局所化**: 全 unsafe 呼出は本ファイル内、各ヘルパ関数の 1 関数 1 ブロック（`unsafe { ... }`）に閉じる。`ensure_*` / `verify_*` の公開シグネチャは安全（Fail Safe by type）
+- **RAII ガード 3 種で解放責務を型保証**: `Drop` 忘れ / 早期 return / panic のいずれでも `LocalFree` が走る。Microsoft Learn 記載の解放責務を**コードで忘れられない構造**に落とす
+- **ACE 列挙の文字列化**: `SidStringGuard` が `Display` を実装し、`verify_dacl_owner_only` は失敗時に ACE を列挙して `actual: String` を作る。ここで SID のみ `ConvertSidToStringSidW` を通し、`DeviceIoControl` 等の経路は使わない（攻撃面最小、KISS）
+- **AccessMask の中央管理**: `EXPECTED_FILE_MASK` / `EXPECTED_DIR_MASK` を `const` で 1 箇所定義し、`build_*` と `verify_*` が同じ値を使う。設定と検証でマスクがズレると「書いたのに検証失敗」のバグが発生するため定数化（DRY / Fail Safe）
+- **Unix 実装との対称性**: `unix.rs` が `ensure_*` / `verify_*` の 4 関数で完結しているのと対称に、`windows.rs` も同 4 関数を公開する。内部ヘルパが 8 個あっても公開 API 面積は Unix と同一（`permission/mod.rs` から見て OS 差が見えない、Tell Don't Ask）
+
+**Windows 内部構造図**:
+
+```mermaid
+classDiagram
+    direction TB
+
+    class PermissionGuardWindows {
+        <<module permission::windows, cfg windows>>
+        +ensure_dir(path) Result
+        +ensure_file(path) Result
+        +verify_dir(path) Result
+        +verify_file(path) Result
+        -fetch_owner_sid_from_path(path) Result
+        -build_owner_only_dacl(owner_sid, mask) Result
+        -apply_protected_dacl(path, acl) Result
+        -fetch_dacl_and_owner(path) Result
+        -verify_dacl_owner_only(dacl, control, owner_sid, expected_mask) Result
+        +EXPECTED_FILE_MASK const_u32
+        +EXPECTED_DIR_MASK const_u32
+    }
+
+    class SecurityDescriptorGuard {
+        <<RAII, Drop>>
+        -ptr: PSECURITY_DESCRIPTOR
+        +as_ptr() PSECURITY_DESCRIPTOR
+    }
+
+    class LocalFreeAclGuard {
+        <<RAII, Drop>>
+        -ptr: pointer_to_ACL
+        +as_ptr() pointer_to_ACL
+    }
+
+    class SidStringGuard {
+        <<RAII, Drop, Display>>
+        -ptr: PWSTR
+        +as_str() str_slice
+    }
+
+    class PersistenceError_view {
+        <<external>>
+        InvalidPermission
+    }
+
+    PermissionGuardWindows ..> SecurityDescriptorGuard : owns during verify
+    PermissionGuardWindows ..> LocalFreeAclGuard : owns during ensure
+    PermissionGuardWindows ..> SidStringGuard : uses for error actual field
+    PermissionGuardWindows ..> PersistenceError_view : returns InvalidPermission
+    SecurityDescriptorGuard ..> PersistenceError_view : never directly
+    LocalFreeAclGuard ..> PersistenceError_view : never directly
+    SidStringGuard ..> PersistenceError_view : never directly
+```
+
+補足:
+
+- RAII ガード 3 種は **`Drop` のみを通じて** `LocalFree` を呼ぶ。`Drop` 以外で解放する経路を作らない（二重解放防止）
+- `SecurityDescriptorGuard` / `LocalFreeAclGuard` / `SidStringGuard` はいずれも `!Send + !Sync`（内部の生ポインタが Windows ハンドル由来で、別スレッドへ move すると `LocalFree` のスレッド安全性が保証できない）。必要であれば `#[derive(Debug)]` を意図的に実装せず、ポインタ値をログに載せない（攻撃情報流出の防止）

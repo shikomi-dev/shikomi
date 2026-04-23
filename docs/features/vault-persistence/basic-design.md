@@ -23,7 +23,7 @@
 | REQ-P04, P05 | 〃 `::atomic` | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` | atomic write（`.new` → fsync → rename）、`.new` 残存検出 |
 | REQ-P06, P07 | `shikomi_infra::persistence::permission` | `crates/shikomi-infra/src/persistence/permission/mod.rs` | OS 非依存の検証 API。内部で `cfg_if!` により `unix.rs` / `windows.rs` へ委譲 |
 | REQ-P06 | 〃 `::unix` | `crates/shikomi-infra/src/persistence/permission/unix.rs` | `cfg(unix)` のみ有効。`0o700` / `0o600` 設定・検証 |
-| REQ-P07 | 〃 `::windows` | `crates/shikomi-infra/src/persistence/permission/windows.rs` | `cfg(windows)` のみ有効。NTFS ACL 設定・検証 |
+| REQ-P07 | 〃 `::windows` | `crates/shikomi-infra/src/persistence/permission/windows.rs` | `cfg(windows)` のみ有効。NTFS owner-only DACL 設定・検証（`SetNamedSecurityInfoW` / `GetNamedSecurityInfoW`）。**本モジュールは本 Issue で スタブ → 本実装に置換**、関連ヘルパ（`fetch_owner_sid_from_path`, `build_owner_only_dacl`, `verify_dacl_owner_only`, `SidDisplay`）は `pub(super)` で同ファイル内に閉じる。unsafe boundary は**本ファイル内のみ**（他モジュールは unsafe を書かない）|
 | REQ-P08 | `shikomi_infra::persistence::paths` | `crates/shikomi-infra/src/persistence/paths.rs` | `VaultPaths` 値オブジェクト（ディレクトリ / `vault.db` / `vault.db.new` / `vault.db.lock`）、**`SHIKOMI_VAULT_DIR` バリデーション（パストラバーサル・シンボリックリンク・保護領域拒否）** |
 | REQ-P10 | `shikomi_infra::persistence::error` | `crates/shikomi-infra/src/persistence/error.rs` | `PersistenceError` と付随 Reason 列挙（`CorruptedReason` / `AtomicWriteStage` / `VaultDirReason`） |
 | REQ-P13（新規） | `shikomi_infra::persistence::lock` | `crates/shikomi-infra/src/persistence/lock.rs` | `VaultLock`（プロセス間 advisory lock、RAII ハンドル、`fs4` バックエンド） |
@@ -422,11 +422,15 @@ sequenceDiagram
 - **Zero Trust**: `dirs::data_dir()` の戻り値も同じバリデーションを通す（OS の戻り値だからと無検証にしない）
 - **`with_dir`**: `#[doc(hidden)]` の内部 API はバリデーションを通さない（tempdir の無用な失敗回避）。正規 API（`new()`）のみが検証責任を負う
 
+### Windows owner-only DACL の適用戦略（REQ-P07 の設計、A01 / A05 対応）
+
+Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で達成し、同ユーザ内他プロセス・グループ権限・継承 ACE 経由の open を**作成時強制・検証時再確認の二段階**で封じる。検証時は次の 4 不変条件を全て満たさなければ `InvalidPermission`: **(1)** `SE_DACL_PROTECTED` bit が立つ（親 `%APPDATA%` 等からの継承 ACE を破棄済み）、**(2)** ACE 数 = 1 かつ `ACCESS_ALLOWED_ACE_TYPE`（Deny ACE 不使用、暗黙拒否で十分、KISS）、**(3)** ACE のトラスティ SID がファイル所有者 SID と `EqualSid` で一致（`BUILTIN\Administrators` 等の組込みトラスティ混入拒否）、**(4)** `AccessMask` が期待値と完全一致（ファイル `FILE_GENERIC_READ \| FILE_GENERIC_WRITE` ／ ディレクトリ `+ FILE_TRAVERSE`、`DELETE` / `WRITE_DAC` / `WRITE_OWNER` / `FILE_EXECUTE` 等の過剰ビットは即拒否。`WRITE_DAC` は DACL 再書換を許し壁突破可）。所有者 SID は**ファイル側**の `OWNER_SECURITY_INFORMATION` を `GetNamedSecurityInfoW` で取得し（`OpenProcessToken` + `TokenOwner` は使わない）、UAC 昇格で作成されたファイルの所有者が `BUILTIN\Administrators` になるケース（`SE_CREATE_OWNER_NAME` ポリシー）に対応する。`ensure_*` は所有者を touch せず DACL のみ書換（`SecurityInfo` から `OWNER_SECURITY_INFORMATION` を落とす）。詳細アルゴリズムは `detailed-design/flows.md` §Windows、クラス分解は `detailed-design/classes.md` §13、CI 前提は REQ-P07 受入観点 3 / 4 を参照。
+
 ### OWASP Top 10 対応
 
 | # | カテゴリ | 対応状況 |
 |---|---------|---------|
-| A01 | Broken Access Control | **主対応** — ①vault ファイル / ディレクトリを OS パーミッション（Unix `0600`/`0700`）・NTFS ACL（所有者のみ）で保護、起動時検証（REQ-P06 / P07）。②`SHIKOMI_VAULT_DIR` の **パストラバーサル・シンボリックリンク・保護領域アクセスを `VaultPaths::new` で拒否**（§vault ディレクトリ検証、`InvalidVaultDir`）。③プロセス間 advisory lock（`VaultLock`）で daemon 未起動時の並行書込レースを封じる |
+| A01 | Broken Access Control | **主対応** — ①vault ファイル / ディレクトリを OS パーミッション（Unix `0600`/`0700`）・NTFS owner-only DACL（所有者のみ、継承破棄、ACE ちょうど 1 個、完全マスク）で保護、起動時検証（REQ-P06 / P07、§Windows owner-only DACL の適用戦略）。②`SHIKOMI_VAULT_DIR` の **パストラバーサル・シンボリックリンク・保護領域アクセスを `VaultPaths::new` で拒否**（§vault ディレクトリ検証、`InvalidVaultDir`）。③プロセス間 advisory lock（`VaultLock`）で daemon 未起動時の並行書込レースを封じる |
 | A02 | Cryptographic Failures | **本 Issue 範囲外**（平文モード前提）。暗号化モードは別 Issue。ただし `kdf_salt` / `wrapped_vek_*` / `ciphertext` / `nonce` / `aad` のスキーマは先行定義し、将来の暗号化実装で atomic write・パーミッション層をそのまま再利用できる |
 | A03 | Injection | **主対応** — 生 SQL 連結禁止、`rusqlite::params!` マクロ経由のみ（REQ-P12）。`PRAGMA` は静的リテラルのみ。コードレビュー + grep + clippy で機械的検証 |
 | A04 | Insecure Design | **主対応** — atomic write / `.new` 残存検出 / Fail Secure（勝手に復旧しない）を設計レベルで強制。暗号化モードを静かにスキップせず `UnsupportedYet` で明示拒否（REQ-P11） |
