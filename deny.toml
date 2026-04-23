@@ -43,6 +43,10 @@ skip = [
     # uuid のバージョン更新時に再評価すること。
     { name = "wit-bindgen", version = "0.51.0" },
     { name = "wit-bindgen", version = "0.57.1" },
+    # rusqlite 0.31 が hashbrown 0.14.x に依存し、他の依存が 0.15.x / 0.17.x を使う場合に共存する。
+    # Issue #10 で導入した rusqlite による一時例外。rusqlite バージョン更新時に再評価すること。
+    { name = "hashbrown", version = "0.14" },
+    { name = "hashbrown", version = "0.15" },
 ]
 skip-tree = []
 
