@@ -22,7 +22,9 @@ const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
 const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
 
 use super::helper::{fetch_owner_sid_from_path, path_to_wide};
-use super::{ensure_dir, ensure_file, verify_dir, verify_file, EXPECTED_FILE_MASK};
+use super::{
+    ensure_dir, ensure_file, verify_dir, verify_file, EXPECTED_DIR_MASK, EXPECTED_FILE_MASK,
+};
 
 // -----------------------------------------------------------------------
 // テストヘルパー
@@ -433,39 +435,43 @@ unsafe fn apply_dacl_with_ace_flags_for_test(
 // TC-U26: AceFlags != 0（継承フラグ付き ACE）→ AceFlags==0 違反 [negative]
 // -----------------------------------------------------------------------
 
-/// TC-U26 — `ensure_file` 後に owner SID + `EXPECTED_FILE_MASK` で ACE=1 PROTECTED DACL を設定するが
-///          `AceFlags = CONTAINER_INHERIT_ACE (0x02)` を付加すると、`verify_file` が
+/// TC-U26 — `ensure_dir` 後に owner SID + `EXPECTED_DIR_MASK` で ACE=1 PROTECTED DACL を設定するが
+///          `AceFlags = CONTAINER_INHERIT_ACE (0x02)` を付加すると、`verify_dir` が
 ///          `actual.starts_with("ace_count: 1 (expected 1); ace[0]: ace_flags=")` の
 ///          `InvalidPermission` を返す。
 ///
 /// AceFlags==0 検証の単独ネガティブテスト。
 /// ① PROTECTED: pass / ② AceCount=1: pass / ② AceType=ACCESS_ALLOWED: pass
 /// ② AceFlags=0x02 ≠ 0x00: 違反（③ EqualSid / ④ AccessMask には到達しない）。
+///
+/// ## 注意: ファイルではなくディレクトリで検証する理由
+/// Windows は `SetNamedSecurityInfoW` でファイルACEに設定した `CONTAINER_INHERIT_ACE` を
+/// 自動的に除去する（ファイルはコンテナでないため）。ディレクトリに対しては保持される。
 #[test]
-fn tc_u26_verify_file_ace_flags_nonzero_invariant_violation() {
+fn tc_u26_verify_dir_ace_flags_nonzero_invariant_violation() {
     let tmp = TempDir::new().unwrap();
-    let file = tmp.path().join("vault.db");
-    std::fs::write(&file, b"").unwrap();
-    ensure_file(&file).expect("ensure_file が失敗");
+    // ディレクトリに ensure_dir を適用する（AceFlags=0 の PROTECTED DACL が設定される）
+    ensure_dir(tmp.path()).expect("ensure_dir が失敗");
 
     // 所有者 SID を取得する（_sd_guard は owner_sid の生存期間中保持）
     let (_sd_guard, owner_sid) =
-        fetch_owner_sid_from_path(&file).expect("fetch_owner_sid_from_path が失敗");
+        fetch_owner_sid_from_path(tmp.path()).expect("fetch_owner_sid_from_path が失敗");
 
     // CONTAINER_INHERIT_ACE (0x02) を AceFlags に設定した ACE=1 PROTECTED DACL を適用する
-    // owner SID + EXPECTED_FILE_MASK で ①③④ の他の条件はすべて通過させる
+    // ディレクトリでは CONTAINER_INHERIT_ACE は保持される（ファイルとは異なり除去されない）
+    // owner SID + EXPECTED_DIR_MASK で ①③④ の他の条件はすべて通過させる
     // ② AceFlags = 0x02 ≠ 0x00 でのみ違反させる
     unsafe {
         apply_dacl_with_ace_flags_for_test(
-            &file,
+            tmp.path(),
             owner_sid,
-            EXPECTED_FILE_MASK,
+            EXPECTED_DIR_MASK,
             0x02, // CONTAINER_INHERIT_ACE
             true, // protected
         );
     }
 
-    let result = verify_file(&file);
+    let result = verify_dir(tmp.path());
     match result {
         Err(PersistenceError::InvalidPermission { actual, .. }) => {
             assert!(

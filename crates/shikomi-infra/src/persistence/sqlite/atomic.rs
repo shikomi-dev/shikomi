@@ -138,8 +138,13 @@ impl AtomicWriter {
         let final_path = paths.vault_db();
 
         // `.new` ファイルを fsync
-        let file =
-            std::fs::File::open(new_path).map_err(|e| PersistenceError::AtomicWriteFailed {
+        // Windows では FlushFileBuffers（sync_all の実装）に書き込みアクセスが必要なため、
+        // read(true).write(true) でオープンする。Unix では read-only でも sync_all は成功する。
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(new_path)
+            .map_err(|e| PersistenceError::AtomicWriteFailed {
                 stage: AtomicWriteStage::FsyncTemp,
                 source: e,
             })?;
