@@ -394,7 +394,10 @@ unsafe fn apply_dacl_with_ace_flags_for_test(
     let ace_size = (8 + sid_len + 3) & !3; // 4-byte aligned
     let acl_size = mem::size_of::<ACL>() + ace_size + 8;
 
-    let mut acl_buf = vec![0u8; acl_size];
+    // ACL 構造体は 4 バイトアライメントが必要なため u32 ベクタを使用する
+    // （u8 ベクタからのキャストは clippy::cast_ptr_alignment を引き起こす）
+    let acl_size_words = (acl_size + 3) / 4;
+    let mut acl_buf = vec![0u32; acl_size_words];
     let acl_ptr = acl_buf.as_mut_ptr() as *mut ACL;
 
     // ACL を初期化する

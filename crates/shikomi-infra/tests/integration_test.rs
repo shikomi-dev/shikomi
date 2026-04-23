@@ -206,9 +206,10 @@ fn tc_i03_encrypted_vault_save_unsupported() {
 #[test]
 fn tc_i04_encrypted_vault_db_load_unsupported() {
     let dir = TempDir::new().unwrap();
-
-    // vault.db を rusqlite で直接作成（CHECK 制約なし DDL でサイズ要件を満たす暗号化行を挿入）
     let db_path = dir.path().join("vault.db");
+
+    // Unix: vault.db を rusqlite で直接作成（CHECK 制約なし DDL でサイズ要件を満たす暗号化行を挿入）
+    #[cfg(unix)]
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(
@@ -248,14 +249,30 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
             [],
         )
         .unwrap();
-    }
-
-    // パーミッションを 0600 に設定（Unix のみ）
-    #[cfg(unix)]
-    {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    // Windows: load() が verify_dir / verify_file を呼ぶため、save() で DACL を事前設定し
+    //          その後 vault.db を暗号化モードに UPDATE する（CHECK 制約を満足させる）
+    #[cfg(windows)]
+    {
+        let repo_setup = make_repo(dir.path());
+        repo_setup.save(&make_plaintext_vault(0)).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE vault_header SET \
+               protection_mode = 'encrypted', \
+               kdf_salt = X'00000000000000000000000000000000', \
+               wrapped_vek_by_pw = \
+                 X'0000000000000000000000000000000000000000000000000000000000000000', \
+               wrapped_vek_by_recovery = \
+                 X'0000000000000000000000000000000000000000000000000000000000000000' \
+             WHERE id = 1",
+            [],
+        )
+        .unwrap();
     }
 
     let repo = make_repo(dir.path());
@@ -291,7 +308,14 @@ fn tc_i05_orphan_new_file_on_load() {
 
     match result {
         Err(PersistenceError::OrphanNewFile { path }) => {
-            assert_eq!(path, new_path, "OrphanNewFile のパスが一致しない");
+            // Windows では VaultPaths が canonicalize するため、両パスを正規化して比較する
+            // （raw TempDir パスに 8.3 短縮名が含まれる場合と \\?\ プレフィックスの差異を吸収）
+            let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let canonical_expected = new_path.canonicalize().unwrap_or_else(|_| new_path.clone());
+            assert_eq!(
+                canonical_path, canonical_expected,
+                "OrphanNewFile のパスが一致しない"
+            );
         }
         other => panic!("OrphanNewFile を期待したが Err={:?}", other.err()),
     }
@@ -509,7 +533,15 @@ fn tc_i12_file_permission_after_save() {
 fn tc_i13_zero_byte_vault_db() {
     let dir = TempDir::new().unwrap();
 
-    // ゼロバイトの vault.db を配置
+    // Windows: load() が verify_dir / verify_file を呼ぶため、
+    //          save() で DACL を事前設定する（DACL はファイル内容と独立した NTFS 属性）
+    #[cfg(windows)]
+    {
+        let repo_setup = make_repo(dir.path());
+        repo_setup.save(&make_plaintext_vault(0)).unwrap();
+    }
+
+    // ゼロバイトの vault.db を配置（Windows: DACL は保持されたまま内容のみ上書き）
     let db_path = dir.path().join("vault.db");
     std::fs::write(&db_path, b"").unwrap();
 
@@ -543,6 +575,15 @@ fn tc_i13_zero_byte_vault_db() {
 fn tc_i14_corrupt_vault_db() {
     let dir = TempDir::new().unwrap();
 
+    // Windows: load() が verify_dir / verify_file を呼ぶため、
+    //          save() で DACL を事前設定する（DACL はファイル内容と独立した NTFS 属性）
+    #[cfg(windows)]
+    {
+        let repo_setup = make_repo(dir.path());
+        repo_setup.save(&make_plaintext_vault(0)).unwrap();
+    }
+
+    // 不正バイト列で vault.db を上書き（Windows: DACL は保持されたまま内容のみ上書き）
     let db_path = dir.path().join("vault.db");
     std::fs::write(&db_path, b"this is not a sqlite file\x00\xFF").unwrap();
 
@@ -579,14 +620,26 @@ fn tc_i15_orphan_new_file_on_save() {
     let vault = make_plaintext_vault(1);
 
     // vault.db.new を先に作成（孤立ファイル状態を模倣）
-    // save() は ensure_dir → acquire_lock → detect_orphan の順なので
-    // ディレクトリを先に作成し、その後 .new を置く
-    std::fs::create_dir_all(dir.path()).unwrap();
+    //
+    // Windows: ensure_dir が PROTECTED_DACL_SECURITY_INFORMATION をディレクトリに適用すると
+    //          既存の「継承 ACE のみ」を持つ子ファイルの ACE が除去され inaccessible になる。
+    //          そのため先に save() を呼び出してディレクトリ DACL を確定させてから .new を置く。
+    //          確定後に作成したファイルはプロセストークンのデフォルト DACL（explicit ACE）を持つため
+    //          二回目の ensure_dir の伝播によって除去されない。
+    #[cfg(windows)]
+    {
+        repo.save(&vault).unwrap();
+        // vault.db は残っていてもよい（detect_orphan は .new の存在を先に確認する）
+    }
+
+    // Unix: ディレクトリを先に 0700 で作成し、その後 .new を置く
     #[cfg(unix)]
     {
+        std::fs::create_dir_all(dir.path()).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
+
     let new_path = dir.path().join("vault.db.new");
     std::fs::write(&new_path, b"").unwrap();
 
@@ -594,7 +647,13 @@ fn tc_i15_orphan_new_file_on_save() {
 
     match result {
         Err(PersistenceError::OrphanNewFile { path }) => {
-            assert_eq!(path, new_path, "OrphanNewFile のパスが一致しない");
+            // Windows では VaultPaths が canonicalize するため、両パスを正規化して比較する
+            let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let canonical_expected = new_path.canonicalize().unwrap_or_else(|_| new_path.clone());
+            assert_eq!(
+                canonical_path, canonical_expected,
+                "OrphanNewFile のパスが一致しない"
+            );
         }
         other => panic!("OrphanNewFile を期待したが Err={:?}", other.err()),
     }
