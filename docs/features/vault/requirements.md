@@ -169,3 +169,9 @@
 | `time` | 0.3.x | `serde`, `macros` | `OffsetDateTime` |
 
 全て `Cargo.toml` ルートの `[workspace.dependencies]` 経由で指定し、`crates/shikomi-core/Cargo.toml` では `{ workspace = true }` で参照する（`docs/architecture/tech-stack.md` §4.1 / §4.4）。
+
+## 関連 feature
+
+| feature | 関係 | 参照先 |
+|---------|------|--------|
+| `vault-persistence`（Issue #10 以降） | 本 feature で定義したドメイン型（`Vault` / `VaultHeader` / `Record` / `SecretString` / `WrappedVek` 等）を SQLite に永続化する層。`VaultRepository` trait と `SqliteVaultRepository` 実装を提供。本 feature は I/O を一切持たず、永続化は全て `vault-persistence` に委譲する | `docs/features/vault-persistence/` |

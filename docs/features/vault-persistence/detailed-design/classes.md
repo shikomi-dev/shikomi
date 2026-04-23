@@ -1,0 +1,220 @@
+# 詳細設計 — クラス設計
+
+<!-- feature: vault-persistence / Issue #10 -->
+<!-- 配置先: docs/features/vault-persistence/detailed-design/classes.md -->
+<!-- 上位文書: ./index.md -->
+
+> **記述ルール**: 疑似コード・サンプル実装（python/ts/go等の言語コードブロック）を書かない。Rust のシグネチャはインライン `code` で示す。
+
+## 全体像
+
+```mermaid
+classDiagram
+    direction TB
+
+    class VaultRepository {
+        <<trait>>
+        +load() Result_Vault
+        +save(vault) Result
+        +exists() Result_bool
+    }
+
+    class SqliteVaultRepository {
+        -paths: VaultPaths
+        +new() Result_Self
+        +with_dir(dir) Self
+        +paths() VaultPaths_ref
+        +load() Result_Vault
+        +save(vault) Result
+        +exists() Result_bool
+    }
+
+    class VaultPaths {
+        -dir: PathBuf
+        -vault_db: PathBuf
+        -vault_db_new: PathBuf
+        -vault_db_lock: PathBuf
+        +new(dir) Result_VaultPaths
+        +new_unchecked(dir) VaultPaths
+        +dir() Path_ref
+        +vault_db() Path_ref
+        +vault_db_new() Path_ref
+        +vault_db_lock() Path_ref
+    }
+
+    class VaultLock {
+        -file: File
+        +acquire_exclusive(paths) Result_Self
+        +acquire_shared(paths) Result_Self
+    }
+
+    class Audit {
+        +entry_load(paths)
+        +entry_save(paths, record_count)
+        +exit_ok_load(record_count, protection_mode, elapsed_ms)
+        +exit_ok_save(record_count, bytes_written, elapsed_ms)
+        +exit_err(err, elapsed_ms)
+    }
+
+    class PermissionGuard {
+        +ensure_dir(path) Result
+        +ensure_file(path) Result
+        +verify_dir(path) Result
+        +verify_file(path) Result
+    }
+
+    class AtomicWriter {
+        +detect_orphan(new_path) Result
+        +write_new(new_path, vault) Result
+        +fsync_and_rename(new_path, final_path) Result
+        +cleanup_new(new_path) Result
+    }
+
+    class SchemaSql {
+        +APPLICATION_ID const_u32
+        +USER_VERSION_INITIAL const_u32
+        +CREATE_VAULT_HEADER const_str
+        +CREATE_RECORDS const_str
+        +PRAGMA_JOURNAL_MODE const_str
+        +SELECT_VAULT_HEADER const_str
+        +SELECT_RECORDS const_str
+        +INSERT_VAULT_HEADER const_str
+        +INSERT_RECORD const_str
+    }
+
+    class Mapping {
+        +vault_header_to_params(header) ParamsOwned
+        +row_to_vault_header(row) Result_VaultHeader
+        +record_to_params(record) ParamsOwned
+        +row_to_record(row) Result_Record
+    }
+
+    class PersistenceError {
+        <<enumeration>>
+        Io
+        Sqlite
+        Corrupted
+        InvalidPermission
+        InvalidVaultDir
+        OrphanNewFile
+        AtomicWriteFailed
+        SchemaMismatch
+        UnsupportedYet
+        CannotResolveVaultDir
+        Locked
+    }
+
+    class CorruptedReason {
+        <<enumeration>>
+        MissingVaultHeader
+        UnknownProtectionMode
+        InvalidRowCombination
+        InvalidRfc3339
+        InvalidUuidString
+        PayloadVariantMismatch
+        NullViolation
+    }
+
+    class VaultDirReason {
+        <<enumeration>>
+        PathTraversal
+        SymlinkNotAllowed
+        NotAbsolute
+        ProtectedSystemArea
+        NotADirectory
+        Canonicalize
+    }
+
+    class AtomicWriteStage {
+        <<enumeration>>
+        PrepareNew
+        WriteTemp
+        FsyncTemp
+        FsyncDir
+        Rename
+        CleanupOrphan
+    }
+
+    class Vault_core {
+        <<external>>
+    }
+
+    class VaultHeader_core {
+        <<external>>
+    }
+
+    class Record_core {
+        <<external>>
+    }
+
+    class DomainError_core {
+        <<external>>
+    }
+
+    SqliteVaultRepository ..|> VaultRepository
+    SqliteVaultRepository --> VaultPaths
+    SqliteVaultRepository ..> VaultLock : acquire on load/save
+    SqliteVaultRepository ..> Audit : emits events
+    SqliteVaultRepository ..> PermissionGuard : uses
+    SqliteVaultRepository ..> AtomicWriter : uses
+    SqliteVaultRepository ..> Mapping : uses
+    SqliteVaultRepository ..> SchemaSql : uses
+    SqliteVaultRepository ..> PersistenceError
+    SqliteVaultRepository ..> Vault_core
+    VaultPaths ..> PersistenceError : InvalidVaultDir
+    VaultLock ..> VaultPaths : uses lock path
+    VaultLock ..> PersistenceError : Locked
+    Audit ..> PersistenceError : read only
+    AtomicWriter ..> Mapping
+    AtomicWriter ..> SchemaSql
+    AtomicWriter ..> PermissionGuard : set 0600
+    AtomicWriter ..> AtomicWriteStage
+    AtomicWriter ..> PersistenceError
+    Mapping ..> Vault_core
+    Mapping ..> VaultHeader_core
+    Mapping ..> Record_core
+    Mapping ..> DomainError_core
+    Mapping ..> PersistenceError
+    Mapping ..> CorruptedReason
+    PermissionGuard ..> PersistenceError
+    VaultRepository ..> Vault_core
+    VaultRepository ..> PersistenceError
+```
+
+## 設計判断の補足
+
+**1. なぜ `VaultRepository` を trait とし、`SqliteVaultRepository` を単体実装にするか**: 呼び出し側（`shikomi-daemon`）は trait オブジェクトで受け取り、テスト時は in-memory 実装や mock に差し替えられる（Dependency Inversion / Open-Closed）。本 Issue で in-memory 実装を同梱するかは**スコープ外**（YAGNI）だが、trait 境界は将来のテストダブル差替えに備えて分離。trait オブジェクト利用（`dyn VaultRepository`）を想定し、全 trait メソッドは `&self` 設計（save は内部で `Connection` を都度 open）。
+
+**2. なぜ `VaultPaths` は不変の値オブジェクトにするか**: `dir` から `vault.db` / `vault.db.new` / `vault.db.lock` のパスを派生させるロジックを**1 箇所**に閉じ込めるため。文字列結合を各所で書くと typo（`vault.dbnew` 等）の温床になる（DRY）。不変にすることで save 中の状態変化を防ぐ（Fail Fast）。`new` は 7 段階バリデーション（`basic-design.md` §vault ディレクトリ検証）を通す公開 API。`new_unchecked` は `pub(crate)` の内部 API で `with_dir` 専用（検証スキップ、明示名で危険性を可視化）。
+
+**3. なぜ `AtomicWriter` を別クラスに分離するか**: atomic write は「`.new` への書き込み」「fsync」「rename」「cleanup」の 4 段階があり、各段階で失敗時の責務が異なる。`SqliteVaultRepository::save` に直接書くと関数が 100 行超えになり SRP 違反。`AtomicWriter` は**状態を持たない**（メソッドはいずれも引数の `&VaultPaths` と `&Vault` から計算）、`impl AtomicWriter` の関連関数のみで構成（実質 modulized namespace）。
+
+**4. なぜ `PermissionGuard` を別クラスに分離するか**: OS 別実装（Unix / Windows）を `cfg(unix)` / `cfg(windows)` で切り分けるが、`SqliteVaultRepository` の制御フローを OS 依存にしたくない。`PermissionGuard` が OS 非依存の 4 メソッド（`ensure_dir` / `ensure_file` / `verify_dir` / `verify_file`）を公開し、内部で `cfg_if!` で実装選択（Dependency Inversion の OS レベル適用）。
+
+**5. なぜ `Mapping` を構造体ではなく関連関数の集合にするか**: 写像は**副作用なし・状態なし**の純関数。構造体でラップすると不要なインスタンス生成が発生する（YAGNI）。`Mapping` は空構造体（zero-sized type）にし、関連関数 `Mapping::vault_header_to_params` のようにドット記法で呼び出す（namespace 機能のみ）。
+
+**6. なぜ SQLite トランザクションを `save` 全体でなく「`.new` への書込」で閉じるか**: atomic write 方式は **SQLite トランザクションに頼らず**、ファイルシステムの rename で atomicity を担保する。SQLite トランザクションは `.new` 書込中の一貫性のためだけに使う（複数の `INSERT` が途中で失敗しても `.new` が不完全な状態で残らないことを保証）。rename 失敗時は `.new` 丸ごと削除すれば良いので、SQLite レベルでは単純な 1 トランザクション。
+
+**7. なぜ暗号化モード vault を早期リターンにし、レコード行を読ませないか**: `UnsupportedYet` を返す前に `records` テーブルから BLOB を読むと、万が一スキーマ不整合が起きていた場合に `Corrupted` エラーが優先され、本来知りたい「暗号化モードはまだ未対応」というメッセージが隠れる。ユーザ/呼出側が次にすべき行動が「別 Issue の進捗を待つ」であることを明示するため、最短経路で `UnsupportedYet` を返す（Fail Fast + 診断性）。
+
+**8. なぜ `.new` 残存検出を `load` 側で行うか**: save 側で検出すれば前回の失敗を即座に reported できるが、それだと**前回 save の失敗以降、1 度も `load` されていない状況**で `.new` が放置される。`load` は必ず daemon 起動時に呼ばれるため、ここでの検出が確実。save 側でも一応検出する（`flows.md` §save step 4）が、それは「前回の失敗痕をユーザが放置したまま新たな save を始めた」という特殊ケースの保険。
+
+**9. なぜ親ディレクトリの `fsync` が必要か**: POSIX 2008 で、`rename(2)` のメタデータ更新はディレクトリの `fsync` で永続化することが要求される。これを怠ると「ファイル本体はディスクに書かれたが rename はまだ」という状態で電源断が起きた場合、リブート後に `.new` が残ったまま `vault.db` は古いままという不整合が起きる。Linux / macOS 共に `File::open(dir).sync_all()` で対応。Windows は `ReplaceFileW` が内部でメタデータ flush するため不要。
+
+**10. なぜ `SqliteVaultRepository::save(&self, ...)` か（`&mut self` でない）**: 内部で `Connection` を都度 open するため、`self` 自体には可変状態がない。`&self` なら `Arc<dyn VaultRepository>` で daemon / CLI 間の共有が容易になる。SQLite ファイルへの並行書込は**プロセス内の別スレッドから起きないこと**を daemon のシングルインスタンス保証（`context/process-model.md` §4.1）で担保する。
+
+**11. プロセス間排他（advisory lock）の設計**: daemon シングルインスタンス保証（§4.1）は **daemon が起動している時のみ**有効。daemon 未起動時に CLI / GUI / 将来のリカバリツールが `SqliteVaultRepository` を直接利用するシナリオがあり、複数プロセスが同じ vault ディレクトリで `save` を同時実行する可能性が残る。以下の多層防御で対応する:
+
+- **ロックファイル**: `VaultPaths` が `vault.db.lock` を派生パスに持つ（`vault.db` / `vault.db.new` / `vault.db.lock` の 3 パス体系）。`lock` ファイルは内容ゼロバイト、mode `0o600`
+- **ロック獲得 API**: `pub(crate) struct VaultLock` 型を定義。`acquire_exclusive` / `acquire_shared` で排他・共有ロックを取得、`Drop` で解放（RAII）。Unix は `fs4::FileExt::try_lock_exclusive`（`flock(LOCK_EX | LOCK_NB)`）、Windows は `LockFileEx` の `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`
+- **ロック取得に失敗したら即 return**: `PersistenceError::Locked { path: PathBuf, holder_hint: Option<u32> }`（`holder_hint` は Unix の `F_GETLK` から得た PID、Windows では `None` 固定）。Fail Fast、待機・再試行しない（CLI ユーザに即座にエラー表示し、別プロセス終了を待つか確認させる）
+- **適用範囲**: `save` の全工程を `VaultLock::acquire_exclusive` のスコープで囲む。`load` は共有ロック（`LOCK_SH`）を使い、複数プロセス同時 read を許可。`exists` はロック不要
+- **依存 crate**: `fs4`（`fs2` の積極メンテ中フォーク、2024 年以降も release 継続。OWASP A06 対応として `fs2`（2018 以降停止）ではなく採用）を `[workspace.dependencies]` に追加
+- **別 Issue に出さない根拠**: ロックは「save の整合性」の一部であり、atomic write と同じレイヤで完結させないと中途半端な実装が develop に残る（Boy Scout Rule）。`VaultLock` 型と `PersistenceError::Locked` バリアントを本 Issue 設計に含め、実装も本 Issue で一緒に入れる
+
+**12. `PersistenceError::DomainError` と `Corrupted` の統合**: 当初 `DomainError`（SQLite から読み出したドメイン整合性違反のスルー用）と `Corrupted { source: Option<DomainError> }` の 2 バリアントで `shikomi_core::DomainError` を内包する経路が冗長になっていた（YAGNI 違反）。**本 Issue では `DomainError` バリアントを廃止し、`Corrupted` に一本化**する。理由:
+
+- 永続化層から見て「ドメイン層エラー」と「行データ破損」は**同じ一次事象**（SQLite 行を newtype に通したら不変条件違反が出た）であり、呼出側が区別して処理する動機がない
+- `Corrupted { table, row_key, reason, source: Option<shikomi_core::DomainError> }` 単独で `table`・`row_key`・分類理由（`CorruptedReason`）・下位エラー（`#[source]`）が全て揃う。診断性は `DomainError` バリアントと同等以上
+- バリアント総数は当初 10 → 統合で 9 → その後 `Locked` / `InvalidVaultDir` 追加で **最終 11**。呼出側 `match` は依然簡素（Tell, Don't Ask / YAGNI）
+- `From<shikomi_core::DomainError>` は `Corrupted { reason: InvalidRowCombination, source: Some(e), .. }` へマップする手動実装とする（`?` の透過伝播は限定的に残す、ただし `table`/`row_key` 情報が付かないので呼出側が明示で `Corrupted { .. }` を組み立てる方を推奨）

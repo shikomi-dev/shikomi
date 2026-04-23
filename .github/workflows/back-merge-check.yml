@@ -8,6 +8,8 @@ on:
   # 日次 cron で見落とし検知
   schedule:
     - cron: '0 9 * * *'  # UTC 09:00 = JST 18:00
+  # 手動実行（動作確認・緊急チェック用）
+  workflow_dispatch:
 
 jobs:
   check:
@@ -30,6 +32,17 @@ jobs:
             --jq '[.[] | select(.merged_at != null) | select(.head.ref | test("^(release|hotfix)/")) | {ref: .head.ref, merged_at: .merged_at, number: .number}]')
 
           echo "Merged release/hotfix branches to main: $(echo "$MERGED_BRANCHES" | jq length)"
+
+          # ラベルが存在しない場合は作成（422=既存は無視、それ以外は致命的エラー）
+          if ! LABEL_ERR=$(gh api "repos/$REPO/labels" --method POST \
+              --field name="back-merge-missing" --field color="e11d48" 2>&1); then
+            if echo "$LABEL_ERR" | grep -q "HTTP 422"; then
+              echo "Label 'back-merge-missing' already exists, skipping."
+            else
+              echo "::error::Failed to create label: $LABEL_ERR"
+              exit 1
+            fi
+          fi
 
           MISSING=0
 
@@ -65,26 +78,13 @@ jobs:
                 echo "SKIP: Issue already exists for $REF"
               else
                 echo "Creating issue for missing back-merge: $REF"
+                ISSUE_BODY="$(printf '## Back-Merge 未実施の検知\n\n**ソースブランチ**: `%s`\n**main マージ PR**: #%s\n**main マージ日時**: %s\n**経過時間**: 約 %sh\n\n`%s` が `main` にマージされてから 24h 以上経過しましたが、`develop` への back-merge PR が見つかりません。\n\n## 対応手順\n\n1. `%s` ブランチから `develop` への PR を作成する\n2. CONTRIBUTING.md §2 のリリースフロー 手順 5 を参照\n3. back-merge 完了後、本 Issue をクローズする\n\n> このIssueは `back-merge-check` CI によって自動起票されました (dev.md §7.6)' \
+                    "$REF" "$PR_NUMBER" "$MERGED_AT" "$ELAPSED" "$REF" "$REF")"
                 gh issue create \
                   --repo "$REPO" \
                   --title "chore: back-merge missing — $REF -> develop" \
                   --label "back-merge-missing" \
-                  --body "## Back-Merge 未実施の検知
-
-**ソースブランチ**: \`$REF\`
-**main マージ PR**: #$PR_NUMBER
-**main マージ日時**: $MERGED_AT
-**経過時間**: 約 ${ELAPSED}h
-
-\`$REF\` が \`main\` にマージされてから 24h 以上経過しましたが、\`develop\` への back-merge PR が見つかりません。
-
-## 対応手順
-
-1. \`$REF\` ブランチから \`develop\` への PR を作成する
-2. CONTRIBUTING.md §2 のリリースフロー 手順 5 を参照
-3. back-merge 完了後、本 Issue をクローズする
-
-> このIssueは \`back-merge-check\` CI によって自動起票されました (dev.md §7.6)"
+                  --body "$ISSUE_BODY"
                 MISSING=$((MISSING + 1))
               fi
             fi
