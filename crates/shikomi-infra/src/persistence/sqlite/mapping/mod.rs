@@ -75,17 +75,18 @@ impl Mapping {
     ) -> Result<HeaderParams, PersistenceError> {
         let protection_mode = header.protection_mode().as_persisted_str();
         let vault_version = header.version().value();
-        let created_at_rfc3339 = header
-            .created_at()
-            .format(&Rfc3339)
-            .map_err(|e| PersistenceError::Corrupted {
-                table: "vault_header",
-                row_key: None,
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("failed to serialize created_at as RFC3339: {e}"),
-                },
-                source: None,
-            })?;
+        let created_at_rfc3339 =
+            header
+                .created_at()
+                .format(&Rfc3339)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "vault_header",
+                    row_key: None,
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: format!("failed to serialize created_at as RFC3339: {e}"),
+                    },
+                    source: None,
+                })?;
 
         match header.protection_mode() {
             ProtectionMode::Plaintext => Ok(HeaderParams {
@@ -127,23 +128,23 @@ impl Mapping {
         row: &rusqlite::Row<'_>,
     ) -> Result<VaultHeader, PersistenceError> {
         // Col 0: protection_mode
-        let protection_mode_raw: String =
-            row.get(0).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let protection_mode =
-            ProtectionMode::try_from_persisted_str(&protection_mode_raw).map_err(|e| {
-                PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::UnknownProtectionMode {
-                        raw: protection_mode_raw.clone(),
-                    },
-                    source: Some(e),
-                }
+        let protection_mode_raw: String = row
+            .get(0)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let protection_mode = ProtectionMode::try_from_persisted_str(&protection_mode_raw)
+            .map_err(|e| PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::UnknownProtectionMode {
+                    raw: protection_mode_raw.clone(),
+                },
+                source: Some(e),
             })?;
 
         // Col 1: vault_version (INTEGER → i64 → u16)
-        let vault_version_raw: i64 =
-            row.get(1).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let vault_version_raw: i64 = row
+            .get(1)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let vault_version_u16 =
             u16::try_from(vault_version_raw).map_err(|_| PersistenceError::Corrupted {
                 table: "vault_header",
@@ -164,38 +165,36 @@ impl Mapping {
             })?;
 
         // Col 2: created_at (RFC3339 TEXT)
-        let created_at_raw: String =
-            row.get(2).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let created_at =
-            OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "created_at",
-                        raw: created_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let created_at_raw: String = row
+            .get(2)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let created_at = OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "created_at",
+                    raw: created_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         match protection_mode {
-            ProtectionMode::Plaintext => {
-                VaultHeader::new_plaintext(vault_version, created_at).map_err(|e| {
-                    PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    }
-                })
-            }
+            ProtectionMode::Plaintext => VaultHeader::new_plaintext(vault_version, created_at)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "vault_header",
+                    row_key: Some("1".to_string()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: e.to_string(),
+                    },
+                    source: Some(e),
+                }),
             ProtectionMode::Encrypted => {
                 // Col 3: kdf_salt (BLOB)
-                let kdf_salt_raw: Option<Vec<u8>> =
-                    row.get(3).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let kdf_salt_raw: Option<Vec<u8>> = row
+                    .get(3)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let kdf_salt_bytes = kdf_salt_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "vault_header",
                     row_key: Some("1".to_string()),
@@ -213,8 +212,9 @@ impl Mapping {
                     })?;
 
                 // Col 4: wrapped_vek_by_pw (BLOB)
-                let pw_raw: Option<Vec<u8>> =
-                    row.get(4).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let pw_raw: Option<Vec<u8>> = row
+                    .get(4)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let pw_bytes = pw_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "vault_header",
                     row_key: Some("1".to_string()),
@@ -223,29 +223,8 @@ impl Mapping {
                     },
                     source: None,
                 })?;
-                let wrapped_vek_by_pw = WrappedVek::try_new(pw_bytes.into_boxed_slice())
-                    .map_err(|e| PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    })?;
-
-                // Col 5: wrapped_vek_by_recovery (BLOB)
-                let rec_raw: Option<Vec<u8>> =
-                    row.get(5).map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let rec_bytes = rec_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_recovery",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_recovery =
-                    WrappedVek::try_new(rec_bytes.into_boxed_slice()).map_err(|e| {
+                let wrapped_vek_by_pw =
+                    WrappedVek::try_new(pw_bytes.into_boxed_slice()).map_err(|e| {
                         PersistenceError::Corrupted {
                             table: "vault_header",
                             row_key: Some("1".to_string()),
@@ -254,6 +233,28 @@ impl Mapping {
                             },
                             source: Some(e),
                         }
+                    })?;
+
+                // Col 5: wrapped_vek_by_recovery (BLOB)
+                let rec_raw: Option<Vec<u8>> = row
+                    .get(5)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let rec_bytes = rec_raw.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "vault_header",
+                    row_key: Some("1".to_string()),
+                    reason: CorruptedReason::NullViolation {
+                        column: "wrapped_vek_by_recovery",
+                    },
+                    source: None,
+                })?;
+                let wrapped_vek_by_recovery = WrappedVek::try_new(rec_bytes.into_boxed_slice())
+                    .map_err(|e| PersistenceError::Corrupted {
+                        table: "vault_header",
+                        row_key: Some("1".to_string()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: e.to_string(),
+                        },
+                        source: Some(e),
                     })?;
 
                 VaultHeader::new_encrypted(
@@ -289,28 +290,30 @@ impl Mapping {
             RecordKind::Secret => "secret",
         };
         let label = record.label().as_str();
-        let created_at = record
-            .created_at()
-            .format(&Rfc3339)
-            .map_err(|e| PersistenceError::Corrupted {
-                table: "records",
-                row_key: Some(id.clone()),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("failed to serialize created_at as RFC3339: {e}"),
-                },
-                source: None,
-            })?;
-        let updated_at = record
-            .updated_at()
-            .format(&Rfc3339)
-            .map_err(|e| PersistenceError::Corrupted {
-                table: "records",
-                row_key: Some(id.clone()),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("failed to serialize updated_at as RFC3339: {e}"),
-                },
-                source: None,
-            })?;
+        let created_at =
+            record
+                .created_at()
+                .format(&Rfc3339)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id.clone()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: format!("failed to serialize created_at as RFC3339: {e}"),
+                    },
+                    source: None,
+                })?;
+        let updated_at =
+            record
+                .updated_at()
+                .format(&Rfc3339)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id.clone()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: format!("failed to serialize updated_at as RFC3339: {e}"),
+                    },
+                    source: None,
+                })?;
 
         match record.payload() {
             RecordPayload::Plaintext(secret) => Ok(RecordParams {
@@ -351,17 +354,23 @@ impl Mapping {
     /// - ドメイン型の構築失敗: `PersistenceError::Corrupted`
     pub(crate) fn row_to_record(row: &rusqlite::Row<'_>) -> Result<Record, PersistenceError> {
         // Col 0: id (TEXT)
-        let id_str: String = row.get(0).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let id_str: String = row
+            .get(0)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let record_id =
             RecordId::try_from_str(&id_str).map_err(|e| PersistenceError::Corrupted {
                 table: "records",
                 row_key: Some(id_str.clone()),
-                reason: CorruptedReason::InvalidUuidString { raw: id_str.clone() },
+                reason: CorruptedReason::InvalidUuidString {
+                    raw: id_str.clone(),
+                },
                 source: Some(e),
             })?;
 
         // Col 1: kind (TEXT)
-        let kind_str: String = row.get(1).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let kind_str: String = row
+            .get(1)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let kind = match kind_str.as_str() {
             "text" => RecordKind::Text,
             "secret" => RecordKind::Secret,
@@ -378,59 +387,62 @@ impl Mapping {
         };
 
         // Col 2: label (TEXT)
-        let label_str: String = row.get(2).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let label =
-            RecordLabel::try_new(label_str).map_err(|e| PersistenceError::Corrupted {
-                table: "records",
-                row_key: Some(id_str.clone()),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("invalid label: {e}"),
-                },
-                source: Some(e),
-            })?;
+        let label_str: String = row
+            .get(2)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let label = RecordLabel::try_new(label_str).map_err(|e| PersistenceError::Corrupted {
+            table: "records",
+            row_key: Some(id_str.clone()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: format!("invalid label: {e}"),
+            },
+            source: Some(e),
+        })?;
 
         // Col 3: payload_variant (TEXT)
-        let payload_variant: String =
-            row.get(3).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let payload_variant: String = row
+            .get(3)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
         // Col 8: created_at (RFC3339 TEXT)
-        let created_at_raw: String =
-            row.get(8).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let created_at =
-            OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "records",
-                    row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "created_at",
-                        raw: created_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let created_at_raw: String = row
+            .get(8)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let created_at = OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "created_at",
+                    raw: created_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         // Col 9: updated_at (RFC3339 TEXT)
-        let updated_at_raw: String =
-            row.get(9).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let updated_at =
-            OffsetDateTime::parse(&updated_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "records",
-                    row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "updated_at",
-                        raw: updated_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let updated_at_raw: String = row
+            .get(9)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let updated_at = OffsetDateTime::parse(&updated_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "updated_at",
+                    raw: updated_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         // ペイロード構築
         let payload = match payload_variant.as_str() {
             "plaintext" => {
                 // Col 4: plaintext_value (TEXT)
-                let plaintext: Option<String> =
-                    row.get(4).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let plaintext: Option<String> = row
+                    .get(4)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let value = plaintext.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -443,8 +455,9 @@ impl Mapping {
             }
             "encrypted" => {
                 // Col 5: nonce (BLOB, 12 bytes)
-                let nonce_raw: Option<Vec<u8>> =
-                    row.get(5).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let nonce_raw: Option<Vec<u8>> = row
+                    .get(5)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let nonce_bytes = nonce_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -462,12 +475,15 @@ impl Mapping {
                     })?;
 
                 // Col 6: ciphertext (BLOB)
-                let ct_raw: Option<Vec<u8>> =
-                    row.get(6).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let ct_raw: Option<Vec<u8>> = row
+                    .get(6)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let ct_bytes = ct_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::NullViolation { column: "ciphertext" },
+                    reason: CorruptedReason::NullViolation {
+                        column: "ciphertext",
+                    },
                     source: None,
                 })?;
                 let ciphertext = CipherText::try_new(ct_bytes.into_boxed_slice()).map_err(|e| {
@@ -482,8 +498,9 @@ impl Mapping {
                 })?;
 
                 // Col 7: aad (BLOB, 26 bytes)
-                let aad_raw: Option<Vec<u8>> =
-                    row.get(7).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let aad_raw: Option<Vec<u8>> = row
+                    .get(7)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let aad_bytes = aad_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -495,10 +512,7 @@ impl Mapping {
                         table: "records",
                         row_key: Some(id_str.clone()),
                         reason: CorruptedReason::InvalidRowCombination {
-                            detail: format!(
-                                "aad must be 26 bytes, got {}",
-                                aad_bytes.len()
-                            ),
+                            detail: format!("aad must be 26 bytes, got {}", aad_bytes.len()),
                         },
                         source: None,
                     });
@@ -528,17 +542,16 @@ impl Mapping {
                     }
                 })?;
 
-                let enc =
-                    RecordPayloadEncrypted::new(nonce, ciphertext, aad).map_err(|e| {
-                        PersistenceError::Corrupted {
-                            table: "records",
-                            row_key: Some(id_str.clone()),
-                            reason: CorruptedReason::InvalidRowCombination {
-                                detail: format!("failed to build encrypted payload: {e}"),
-                            },
-                            source: Some(e),
-                        }
-                    })?;
+                let enc = RecordPayloadEncrypted::new(nonce, ciphertext, aad).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.clone()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("failed to build encrypted payload: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
 
                 RecordPayload::Encrypted(enc)
             }
@@ -561,16 +574,16 @@ impl Mapping {
 
         // If updated_at differs from created_at, apply it via with_updated_label
         let record = if updated_at != record.created_at() {
-            record
-                .with_updated_label(label, updated_at)
-                .map_err(|e| PersistenceError::Corrupted {
+            record.with_updated_label(label, updated_at).map_err(|e| {
+                PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
                     reason: CorruptedReason::InvalidRowCombination {
                         detail: format!("failed to restore updated_at: {e}"),
                     },
                     source: Some(e),
-                })?
+                }
+            })?
         } else {
             record
         };

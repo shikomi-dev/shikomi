@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use shikomi_core::{
-    ProtectionMode, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString,
-    Vault, VaultHeader, VaultVersion,
+    ProtectionMode, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString, Vault,
+    VaultHeader, VaultVersion,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;

@@ -69,7 +69,10 @@ impl std::fmt::Display for CorruptedReason {
                 write!(f, "invalid UUID string: {raw:?}")
             }
             Self::PayloadVariantMismatch { expected, got } => {
-                write!(f, "payload variant mismatch: expected {expected:?}, got {got:?}")
+                write!(
+                    f,
+                    "payload variant mismatch: expected {expected:?}, got {got:?}"
+                )
             }
             Self::NullViolation { column } => {
                 write!(f, "required column {column:?} is NULL")
