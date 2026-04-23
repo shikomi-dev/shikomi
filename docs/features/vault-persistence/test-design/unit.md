@@ -231,4 +231,132 @@
 
 ---
 
-*対応 Issue: #10 / 親ドキュメント: `test-design/index.md`*
+---
+
+## TC-U17: PermissionGuard::ensure_dir — owner-only DACL 作成（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U17 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::ensure_dir、classes.md §13） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` で親ディレクトリを作成済み。`{tempdir}/vault_dir/` はまだ存在しない |
+| 操作 | `PermissionGuard::ensure_dir(new_subdir_path)` を呼ぶ（ディレクトリ作成 + DACL 適用） |
+| 期待結果 | `Ok(())` が返る。作成されたディレクトリの DACL を `GetNamedSecurityInfoW` で取得すると ①`SE_DACL_PROTECTED` bit が立っている ②`AceCount == 1` かつ `ACCESS_ALLOWED_ACE_TYPE` ③ ACE のトラスティ SID がディレクトリ所有者 SID と `EqualSid` で一致 ④ `AccessMask` が `EXPECTED_DIR_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE`）と完全一致 |
+
+---
+
+## TC-U18: PermissionGuard::verify_dir — ensure_dir 適用後は 4 不変条件を満たす（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U18 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::verify_dir） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。TC-U17 と同一セットアップ（`ensure_dir` 適用済みのサブディレクトリ） |
+| 操作 | `PermissionGuard::verify_dir(subdir_path)` を呼ぶ |
+| 期待結果 | `Ok(())` |
+
+---
+
+## TC-U19: PermissionGuard::verify_dir — `SE_DACL_PROTECTED` なし（継承 ACE 残存）→ InvalidPermission（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U19 |
+| 対応する受入基準ID | REQ-P07 受入観点③ |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件①） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` が返すディレクトリそのもの（親 `%TEMP%` から ACE を継承しており `SE_DACL_PROTECTED` bit が立っていない状態）。`ensure_dir` は呼ばない |
+| 操作 | `PermissionGuard::verify_dir(tempdir.path())` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE\|FILE_TRAVERSE)", actual, .. })` が返る。`actual` フィールドが `"inherited DACL (SE_DACL_PROTECTED not set)"` と等しい（不変条件①違反の確定ラベル、`flows.md §OS 別パーミッション実装詳細 §Windows` 参照） |
+
+---
+
+## TC-U20: PermissionGuard::ensure_file — owner-only DACL 作成（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U20 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::ensure_file） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_dir` 適用済みの vault ディレクトリ内に空ファイルを `std::fs::File::create` で作成済み |
+| 操作 | `PermissionGuard::ensure_file(file_path)` を呼ぶ（DACL 書換のみ、所有者 touch なし） |
+| 期待結果 | `Ok(())` が返る。ファイルの DACL を `GetNamedSecurityInfoW` で取得すると ①`SE_DACL_PROTECTED` bit が立っている ②`AceCount == 1` かつ `ACCESS_ALLOWED_ACE_TYPE` ③ ACE のトラスティ SID がファイル所有者 SID と `EqualSid` で一致 ④ `AccessMask` が `EXPECTED_FILE_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE`）と完全一致 |
+
+---
+
+## TC-U21: PermissionGuard::verify_file — ensure_file 適用後は 4 不変条件を満たす（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U21 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::verify_file） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。TC-U20 と同一セットアップ（`ensure_file` 適用済みのファイル） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Ok(())` |
+
+---
+
+## TC-U22: PermissionGuard::verify_file — ACE 追加後（AceCount = 2、SE_DACL_PROTECTED 維持）→ 不変条件② 単独違反（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U22 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件②） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_file` 適用済みファイルに対し、`EXPLICIT_ACCESS_W` で `BUILTIN\Users` への `GENERIC_READ` Allow ACE を追加する。`SetNamedSecurityInfoW` 呼び出し時は `DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION` の両フラグを指定し、`SE_DACL_PROTECTED` を**維持したまま** ACE 数のみ 2 にする（不変条件①は意図的に満たしたまま②のみを壊す） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { actual, .. })` が返る。`actual` フィールドに全 ACE の列挙文字列（`trustee_sid=<SID>, ace_type=..., access_mask=0x<hex>` の形式 2 行分）が含まれる（不変条件②単独違反——`SE_DACL_PROTECTED` は立っているため①はパス、`AceCount == 2` で②が失敗） |
+
+---
+
+## TC-U24: PermissionGuard::verify_file — AccessMask に余剰ビット（WRITE_DAC）→ 不変条件④ 単独違反（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U24 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件④） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_file` 適用済みファイルに対し、`EXPLICIT_ACCESS_W` を 1 個（ACE 数 = 1 を維持）、トラスティはファイル所有者 SID（`fetch_owner_sid_from_path` で取得した SID と同一）、`grfAccessPermissions = FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| WRITE_DAC`（`EXPECTED_FILE_MASK` に `WRITE_DAC` を追加した過剰マスク）に設定し `SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で DACL を書き換える（不変条件①②③は全て満たしたまま④のみを壊す） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { actual, .. })` が返る。`actual` フィールドが `"ace_mask=0x<実際のマスク値>, expected=0x<EXPECTED_FILE_MASK 値>"` の形式と一致する（不変条件④単独違反——①`SE_DACL_PROTECTED` 立ち、②`AceCount=1`、③所有者 SID 一致、を全てパスした後に④ `AccessMask` 不一致で失敗。`WRITE_DAC` が 1 ビットでも余分にあれば攻撃者が DACL を後から書き換えられるため、ビット包含チェックではなく完全一致で防ぐ） |
+
+---
+
+## TC-U23: PermissionGuard::ensure_dir + verify_dir — UAC 昇格ランナーで所有者が BUILTIN\Administrators でも成立（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U23 |
+| 対応する受入基準ID | REQ-P07 受入観点④ |
+| 対応する工程 | 詳細設計（REQ-P07、fetch_owner_sid_from_path — ファイル側 OWNER SID 取得ポリシー） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`windows-latest` CI ランナーはデフォルトで管理者実行のため、作成ディレクトリの所有者が `BUILTIN\Administrators` SID になりうる。プロセストークン所有者（`GetCurrentProcess` + `TokenOwner`）と一致しない可能性がある |
+| 操作 | 1. `ensure_dir(subdir_path)` を呼ぶ 2. `verify_dir(subdir_path)` を呼ぶ |
+| 期待結果 | `ensure_dir` と `verify_dir` がともに `Ok(())` を返す。`ensure_dir` が**ファイル側の `OWNER_SECURITY_INFORMATION`**（`GetNamedSecurityInfoW` で取得した SID）を ACE トラスティとして使っているため、所有者が `BUILTIN\Administrators` であっても ACE 1 個 + `EqualSid` 一致の契約が成立する |
+
+---
+
+## TC-U25: PermissionGuard::verify_file — ACE トラスティが所有者 SID 以外（SE_DACL_PROTECTED 維持・ACE=1・AccessMask 維持）→ 不変条件③ 単独違反（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U25 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件③） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_file` 適用済みファイルに対し、`EXPLICIT_ACCESS_W` を 1 個（ACE 数 = 1 を維持）、`AccessMask = EXPECTED_FILE_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE`）を維持、`grfAccessMode = SET_ACCESS`、`AceFlags = 0`、`Trustee.TrusteeForm = TRUSTEE_IS_SID` で、**トラスティ SID だけを `BUILTIN\Users` の well-known SID（`S-1-5-32-545`）に書き換える**。`SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で DACL を適用し、`SE_DACL_PROTECTED` は維持したまま ACE 数・AccessMask は変更しない（不変条件①②④は意図的に満たしたまま③のみを壊す） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { actual, .. })` が返る。`actual` フィールドが `trustee_mismatch` ラベル形式——所有者 SID（例: `S-1-5-21-...`）と ACE トラスティ SID（`S-1-5-32-545`）の両方を `ConvertSidToStringSidW` で文字列化した診断文字列を含む（`flows.md §OS 別パーミッション実装詳細 §Windows` の `EqualSid` 失敗時フォーマット参照）。不変条件①`SE_DACL_PROTECTED` 立ち・②`AceCount=1`・④`AccessMask` 一致 を全てパスした後に③`EqualSid` 失敗で Fail Fast する順序を確認 |
+
+---
+
+*対応 Issue: #14 / 親ドキュメント: `test-design/index.md`*

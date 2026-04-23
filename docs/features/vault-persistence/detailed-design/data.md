@@ -56,7 +56,7 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 
 ### `VaultPaths`
 
-- `pub fn new(dir: PathBuf) -> Result<Self, PersistenceError>` — **公開 API**、7 段階バリデーションを通す（`basic-design.md` §vault ディレクトリ検証）。失敗は `InvalidVaultDir { path, reason: VaultDirReason }`
+- `pub fn new(dir: PathBuf) -> Result<Self, PersistenceError>` — **公開 API**、7 段階バリデーションを通す（`../basic-design/security.md` §vault ディレクトリ検証）。失敗は `InvalidVaultDir { path, reason: VaultDirReason }`
 - `pub(crate) fn new_unchecked(dir: PathBuf) -> Self` — **crate 内部・infallible**。バリデーションをスキップしパスだけを派生させる（`with_dir` 専用）。`pub(crate)` で crate 外からは呼べない。明示的な `_unchecked` サフィックスで「検証を意図的にスキップしている」ことを型名で可視化（Fail Safe by naming）
 - `pub fn dir(&self) -> &Path` — canonicalize 済みの絶対パス（`new` 経由の場合）
 - `pub fn vault_db(&self) -> &Path`
@@ -75,7 +75,7 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 - `pub(crate) fn entry_save(paths: &VaultPaths, record_count: usize)` — `save` 冒頭の info イベント発行
 - `pub(crate) fn exit_ok_load(record_count: usize, protection_mode: ProtectionMode, elapsed_ms: u64)` — load 成功時
 - `pub(crate) fn exit_ok_save(record_count: usize, bytes_written: u64, elapsed_ms: u64)` — save 成功時
-- `pub(crate) fn exit_err(err: &PersistenceError, elapsed_ms: u64)` — 全エラー経路の終了イベント（内部でバリアント→レベル写像、`basic-design.md` §監査ログ規約参照）
+- `pub(crate) fn exit_err(err: &PersistenceError, elapsed_ms: u64)` — 全エラー経路の終了イベント（内部でバリアント→レベル写像、`../basic-design/security.md` §監査ログ規約参照）
 
 ### `PersistenceError`（`thiserror::Error` derive）
 

@@ -330,4 +330,62 @@
 
 ---
 
-*対応 Issue: #10 / 親ドキュメント: `test-design/index.md`*
+---
+
+## TC-I24: save 後の vault.db は owner-only DACL（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I24 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 基本設計（REQ-P07、save フロー step 6「作成直後にファイルパーミッションを所有者 ACL 設定」） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` を使用 |
+| 操作 | 1. `repo.save(&vault)` 2. `GetNamedSecurityInfoW` で `vault.db` の DACL と所有者 SID を取得 |
+| 期待結果 | `save()` が `Ok(())` を返す。vault.db の DACL が 4 不変条件を満たす: ①`SE_DACL_PROTECTED` bit が立っている ②`AceCount == 1` かつ `ACCESS_ALLOWED_ACE_TYPE` ③ACE トラスティ SID が所有者 SID と `EqualSid` で一致 ④`AccessMask == FILE_GENERIC_READ \| FILE_GENERIC_WRITE`（`DELETE` / `WRITE_DAC` 等の追加ビットなし） |
+
+---
+
+## TC-I25: vault.db の DACL 破損後 load → InvalidPermission（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I25 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 基本設計（REQ-P07、load フロー step 4「ファイルのパーミッション確認」） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`repo.save(&vault)` 完了済み。vault.db に対し、テストコード内で `BUILTIN\Users` への `GENERIC_READ` Allow ACE を `SetNamedSecurityInfoW` で追加し DACL を壊す（ACE 数 = 2 かつ `PROTECTED_DACL_SECURITY_INFORMATION` なし） |
+| 操作 | `repo.load()` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE)", actual, .. })` が返る。`actual` フィールドに全 ACE の列挙文字列（`trustee_sid=<SID>, ace_type=..., access_mask=0x<hex>` の形式 2 行分）が含まれる——不変条件②（`ace_count`）違反時のラベル形式（`flows.md §OS 別パーミッション実装詳細 §Windows` 参照）。秘密値を含まない |
+
+---
+
+## TC-I26: 継承 ACE 破棄の確認 — ensure_dir 後に SE_DACL_PROTECTED が設定される（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I26 |
+| 対応する受入基準ID | REQ-P07 受入観点③ |
+| 対応する工程 | 基本設計（REQ-P07、save フロー step 3「PermissionGuard::ensure_dir — DACL 適用」） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` 直下に vault ディレクトリパスを指定（親 `%TEMP%` から ACE を継承した状態が初期値）。`repo.save` の前に vault ディレクトリが存在しないことを確認済み |
+| 操作 | 1. `repo.save(&vault)`（内部で `ensure_dir` が vault ディレクトリを作成・DACL 適用） 2. `GetNamedSecurityInfoW` で vault ディレクトリの Control Flags を取得 |
+| 期待結果 | `save()` が `Ok(())` を返す。取得した Control Flags に `SE_DACL_PROTECTED` bit が立っている（親 `%TEMP%` からの継承 ACE が破棄されている）。vault ディレクトリの ACE 数は 1 |
+
+---
+
+## TC-I27: vault dir DACL 破損後 load → InvalidPermission（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I27 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 基本設計（REQ-P07、load フロー step 1「PermissionGuard::verify_dir」） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`repo.save(&vault)` 完了済み。vault ディレクトリに対し、`SetNamedSecurityInfoW` で `DACL_SECURITY_INFORMATION`（`PROTECTED_DACL_SECURITY_INFORMATION` を除く）で書き換えることで `SE_DACL_PROTECTED` bit を意図的に落とす |
+| 操作 | `repo.load()` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE\|FILE_TRAVERSE)", actual, .. })` が返る。`actual` フィールドが `"inherited DACL (SE_DACL_PROTECTED not set)"` と等しい——不変条件①（`inherited`）違反時の確定ラベル（`flows.md §OS 別パーミッション実装詳細 §Windows` 参照）。`vault.db` は変更されていない |
+
+---
+
+*対応 Issue: #10, #14 / 親ドキュメント: `test-design/index.md`*

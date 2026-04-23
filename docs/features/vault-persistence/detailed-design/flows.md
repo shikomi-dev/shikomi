@@ -15,7 +15,7 @@
 | `Io { path: PathBuf, #[source] source: std::io::Error }` | 対象パスと原因 | ファイルシステム操作 |
 | `Sqlite { #[source] source: rusqlite::Error }` | — | SQLite API |
 | `Corrupted { table: &'static str, row_key: Option<String>, reason: CorruptedReason, #[source] source: Option<shikomi_core::DomainError> }` | 対象テーブル名、特定できる場合は row PK（UUID 文字列）、原因分類、下位ドメインエラー（旧 `DomainError` バリアントを本バリアントに統合、`classes.md` §設計判断 §12 参照） | `Mapping::row_to_*` / `Vault::add_record` 失敗 |
-| `InvalidPermission { path: PathBuf, expected: &'static str, actual: String }` | 対象パス、期待値（例: `"0600"` or `"owner-only DACL"`）、実測（mode 数値文字列または DACL 要約） | `PermissionGuard::verify_*` |
+| `InvalidPermission { path: PathBuf, expected: &'static str, actual: String }` | 対象パス、期待値（Unix: `"0600"` or `"0700"`、Windows: `"owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE[\|FILE_TRAVERSE])"`）、実測（Unix: `"0644"` 等の mode 数値文字列、Windows: ACE 列挙診断文字列 `trustee_sid=S-1-5-21-..., ace_type=..., access_mask=0x...` の集合 + 4 不変条件のどれが壊れたかの先頭ラベル `inherited/ace_count/trustee_mismatch/mask_mismatch`、§`OS 別パーミッション実装詳細 §Windows` 参照） | `PermissionGuard::verify_*` |
 | `InvalidVaultDir { path: PathBuf, reason: VaultDirReason }` | `SHIKOMI_VAULT_DIR` が危険パス（パストラバーサル・シンボリックリンク・root 保護領域等）を指している場合 | `VaultPaths::new` のバリデーション |
 | `OrphanNewFile { path: PathBuf }` | `.new` 絶対パス | `AtomicWriter::detect_orphan` |
 | `AtomicWriteFailed { stage: AtomicWriteStage, #[source] source: std::io::Error }` | stage 列挙、下位 I/O error | `AtomicWriter::*` |
@@ -113,7 +113,7 @@
 
 1. `self.paths.vault_db().try_exists().map_err(|e| PersistenceError::Io { path: self.paths.vault_db().to_path_buf(), source: e })`
 
-（`exists` は軽量クエリのため `audit::entry_*` / `exit_*` は呼ばず、`tracing::debug!` で「呼出と結果」を直接記録する例外扱いとする — `basic-design.md` §監査ログ規約）
+（`exists` は軽量クエリのため `audit::entry_*` / `exit_*` は呼ばず、`tracing::debug!` で「呼出と結果」を直接記録する例外扱いとする — `../basic-design/security.md` §監査ログ規約）
 
 ### `AtomicWriter::write_new_only`（テスト専用フック、AC-06 対応）
 
@@ -132,18 +132,62 @@
 - `verify_file`: `fs::metadata(path)?.permissions().mode() & 0o777 == 0o600` を検証
 - macOS / Linux で挙動は同一（`std::os::unix::fs` が共通 trait を提供）
 
-### Windows（`cfg(windows)`）
+### Windows（`cfg(windows)`、REQ-P07 本実装）
 
-- `ensure_dir` / `ensure_file`:
-  1. `GetSidSubAuthorityCount` 等で現在のプロセスの所有者 SID を取得
-  2. `BuildExplicitAccessWithNameW`（または `EXPLICIT_ACCESS_W` を直接構築）で所有者 SID に `GENERIC_READ | GENERIC_WRITE` を Allow
-  3. `SetEntriesInAclW` で新 DACL を構築
-  4. `SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ...)` で適用（継承を破棄）
-- `verify_dir` / `verify_file`:
-  1. `GetNamedSecurityInfoW` で DACL を取得
-  2. `GetAclInformation` で ACE 数を取得
-  3. 各 ACE を `GetAce` で取得、所有者 SID 以外のトラスティが **Allow ACE を持っていれば拒否**、所有者 SID の ACE に含まれる AccessMask が `GENERIC_READ | GENERIC_WRITE` 以外の権限（`GENERIC_EXECUTE`, `DELETE` 等）を含めば異常
-- Windows の `ReplaceFileW`（`windows::Win32::Storage::FileSystem`）: `lpReplacementFileName = .new`, `lpReplacedFileName = vault.db`, `dwReplaceFlags = REPLACEFILE_WRITE_THROUGH`（内部で fsync 相当が走る）, `lpBackupFileName = null_ptr`（バックアップ不要）
+> **参照**: 設計根拠は `../basic-design/security.md` §Windows owner-only DACL の適用戦略、`unsafe_code` lint 例外方針は同 §`unsafe_code` 整合方針、クラス分解は `classes.md` §設計判断 §13 を参照。本節は制御フローのみを扱う。一次情報出典: Microsoft Learn "SetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow / "GetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow / "File Access Rights Constants" https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants / windows-rs docs https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Security/Authorization/index.html
+
+#### `ensure_dir(path: &Path)` / `ensure_file(path: &Path)` 制御フロー
+
+1. `std::fs::create_dir_all(path)?`（`ensure_dir` のみ）または `std::fs::OpenOptions::new().create(true).write(true).open(path)?`（`ensure_file` のみ）でパスを物理作成し、即 drop。作成前から存在する場合はスキップ
+2. `fetch_owner_sid_from_path(path)?` → `(sd_guard, owner_sid)` を取得。`sd_guard: SecurityDescriptorGuard` は Drop で `LocalFree`。`owner_sid: PSID` は `sd_guard` 内部ポインタで、`sd_guard` より長生きさせない
+3. `build_owner_only_dacl(owner_sid, access_mask)?` を呼ぶ。`access_mask` は `ensure_file` なら `EXPECTED_FILE_MASK`、`ensure_dir` なら `EXPECTED_DIR_MASK`。内部で:
+   - `EXPLICIT_ACCESS_W` 1 個を構築: `grfAccessPermissions = access_mask`、`grfAccessMode = SET_ACCESS`、`grfInheritance = NO_INHERITANCE`（`AceFlags = 0` と等価）、`Trustee.TrusteeForm = TRUSTEE_IS_SID`、`Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN`、`Trustee.ptstrName = owner_sid as *mut u16`
+   - `SetEntriesInAclW(1, &explicit_access, null_mut(), &mut new_acl)` 呼出、戻り値 `DWORD == ERROR_SUCCESS (0)` 以外なら `InvalidPermission` で即 return（Fail Fast）
+   - 返された `new_acl: *mut ACL` を `LocalFreeAclGuard` で包む
+4. `apply_protected_dacl(path, &acl_guard)?` を呼ぶ。内部で:
+   - `path_hstring = HSTRING::from(path.as_os_str())` を let-binding で束縛（一時式で drop 禁止）
+   - `SetNamedSecurityInfoW(PCWSTR(path_hstring.as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, None, None, Some(acl_guard.as_ptr()), None)` 呼出
+   - 戻り値 `WIN32_ERROR == ERROR_SUCCESS (0)` 以外なら `Io { path, source: std::io::Error::from_raw_os_error(err as i32) }` で return（`SetNamedSecurityInfoW` は `WIN32_ERROR` を直接返す）
+5. **所有者 SID は touch しない** — `SetNamedSecurityInfoW` の `psidOwner` / `psidGroup` 引数は `None`、`SecurityInfo` からも `OWNER_SECURITY_INFORMATION` / `GROUP_SECURITY_INFORMATION` を落とす。これによりファイル作成時の OS デフォルト所有者（UAC 環境では `BUILTIN\Administrators`）を保持したまま DACL のみ書き換える（`../basic-design/security.md` §Windows owner-only DACL の適用戦略 §所有者 SID の取得）
+6. `acl_guard` / `sd_guard` が関数終了で drop し、`LocalFree` 経由で Win32 ヒープへ返却される
+7. `Ok(())`
+
+#### `verify_dir(path: &Path)` / `verify_file(path: &Path)` 制御フロー
+
+1. `fetch_dacl_and_owner(path)?` → `(sd_guard, owner_sid, dacl_ptr, control_flags)` を取得
+   - 内部で `GetNamedSecurityInfoW(path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &mut psid_owner, None, &mut pdacl, None, &mut psd)` 呼出
+   - `psd` が NULL / 戻り値が `ERROR_SUCCESS` 以外なら `Io { path, source: from_raw_os_error }` で return
+   - `psd` を `SecurityDescriptorGuard` に包む。`psid_owner` / `pdacl` は SD 内部ポインタ、`sd_guard` の寿命内でのみ参照
+   - `control_flags` は別途 `GetSecurityDescriptorControl(psd, &mut control, &mut rev)` で取得
+2. `verify_dacl_owner_only(dacl_ptr, control_flags, owner_sid, expected_mask)?` を呼ぶ。`expected_mask` は `verify_file` なら `EXPECTED_FILE_MASK`、`verify_dir` なら `EXPECTED_DIR_MASK`。内部で 4 不変条件を順に検証:
+   1. `(control_flags & SE_DACL_PROTECTED) != 0` — 継承破棄済み。違反なら `InvalidPermission { expected: "owner-only DACL (...)", actual: "inherited DACL (SE_DACL_PROTECTED not set)" }`
+   2. `GetAclInformation(dacl_ptr, &mut info, size_of::<ACL_SIZE_INFORMATION>(), AclSizeInformation)?` で `AceCount` を取得、`info.AceCount == 1` を要求。違反なら `InvalidPermission { actual: <全 ACE 列挙文字列> }`（列挙は step 3 のループで都度文字列化）
+   3. `GetAce(dacl_ptr, 0, &mut pace)?` で唯一の ACE を取得、`pace.AceHeader.AceType == ACCESS_ALLOWED_ACE_TYPE` を要求（Deny / Audit / Alarm は拒否）、`pace.AceHeader.AceFlags == 0` を要求（継承フラグ無し）。`&(*pace).SidStart as *const u32 as PSID` で SID を取り出し、`EqualSid(ace_sid, owner_sid) != 0` を要求（一致しなければ `SidStringGuard` で両 SID を文字列化して `actual` に詰める）
+   4. `(*pace).Mask == expected_mask` を要求（完全一致、ビット演算での包含チェックではない）。違反なら `InvalidPermission { actual: "ace_mask=0x<hex>, expected=0x<hex>" }`
+3. 全条件成立 → `Ok(())`、sd_guard が drop し `LocalFree`
+
+#### エラー変換方針（Windows 固有）
+
+| 事象 | 変換先バリアント | ラップ内容 |
+|-----|---------------|----------|
+| `SetNamedSecurityInfoW` / `GetNamedSecurityInfoW` 等の API 戻り値が `ERROR_SUCCESS` 以外 | `PersistenceError::Io { path, source }` | `std::io::Error::from_raw_os_error(err as i32)` で下位 I/O エラー化。`Sqlite` でも `InvalidPermission` でもない（OS レベルの I/O 失敗） |
+| DACL 契約違反（4 不変条件のいずれか） | `PersistenceError::InvalidPermission { path, expected, actual }` | `expected: &'static str` は `const` 定数、`actual: String` は診断文字列（ACE 列挙 / SID 文字列） |
+| `path` が UTF-16 に変換不可（通常起きない） | `PersistenceError::Io { path, source: ErrorKind::InvalidInput }` | `HSTRING::from` は実質 infallible だが保険で扱う |
+| RAII ガードの Drop 内で `LocalFree` 失敗 | ログのみ（`tracing::warn!`）、panic しない | `Drop` で panic するとスタックアンワインド中の panic で二重 panic になるため。元のエラーは既に return 済み |
+
+#### 具象関数別の責務マトリクス（`windows.rs` 内）
+
+| 公開 API | 呼ぶヘルパ | 期待マスク | 所有者 SID | `SE_DACL_PROTECTED` |
+|---------|----------|----------|----------|-------------------|
+| `ensure_dir` | `fetch_owner_sid_from_path` → `build_owner_only_dacl(_, EXPECTED_DIR_MASK)` → `apply_protected_dacl` | 設定 | 既存保持 | 設定 |
+| `ensure_file` | 同上、`build_owner_only_dacl(_, EXPECTED_FILE_MASK)` | 設定 | 既存保持 | 設定 |
+| `verify_dir` | `fetch_dacl_and_owner` → `verify_dacl_owner_only(_, _, _, EXPECTED_DIR_MASK)` | 検証 | 検証 | 検証 |
+| `verify_file` | 同上、`EXPECTED_FILE_MASK` | 検証 | 検証 | 検証 |
+
+#### `ReplaceFileW` の設定（REQ-P04 Windows 経路、変更なし）
+
+- `windows::Win32::Storage::FileSystem::ReplaceFileW`
+- `lpReplacementFileName = .new`, `lpReplacedFileName = vault.db`, `dwReplaceFlags = REPLACEFILE_WRITE_THROUGH`（内部で fsync 相当が走る）, `lpBackupFileName = null_ptr`（バックアップ不要）
 
 ## 具体的な SQL の要点（定数値の抜粋）
 

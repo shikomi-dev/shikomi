@@ -64,16 +64,17 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | vault ディレクトリパス / vault ファイルパス |
-| 処理 | **作成時**: `windows` crate の `SetNamedSecurityInfoW` で DACL を設定。所有者 SID のみに `GENERIC_READ \| GENERIC_WRITE` の Allow ACE 1 個、継承を明示的に破棄（`PROTECTED_DACL_SECURITY_INFORMATION`）、Everyone / Users / Authenticated Users を DACL に含めない（結果として明示 ACE 無しのグループは暗黙的にアクセス拒否）。**検証時**: DACL を読み出し、所有者 SID 以外のトラスティに read/write 権限を与える ACE が存在したら異常とみなす |
+| 処理 | **作成時**: `windows` crate の `SetNamedSecurityInfoW(SE_FILE_OBJECT, DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で DACL を設定する。**所有者 SID は「ファイル側の `OWNER_SECURITY_INFORMATION`」から取得**する（UAC 昇格状態で作られたファイルの所有者は `BUILTIN\Administrators` になりうるため、プロセストークン所有者と一致しない前提、§セキュリティ設計）。ACE はちょうど 1 個で、所有者 SID に対して **ファイル: `FILE_GENERIC_READ \| FILE_GENERIC_WRITE`**、**ディレクトリ: `FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE`** の Allow ACE を付与。`PROTECTED_DACL_SECURITY_INFORMATION` で親からの継承 ACE を破棄（`SE_DACL_PROTECTED` bit が立つ）、Everyone / Users / Authenticated Users / CREATOR_OWNER 等の組込みトラスティを DACL に含めない（明示 ACE 無しは暗黙拒否）。**検証時**: `GetNamedSecurityInfoW` で DACL と所有者 SID を 1 回で取得し、次の 4 条件を全て満たすことを検証する（1 つでも満たさなければ異常）：①`SE_DACL_PROTECTED` bit が立っている（継承破棄済み）、②`AceCount == 1`、③唯一の ACE が `ACCESS_ALLOWED_ACE_TYPE` かつトラスティ SID が所有者 SID と `EqualSid` で一致、④ACE の AccessMask が**期待値マスクと完全一致**（ファイル/ディレクトリ別、追加ビット `DELETE` / `WRITE_DAC` / `WRITE_OWNER` / `FILE_EXECUTE`（ファイル時）等があれば拒否） |
 | 出力 | 正常: 続行 |
-| エラー時 | `Err(PersistenceError::InvalidPermission { path, expected_mode: "owner-only ACL", actual_mode: <DACL 要約文字列> })` |
+| エラー時 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE[\|FILE_TRAVERSE])", actual: <DACL 要約文字列> })`。**`actual` フィールドには ACE ごとの `trustee_sid: <S-1-5-21-... 形式>, access_mask: 0x<hex>, ace_type: <type>` を列挙した診断文字列を入れ**、SID は `ConvertSidToStringSidW` で文字列化する。秘密値は含まれない（§セキュリティ設計 §監査ログ規約） |
+| 受入観点 | ①CI `windows-latest` runner で作成 → 検証 → 再検証（DACL 未変更）が pass、②手動で `icacls <path> /grant Everyone:F` で DACL を壊した後の `load` が `InvalidPermission` で失敗、③`tempfile::tempdir()` 直下の vault ディレクトリ（親 TEMP の継承 ACE を持つ）を `ensure_dir` 適用後に `verify_dir` すると継承 ACE が除去されている（`SE_DACL_PROTECTED` 確認）、④UAC 昇格シナリオ（runner デフォルト）でファイル所有者が `BUILTIN\Administrators` でも ACE 1 個 + SID 一致の契約が成立する |
 
 ### REQ-P08: Vault ディレクトリ解決
 
 | 項目 | 内容 |
 |------|------|
 | 入力 | なし（環境変数・OS デフォルト）／テスト用に明示パス |
-| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け、**`VaultPaths::new` でパストラバーサル・シンボリックリンク検証を必ず通す**、basic-design.md §セキュリティ設計参照）。内部・テスト専用の構築口として `#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` を提供し、tempdir を直接受け取れる（正規 API は `new()`） |
+| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け、**`VaultPaths::new` でパストラバーサル・シンボリックリンク検証を必ず通す**、`basic-design/security.md` §vault ディレクトリ検証）。内部・テスト専用の構築口として `#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` を提供し、tempdir を直接受け取れる（正規 API は `new()`） |
 | 出力 | `PathBuf`（vault ディレクトリ） |
 | エラー時 | `dirs` が解決失敗（例: HOME 未設定の極端環境）→ `PersistenceError::CannotResolveVaultDir` |
 
@@ -136,7 +137,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | `PathBuf`（環境変数または `dirs::data_dir()` の戻り値） |
-| 処理 | `VaultPaths::new(dir)` 内で 7 段階検証（`basic-design.md` §vault ディレクトリ検証）: ①絶対パス必須、②`..` 要素早期拒否、③シンボリックリンク全面禁止、④`canonicalize`、⑤保護領域 prefix 拒否、⑥ディレクトリ判定、⑦パス派生（`vault.db` / `vault.db.new` / `vault.db.lock`） |
+| 処理 | `VaultPaths::new(dir)` 内で 7 段階検証（`basic-design/security.md` §vault ディレクトリ検証）: ①絶対パス必須、②`..` 要素早期拒否、③シンボリックリンク全面禁止、④`canonicalize`、⑤保護領域 prefix 拒否、⑥ディレクトリ判定、⑦パス派生（`vault.db` / `vault.db.new` / `vault.db.lock`） |
 | 出力 | `Ok(VaultPaths)` |
 | エラー時 | `PersistenceError::InvalidVaultDir { path, reason: VaultDirReason }`。`VaultDirReason` の各バリアントで拒否理由を区別 |
 
@@ -163,7 +164,7 @@
 
 ## データモデル
 
-論理データモデル（SQLite 物理スキーマは basic-design.md §ER 図 / detailed-design/data.md §SQLite スキーマ詳細を参照）:
+論理データモデル（SQLite 物理スキーマは `basic-design/index.md` §ER 図 / `detailed-design/data.md` §SQLite スキーマ詳細を参照）:
 
 | エンティティ | 属性 | 型 | 制約 | 関連 |
 |-------------|------|---|------|------|
@@ -203,7 +204,7 @@
 | MSG-DEV-P01 | 開発者エラー | `i/o error at {path}: {source}` | `PersistenceError::Io` |
 | MSG-DEV-P02 | 開発者エラー | `sqlite error: {source}` | `PersistenceError::Sqlite` |
 | MSG-DEV-P03 | 開発者エラー | `vault file is corrupted: {reason}` | `PersistenceError::Corrupted` |
-| MSG-DEV-P04 | 開発者エラー | `invalid file permission at {path}: expected={expected_mode}, actual={actual_mode}` | `PersistenceError::InvalidPermission` |
+| MSG-DEV-P04 | 開発者エラー | `invalid file permission at {path}: expected={expected}, actual={actual}`（Unix では `expected="0600"` or `"0700"`、Windows では `expected="owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE[\|FILE_TRAVERSE])"`。`actual` は Unix で `"0644"` 等の mode 文字列、Windows で ACE 列挙の診断文字列、`detailed-design/flows.md` §`InvalidPermission` 参照） | `PersistenceError::InvalidPermission` |
 | MSG-DEV-P05 | 開発者エラー | `orphan .new file detected at {path}; recovery required` | `PersistenceError::OrphanNewFile` |
 | MSG-DEV-P06 | 開発者エラー | `atomic write failed at stage {stage}: {source}` | `PersistenceError::AtomicWriteFailed` |
 | MSG-DEV-P07 | 開発者エラー | `schema mismatch: file_version={file_version}, supported={supported_range}` | `PersistenceError::SchemaMismatch` |
@@ -226,9 +227,9 @@
 | `time` | 0.3.x | `serde`, `macros`, `formatting`, `parsing` | RFC3339 入出力 |
 | `tempfile` | 3.x（dev-deps） | — | 結合テストで tempdir |
 | `cfg-if` | 1.x | — | OS 別コード分岐の可読性向上 |
-| `windows` | 最新安定（Windows のみ） | `Win32_Security_Authorization`, `Win32_Foundation`, `Win32_Storage_FileSystem` | Windows ACL 設定・検証・`ReplaceFileW`・`LockFileEx` |
+| `windows` | 0.58 以上（Windows のみ、major ピン） | `Win32_Security_Authorization`（`SetNamedSecurityInfoW` / `GetNamedSecurityInfoW` / `EXPLICIT_ACCESS_W` / `SetEntriesInAclW` / `TRUSTEE_W`）／ `Win32_Security`（`EqualSid` / `GetAclInformation` / `GetAce` / `GetSecurityDescriptorDacl` / `OpenProcessToken` / `GetTokenInformation` / `ConvertSidToStringSidW`）／ `Win32_Foundation`（`HLOCAL` / `LocalFree` / `HANDLE` / `CloseHandle`）／ `Win32_Storage_FileSystem`（`FILE_GENERIC_READ` / `FILE_GENERIC_WRITE` / `FILE_TRAVERSE` / `ReplaceFileW`）／ `Win32_System_Threading`（`GetCurrentProcess`） | Windows ACL 設定・検証（REQ-P07）・`ReplaceFileW`（REQ-P04）。Microsoft 公式 crate のため `[advisories].ignore` 登録禁止リスト（`tech-stack.md` §4.3.2）の対象外だが、major ピンで API 破壊を受ける版上げはレビュー必須。導入は `[target.'cfg(windows)'.dependencies]` で `shikomi-infra` に限定し、Linux / macOS ビルドに混入させない |
 | `fs4` | 0.12 以上 | `sync` | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用。**`fs2` ではなく `fs4` を採用**した根拠: `fs2` は 2018-01 以降メンテ停止（OWASP A06 Vulnerable Components 該当）。`fs4` は同 API 面で fork された後継で、2024 年以降も継続的に release されている（`cargo deny advisories` で検証） |
-| `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design.md` §セキュリティ設計 §監査ログ規約参照 |
+| `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design/security.md` §監査ログ規約参照 |
 | `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-15） |
 | `serial_test` | 3.x（dev-deps） | — | `std::env::set_var` を触るテストの直列化（test-design §実行環境） |
 
