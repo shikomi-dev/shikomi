@@ -345,4 +345,18 @@
 
 ---
 
+## TC-U25: PermissionGuard::verify_file — ACE トラスティが所有者 SID 以外（SE_DACL_PROTECTED 維持・ACE=1・AccessMask 維持）→ 不変条件③ 単独違反（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U25 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件③） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_file` 適用済みファイルに対し、`EXPLICIT_ACCESS_W` を 1 個（ACE 数 = 1 を維持）、`AccessMask = EXPECTED_FILE_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE`）を維持、`grfAccessMode = SET_ACCESS`、`AceFlags = 0`、`Trustee.TrusteeForm = TRUSTEE_IS_SID` で、**トラスティ SID だけを `BUILTIN\Users` の well-known SID（`S-1-5-32-545`）に書き換える**。`SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で DACL を適用し、`SE_DACL_PROTECTED` は維持したまま ACE 数・AccessMask は変更しない（不変条件①②④は意図的に満たしたまま③のみを壊す） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { actual, .. })` が返る。`actual` フィールドが `trustee_mismatch` ラベル形式——所有者 SID（例: `S-1-5-21-...`）と ACE トラスティ SID（`S-1-5-32-545`）の両方を `ConvertSidToStringSidW` で文字列化した診断文字列を含む（`flows.md §OS 別パーミッション実装詳細 §Windows` の `EqualSid` 失敗時フォーマット参照）。不変条件①`SE_DACL_PROTECTED` 立ち・②`AceCount=1`・④`AccessMask` 一致 を全てパスした後に③`EqualSid` 失敗で Fail Fast する順序を確認 |
+
+---
+
 *対応 Issue: #14 / 親ドキュメント: `test-design/index.md`*
