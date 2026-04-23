@@ -231,4 +231,104 @@
 
 ---
 
-*対応 Issue: #10 / 親ドキュメント: `test-design/index.md`*
+---
+
+## TC-U17: PermissionGuard::ensure_dir — owner-only DACL 作成（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U17 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::ensure_dir、classes.md §13） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` で親ディレクトリを作成済み。`{tempdir}/vault_dir/` はまだ存在しない |
+| 操作 | `PermissionGuard::ensure_dir(new_subdir_path)` を呼ぶ（ディレクトリ作成 + DACL 適用） |
+| 期待結果 | `Ok(())` が返る。作成されたディレクトリの DACL を `GetNamedSecurityInfoW` で取得すると ①`SE_DACL_PROTECTED` bit が立っている ②`AceCount == 1` かつ `ACCESS_ALLOWED_ACE_TYPE` ③ ACE のトラスティ SID がディレクトリ所有者 SID と `EqualSid` で一致 ④ `AccessMask` が `EXPECTED_DIR_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE`）と完全一致 |
+
+---
+
+## TC-U18: PermissionGuard::verify_dir — ensure_dir 適用後は 4 不変条件を満たす（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U18 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::verify_dir） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。TC-U17 と同一セットアップ（`ensure_dir` 適用済みのサブディレクトリ） |
+| 操作 | `PermissionGuard::verify_dir(subdir_path)` を呼ぶ |
+| 期待結果 | `Ok(())` |
+
+---
+
+## TC-U19: PermissionGuard::verify_dir — `SE_DACL_PROTECTED` なし（継承 ACE 残存）→ InvalidPermission（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U19 |
+| 対応する受入基準ID | REQ-P07 受入観点③ |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件①） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir` が返すディレクトリそのもの（親 `%TEMP%` から ACE を継承しており `SE_DACL_PROTECTED` bit が立っていない状態）。`ensure_dir` は呼ばない |
+| 操作 | `PermissionGuard::verify_dir(tempdir.path())` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE\|FILE_TRAVERSE)", .. })` が返る。`actual` フィールドに ACE 列挙の診断文字列が含まれる（`SE_DACL_PROTECTED` なし = 不変条件①違反で即失敗） |
+
+---
+
+## TC-U20: PermissionGuard::ensure_file — owner-only DACL 作成（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U20 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::ensure_file） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_dir` 適用済みの vault ディレクトリ内に空ファイルを `std::fs::File::create` で作成済み |
+| 操作 | `PermissionGuard::ensure_file(file_path)` を呼ぶ（DACL 書換のみ、所有者 touch なし） |
+| 期待結果 | `Ok(())` が返る。ファイルの DACL を `GetNamedSecurityInfoW` で取得すると ①`SE_DACL_PROTECTED` bit が立っている ②`AceCount == 1` かつ `ACCESS_ALLOWED_ACE_TYPE` ③ ACE のトラスティ SID がファイル所有者 SID と `EqualSid` で一致 ④ `AccessMask` が `EXPECTED_FILE_MASK`（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE`）と完全一致 |
+
+---
+
+## TC-U21: PermissionGuard::verify_file — ensure_file 適用後は 4 不変条件を満たす（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U21 |
+| 対応する受入基準ID | REQ-P07 受入観点① |
+| 対応する工程 | 詳細設計（REQ-P07、PermissionGuardWindows::verify_file） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。TC-U20 と同一セットアップ（`ensure_file` 適用済みのファイル） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Ok(())` |
+
+---
+
+## TC-U22: PermissionGuard::verify_file — ACE 追加後（AceCount > 1）→ InvalidPermission（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U22 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only 不変条件②） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_file` 適用済みファイルに対し、`EXPLICIT_ACCESS_W` で `BUILTIN\Users` への `GENERIC_READ` Allow ACE を追加し `SetNamedSecurityInfoW` で DACL を書き換える（ACE 数 = 2 にする）。`PROTECTED_DACL_SECURITY_INFORMATION` は落として設定（`SE_DACL_PROTECTED` を意図的に除去してもよい） |
+| 操作 | `PermissionGuard::verify_file(file_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { .. })` が返る（不変条件①または②の違反で失敗） |
+
+---
+
+## TC-U23: PermissionGuard::ensure_dir + verify_dir — UAC 昇格ランナーで所有者が BUILTIN\Administrators でも成立（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U23 |
+| 対応する受入基準ID | REQ-P07 受入観点④ |
+| 対応する工程 | 詳細設計（REQ-P07、fetch_owner_sid_from_path — ファイル側 OWNER SID 取得ポリシー） |
+| 種別 | 正常系 |
+| 前提条件 | `#[cfg(windows)]`。`windows-latest` CI ランナーはデフォルトで管理者実行のため、作成ディレクトリの所有者が `BUILTIN\Administrators` SID になりうる。プロセストークン所有者（`GetCurrentProcess` + `TokenOwner`）と一致しない可能性がある |
+| 操作 | 1. `ensure_dir(subdir_path)` を呼ぶ 2. `verify_dir(subdir_path)` を呼ぶ |
+| 期待結果 | `ensure_dir` と `verify_dir` がともに `Ok(())` を返す。`ensure_dir` が**ファイル側の `OWNER_SECURITY_INFORMATION`**（`GetNamedSecurityInfoW` で取得した SID）を ACE トラスティとして使っているため、所有者が `BUILTIN\Administrators` であっても ACE 1 個 + `EqualSid` 一致の契約が成立する |
+
+---
+
+*対応 Issue: #14 / 親ドキュメント: `test-design/index.md`*
