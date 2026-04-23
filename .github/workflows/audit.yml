@@ -1,0 +1,21 @@
+name: Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # 毎日深夜に全依存の CVE・ライセンス・bans を再チェック
+  schedule:
+    - cron: '0 0 * * *'  # UTC 00:00 = JST 09:00
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: advisories licenses bans sources
