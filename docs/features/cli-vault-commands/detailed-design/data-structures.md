@@ -89,18 +89,28 @@ CLI 層で使う定数を以下で固定する。
 - `record.kind() == RecordKind::Text` → `ValueView::Plain(plain_text)` ここで `plain_text` は `record.payload()` から抽出した平文の先頭 `LIST_VALUE_PREVIEW_MAX` 文字（char 単位、grapheme 単位ではなく char で十分）
 - `record.payload()` が `RecordPayload::Encrypted(...)` の場合は**そもそも到達しない**（UseCase で暗号化モードを Fail Fast しているため）。想定外で到達した場合は `ValueView::Masked` にフォールバック（防御的プログラミング）
 
-**注記**: `record.payload()` から平文文字列を取得する経路で `SecretString::expose_secret()` を呼ぶことになるが、これは **Text kind に限定**される（Secret kind は `Masked` バリアントで値を見ずに返す）。とはいえ「Text kind でも expose_secret を呼ぶのは監査対象」であるため、実装では `RecordPayload::Plaintext` の内部を `SecretString` でなく `PublicString` のような別型に分ける設計も考慮できる。ただし本 feature では `shikomi-core` の `RecordPayload` 改修をスコープ外とし、**`crates/shikomi-cli/src/` での `expose_secret` 呼び出しを 0 件に保つため `RecordView::from_record` を `view.rs` ではなく `shikomi-core` 側に寄せる**ことは**行わない**（`shikomi-core` 改修をスコープ外で維持）。代替として、`RecordView::from_record` 内で `record.payload()` が `Plaintext` バリアントのとき**値を String に expose するのではなく**、`Record::plaintext_preview(max: usize) -> Option<&str>` のような**メソッドを `shikomi-core` に追加してアクセサ経由で非 secret 版をだけ返す**。ただし、`Record` のメソッド追加は `shikomi-core` 側の変更で、本 feature の「コア最小変更方針」と衝突するため、**`shikomi-cli` の `view.rs` 内で `record.payload()` の `Plaintext(secret)` から `SecretString::expose_secret()` を呼んで先頭 40 char を切り出す**。この 1 箇所のみ `expose_secret` が呼ばれるが、`Text kind` のみ通る経路であり**Secret kind は到達しない**ため、漏洩対象が拡大しない。
+**最終採用案**: `shikomi-core::Record` に `pub fn text_preview(&self, max_chars: usize) -> Option<String>` メソッドを追加し、`RecordView::from_record` はこれを呼ぶだけで secret 経路に触れない設計とする。これにより `crates/shikomi-cli/src/` 内の `SecretString::expose_secret()` 呼び出しを**0 件**に抑える（`../basic-design/security.md §expose_secret 経路監査` の CI 契約と整合）。
 
-**CI 監査との整合**: `../basic-design/security.md §expose_secret 経路監査` の契約「`shikomi-cli/src/` 内で `expose_secret` 呼び出し 0 件」は、**Text kind preview 生成を含めて 0 件を目指す**。そのためには `shikomi-core::Record` に `pub fn text_preview(&self, max_chars: usize) -> Option<&str>` 相当のメソッドを追加するのが本設計の最終採用案。`Secret` kind では `None` を返し、`Text` kind の `Plaintext(SecretString)` から先頭 char を切り出す。このメソッド追加は**`shikomi-core` のドメイン型への 1 メソッド追加**に留まり、本 feature の infra 変更（`SqliteVaultRepository::from_directory` 追加）と同等の最小変更として許容する。
+**`shikomi-core::Record::text_preview` の仕様**:
 
-**追加の設計判断（本 feature で `shikomi-core::Record` に `text_preview` メソッドを追加）**:
-
-- `shikomi-core` への変更は `crates/shikomi-core/src/vault/record.rs` への 1 メソッド追加のみ
+- 配置: `crates/shikomi-core/src/vault/record.rs` に 1 メソッド追加
 - シグネチャ: `pub fn text_preview(&self, max_chars: usize) -> Option<String>`
   - `RecordKind::Text` かつ `RecordPayload::Plaintext(SecretString)` のときのみ `Some(先頭 max_chars の chars を collect した String)` を返す
-  - それ以外（`Secret` kind / `Encrypted` variant）は `None`
+  - それ以外（`Secret` kind / `Encrypted` variant / 想定外状態）は `None`
   - 内部で `SecretString::expose_secret()` を呼ぶが、この呼び出しは **`shikomi-core` 内で完結**し、`shikomi-cli` の CI grep 対象（`crates/shikomi-cli/src/`）には現れない
-- この設計により、`RecordView::from_record` は `record.text_preview(40)` を呼ぶだけで secret 経路を触らない
+- 境界値: `max_chars == 0` なら空 `String` を `Some("".into())` で返す / 文字列長を超える `max_chars` なら全文字を返す
+- grapheme 境界は考慮せず char 単位で切る（CLI preview 用途で簡易充分、UI 要件が出た時点で再設計）
+
+**`RecordView::from_record` はこれに従い**:
+
+- `record.kind() == Secret` → `ValueView::Masked`
+- `record.kind() == Text` → `record.text_preview(LIST_VALUE_PREVIEW_MAX)` を呼び、`Some(s)` → `ValueView::Plain(s)` / `None`（本来到達しない） → `ValueView::Masked` にフォールバック（防御的プログラミング）
+
+**本メソッド追加のスコープ整合**:
+
+- `shikomi-core` への変更は **read-only アクセサ 1 メソッド追加**のみ。新規ドメインルールや集約状態遷移の導入は伴わない（`with_updated_kind` のような kind 変更とは性質が異なり、Phase 1 スコープに含まれる妥当な最小変更）
+- 本 feature の infra 変更（`SqliteVaultRepository::from_directory` 追加）と同等の「最小改修で `expose_secret` 経路を core 内に封じる」設計
+- 要件定義書の整合: `../../requirements.md §関連 feature / vault` で明記済み（Vault / RecordLabel / RecordId 等の**変更なし**、`Record::text_preview` のみ追加）
 
 ## 暗号化 vault フィクスチャ（テスト用途）
 

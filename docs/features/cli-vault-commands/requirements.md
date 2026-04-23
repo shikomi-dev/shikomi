@@ -11,7 +11,7 @@
 |------|------|
 | 入力 | サブコマンド `list`。フラグなし（将来 `--json` 等追加予定、本 feature では plain-text 表のみ） |
 | 処理 | (1) vault path を解決、(2) `VaultRepository::load()` を呼んで `Vault` を取得、(3) `Vault::protection_mode()` が `Encrypted` なら Fail Fast（REQ-CLI-009）、(4) `Vault::records()` を走査し、各レコードを「ID / 種別 / ラベル / 値プレビュー」の表形式で stdout に 1 件 1 行出力、(5) Secret レコードの値は `"[secret — use `shikomi show` (future)]"` 等の**マスク文字列固定**で表示 |
-| 出力 | stdout に表形式。カラム: `ID`（UUIDv7 の短縮 8 桁 + ... or 全長、詳細設計で決定）/ `KIND`（`text` / `secret`）/ `LABEL`（最大 40 文字で切り詰め、省略記号付き）/ `VALUE`（Text は先頭 40 文字、Secret はマスク） |
+| 出力 | stdout に表形式。カラム: `ID`（**UUIDv7 の全長 36 文字をそのまま出力。トランケート / 短縮しない** — ペガサス指摘により案 A 採用: MVP シンプル + `list` で表示した ID を `remove --id` にコピペした際 `RecordId::try_from_str` で即通る導線を保つ。短縮表示は将来別 feature `cli-list-short-id` で検討）/ `KIND`（`text` / `secret`）/ `LABEL`（最大 40 文字で切り詰め、省略記号付き）/ `VALUE`（Text は先頭 40 文字、Secret はマスク） |
 | エラー時 | vault 未作成 → 終了コード 1 / 暗号化モード → 終了コード 3 / I/O エラー → 終了コード 2 |
 
 ### REQ-CLI-002: `shikomi add`
@@ -19,7 +19,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | サブコマンド `add` + 必須フラグ `--kind <text\|secret>` + `--label <STRING>` + 値指定フラグいずれか 1 つ（`--value <STRING>` / `--stdin`）。`--yes` フラグは本コマンドでは無効（warn を出して無視） |
-| 処理 | (1) vault path 解決、(2) `RecordLabel::try_new` で label 検証（Fail Fast）、(3) `--kind secret` かつ `--value` 指定の場合は stderr に shell 履歴漏洩警告を出す、(4) 値を `SecretString` として取得（Text kind も同じ経路で型安全に扱い、最後に `SecretString::into_string` で剥ぎ落とすかは詳細設計で決定）、(5) `load()` → vault 未作成なら `Vault::new(VaultHeader::new_plaintext(...))` で初期化（REQ-CLI-010）、(6) モードが `Encrypted` なら Fail Fast（REQ-CLI-009）、(7) `Vault::add_record(Record::new(...))` を呼び、(8) `save()` で atomic write、(9) 成功時は新レコードの ID を stdout に 1 行出力 |
+| 処理 | (1) vault path 解決、(2) `RecordLabel::try_new` で label 検証（Fail Fast）、(3) `--kind secret` かつ `--value` 指定の場合は stderr に shell 履歴漏洩警告を出す、(4) 値を `SecretString` として取得（Text kind も同じ経路で型安全に扱い、`SecretString` の中身は**一切 expose せず**所有権移動のみで `RecordPayload::Plaintext` まで運搬する — `basic-design/security.md §expose_secret 経路監査` 参照）、(5) `load()` → vault 未作成なら `Vault::new(VaultHeader::new_plaintext(...))` で初期化（REQ-CLI-010）、(6) モードが `Encrypted` なら Fail Fast（REQ-CLI-009）、(7) `Vault::add_record(Record::new(...))` を呼び、(8) `save()` で atomic write、(9) 成功時は新レコードの ID を stdout に 1 行出力 |
 | 出力 | stdout: `added: <uuid>` の 1 行 / stderr: 警告（該当時のみ） |
 | エラー時 | 値指定フラグの同時指定 / どちらも無指定 → 終了コード 1 / ラベル検証失敗 → 終了コード 1 / 暗号化モード → 終了コード 3 / save 失敗 → 終了コード 2 |
 
@@ -32,7 +32,7 @@
 | 出力 | stdout: `updated: <uuid>` / stderr: shell 履歴警告（`--kind secret` でなく Text kind 既存レコードへの `--value` 更新時も、既存 kind が `Secret` なら警告対象） |
 | エラー時 | 全フラグ未指定 / 併用禁止違反 / id 不存在 / 暗号化モード / save 失敗 → 各終了コード（REQ-CLI-006 参照） |
 
-**スコープ外注記（`edit --kind` の扱い）**: `edit` サブコマンドでの `--kind` 指定（text ↔ secret 変換）は**本 feature のスコープ外**とする。理由: (a) kind 変更は `shikomi-core` の `Record` に `with_updated_kind` メソッド追加を要し、本 feature の「`shikomi-core` / `shikomi-infra` を極力変更しない」方針と衝突する、(b) Text → Secret 変換時に既存値の secret 扱い開始は UX として曖昧（過去の値が shell 履歴や clipboard 履歴に残っている可能性）。将来 feature（`cli-record-kind-migration` 等、未起票）で要件分析から取り組む。本 feature では `edit` の CLI に `--kind` フラグを**そもそも定義しない**（clap の不明フラグエラーで終了コード 1）。誤って `--kind` を書いたユーザには clap のエラーが案内として十分機能する。
+**スコープ外注記（`edit --kind` の扱い）**: `edit` サブコマンドでの `--kind` 指定（text ↔ secret 変換）は**本 feature のスコープ外**とする。理由: (a) kind 変更は `shikomi-core` の `Record` に `with_updated_kind` メソッド追加を要し、さらに「kind 変更時の payload 整合性（Text ↔ Secret の変換規則）」という新規ドメインルールの設計を伴うため、本 feature のスコープを越える（`text_preview` のような純粋な read-only アクセサ追加とは別物）、(b) Text → Secret 変換時に既存値の secret 扱い開始は UX として曖昧（過去の値が shell 履歴や clipboard 履歴に残っている可能性）。将来 feature（`cli-record-kind-migration` 等、未起票）で要件分析から取り組む。本 feature では `edit` の CLI に `--kind` フラグを**そもそも定義しない**（clap の不明フラグエラーで終了コード 1）。誤って `--kind` を書いたユーザには clap のエラーが案内として十分機能する。
 
 ### REQ-CLI-004: `shikomi remove`
 
@@ -69,7 +69,7 @@
 |------|------|
 | 対象 | Secret レコードの `RecordPayload::Plaintext(SecretString)` の中身 |
 | マスキング箇所 | stdout / stderr / panic メッセージ / `tracing::{info,warn,error}!` マクロ / `Debug` trait 経由のすべての出力 |
-| 保証機構 | (1) `SecretString` の `Debug` は `"[REDACTED]"` 固定（既存、`shikomi-core`）、(2) CLI 層内で `SecretString::expose_secret()` を呼ぶのは `VaultRepository::save` 直前の `Record` 構築フロー 1 箇所のみ、(3) `list` 出力時は値を文字列変換せず、固定マスク文字列（例: `"****"`）を直接出力 |
+| 保証機構 | (1) `SecretString` の `Debug` は `"[REDACTED]"` 固定（既存、`shikomi-core`）、(2) **`crates/shikomi-cli/src/` 内で `SecretString::expose_secret()` を呼ぶのは 0 箇所**（Secret は `SecretString` を**所有権移動のみで運搬**し `RecordPayload::Plaintext(secret)` に格納、Text の preview 生成は `shikomi-core::Record::text_preview` に委譲し `expose_secret` を core 内に封じる — 基本設計 `basic-design/security.md §expose_secret 経路監査` / 詳細設計 `detailed-design/data-structures.md §ValueView の構築ルール` 参照）、(3) `list` 出力時は Secret を文字列変換せず固定マスク文字列（`"****"`）を直接出力 |
 | 検証 | E2E テストで、stdout / stderr を全文 grep して投入値（`"SECRET_TEST_VALUE"` 等のマーカー）が出ないこと |
 
 ### REQ-CLI-008: エラーメッセージ出力
@@ -115,7 +115,7 @@
 |------|------|
 | 構造 | `shikomi-cli/src/` 直下を `main.rs`（clap パースとコンポジションルート）/ `presenter/`（出力整形・マスキング）/ `usecase/`（ドメイン操作の orchestration）/ `error.rs`（CLI エラー型）に分離 |
 | 依存方向 | `main.rs` → `usecase` → `shikomi-core` + `shikomi-infra::VaultRepository` trait（具体型 `SqliteVaultRepository` の参照は `main.rs` のコンポジションルート 1 箇所のみ）／ `presenter` は `shikomi-core` の読み取り型のみ参照 |
-| 狙い | Phase 2（daemon IPC 経由）への移行時、`main.rs` の 1 行（`SqliteVaultRepository::from_paths(...)` を `IpcVaultRepository::connect(...)` に差し替え）で済ませる |
+| 狙い | Phase 2（daemon IPC 経由）への移行時、`run()` の 1 行（`SqliteVaultRepository::from_directory(&path)` を `IpcVaultRepository::connect(...)` に差し替え）で済ませる |
 
 ## 画面・CLI仕様
 
@@ -146,19 +146,24 @@ shikomi --version
 ```
 ID                                    KIND    LABEL                                     VALUE
 --                                    ----    -----                                     -----
-018f1234-...-7890                     text    SSH: prod                                 ssh -J bastion prod01
-018f9abc-...-cdef                     secret  my password                               ****
+018f1234-5678-7abc-9def-123456789abc  text    SSH: prod                                 ssh -J bastion prod01
+018f9abc-cdef-7012-8345-67890abcdef0  secret  my password                               ****
 ```
 
-カラム幅は `--vault-dir` 指定 vault のレコード長に合わせて動的調整（`presenter` 層の責務）。
+- **ID カラムは UUIDv7 の全長 36 文字をそのまま表示する**。省略形（`018f1234-...-7890` 等）は採用しない
+- 理由: `list` で表示された ID を `remove --id` / `edit --id` にそのままコピペ可能にする（`RecordId::try_from_str` は全長 UUID を要求するため、短縮形だと Fail Fast で弾かれユーザの次の一手が詰む — ペガサス指摘による案 A 採用）
+- 短縮表示は将来別 feature（`cli-list-short-id` 相当、未起票）で検討。`RecordId` の prefix match は domain 型の変更を伴うため Phase 1 スコープ外
+- カラム幅は `--vault-dir` 指定 vault のレコード長に合わせて動的調整（ラベル / 値の truncate のみ。ID は固定 36 文字）
 
 ### 確認プロンプト（`shikomi remove`）
 
 ```
-$ shikomi remove --id 018f1234-...-7890
-Delete record 018f1234-...-7890 (SSH: prod)? [y/N]: y
-removed: 018f1234-...-7890
+$ shikomi remove --id 018f1234-5678-7abc-9def-123456789abc
+Delete record 018f1234-5678-7abc-9def-123456789abc (SSH: prod)? [y/N]: y
+removed: 018f1234-5678-7abc-9def-123456789abc
 ```
+
+ID は UUIDv7 の全長 36 文字。`list` 出力から直接コピペ可能（ペガサス指摘による案 A 採用の一貫性）。
 
 `N`（デフォルト）で `cancelled` を stdout に出し終了コード 0。
 
@@ -289,7 +294,7 @@ removed: 018f1234-...-7890
 
 | feature | 関係 | 参照先 |
 |---------|------|--------|
-| `vault`（Issue #7） | 本 feature は `shikomi-core` の `Vault` / `Record` / `RecordLabel` / `RecordId` / `SecretString` / `ProtectionMode` / `DomainError` を利用する。CLI 層は pure ドメイン型を変更せずそのまま組み立てる | `docs/features/vault/` |
+| `vault`（Issue #7） | 本 feature は `shikomi-core` の `Vault` / `Record` / `RecordLabel` / `RecordId` / `SecretString` / `ProtectionMode` / `DomainError` を利用する。**本 feature で `shikomi-core::Record` に `text_preview(&self, max_chars: usize) -> Option<String>` メソッドを 1 つ追加する**（`expose_secret` を `shikomi-core` 内に封じ込め、`shikomi-cli/src/` からの expose 呼び出しを 0 件に抑える目的。詳細設計 `detailed-design/public-api.md §shikomi-core への 1 メソッド追加` / `detailed-design/data-structures.md §ValueView の構築ルール` 参照）。それ以外の `Vault` / `RecordLabel` / `RecordId` / `SecretString` / `ProtectionMode` / `DomainError` は**変更せずそのまま組み立てる**。`with_updated_kind` 等の新規メソッド追加は本 feature では行わない（`edit --kind` が Phase 1 スコープ外の理由、REQ-CLI-003 注記参照） | `docs/features/vault/` |
 | `vault-persistence`（Issue #10） | 本 feature は `VaultRepository` trait の呼び出し側。`SqliteVaultRepository::from_directory(path: &Path) -> Result<Self, PersistenceError>` を新規追加（既存の `new()` は内部で `from_directory(OS_default)` を呼ぶリファクタ、既存テストは無変更）。**`VaultPaths` は公開しない**（crate 内部実装のまま、公開 API 契約を増やさない）。`PersistenceError` を `CliError::Persistence(...)` でラップ | `docs/features/vault-persistence/` |
 | `workspace-init`（Issue #4） | 本 feature は `shikomi-cli` crate 内に実体を積む。既存の `fn main() {}` を置換 | `docs/features/workspace-init/` |
 | **未起票 — cli-daemon-bridge（Phase 2 相当）** | 将来、`IpcVaultRepository` を `shikomi-infra` に追加し、`shikomi-cli/src/main.rs` のコンポジションルートを差し替える。本 feature のレイヤ分離がそのまま活きる | （将来 Issue） |

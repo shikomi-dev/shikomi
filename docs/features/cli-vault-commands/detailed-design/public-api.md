@@ -73,8 +73,9 @@
 - `pub fn render_list(views: &[RecordView], locale: Locale) -> String`
   - 空なら `render_empty(locale)` を返す
   - それ以外: ヘッダ行 `ID\tKIND\tLABEL\tVALUE\n` と区切り行、各 `RecordView` を 1 行に整形
-  - ラベル / 値のトランケート: Unicode char 単位（`s.chars().take(40).collect::<String>()`）で簡易実装。CLI 表示のため grapheme 単位必須ではない
-  - 整形幅調整: `tabwriter` crate 採用可否は実装時に判断。導入するなら `../basic-design/index.md §依存` に追記し、`tech-stack.md` に反映
+  - **ID カラムの出力ルール**: `view.id`（`RecordId`）の `Display` 実装で得られる **UUIDv7 全長 36 文字をそのまま出力する**。トランケート / 短縮形（`...` による省略） / prefix match 用の先頭抜粋**いずれも行わない**。理由: ペガサス指摘により案 A を採用（`requirements.md §REQ-CLI-001 / 出力フォーマット` 参照）。`list` で表示された ID を `remove --id` / `edit --id` にコピペしても `RecordId::try_from_str` を通過する導線を維持するため（短縮形採用すると Fail Fast で弾かれ、次の一手が詰む）。短縮表示は将来別 feature（`cli-list-short-id` 相当、未起票）で検討
+  - ラベル / 値のトランケート: Unicode char 単位（`s.chars().take(40).collect::<String>()`）で簡易実装。CLI 表示のため grapheme 単位必須ではない。**ID はトランケート対象外**
+  - 整形幅調整: `tabwriter` crate 採用可否は実装時に判断。導入するなら `../basic-design/index.md §依存` に追記し、`tech-stack.md` に反映。ID カラムは固定 36 文字幅で右パディング
   - `ValueView::Masked` → `"****"`
   - `ValueView::Plain(s)` → `s.chars().take(40).collect::<String>()` + 必要に応じ `"…"`
 - `pub fn render_empty(locale: Locale) -> String`
