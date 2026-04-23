@@ -1,9 +1,9 @@
 //! vault-persistence 結合テスト — TC-I01, I02, I08, I09, I16〜I19
 //! ラウンドトリップ・基本 CRUD・環境変数設定
 mod helpers;
-use helpers::{ENV_MUTEX, make_plaintext_vault, make_record, make_repo, plaintext_header};
+use helpers::{make_plaintext_vault, make_record, make_repo, plaintext_header, ENV_MUTEX};
 use shikomi_core::{Record, RecordPayload, Vault};
-use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository};
+use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultRepository};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------

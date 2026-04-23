@@ -6,61 +6,10 @@
 #![cfg(windows)]
 #![allow(unsafe_code)]
 
-use std::path::Path;
-use std::sync::Mutex;
-
-use shikomi_core::{
-    Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString, Vault, VaultHeader,
-    VaultVersion,
-};
-use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultRepository};
+mod helpers;
+use helpers::{make_plaintext_vault, make_repo};
+use shikomi_infra::persistence::{PersistenceError, VaultRepository};
 use tempfile::TempDir;
-use time::OffsetDateTime;
-use uuid::Uuid;
-
-// ---------------------------------------------------------------------------
-// テストヘルパー
-// ---------------------------------------------------------------------------
-
-/// 環境変数 `SHIKOMI_VAULT_DIR` へのアクセスをプロセス全体で直列化するミューテックス。
-static ENV_MUTEX: Mutex<()> = Mutex::new(());
-
-/// tempdir を使った `SqliteVaultRepository` を構築する。
-fn make_repo(dir: &Path) -> SqliteVaultRepository {
-    let _guard = ENV_MUTEX.lock().unwrap();
-    std::env::set_var("SHIKOMI_VAULT_DIR", dir);
-    let repo = SqliteVaultRepository::new().unwrap();
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-    repo
-}
-
-/// 平文モードの `VaultHeader` を作る。
-fn plaintext_header() -> VaultHeader {
-    VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc()).unwrap()
-}
-
-/// 平文 `Record` を 1 件作る。
-fn make_record(label: &str, value: &str) -> Record {
-    let now = OffsetDateTime::now_utc();
-    Record::new(
-        RecordId::new(Uuid::now_v7()).unwrap(),
-        RecordKind::Secret,
-        RecordLabel::try_new(label.to_string()).unwrap(),
-        RecordPayload::Plaintext(SecretString::from_string(value.to_string())),
-        now,
-    )
-}
-
-/// N 件のレコードを持つ平文 vault を作る。
-fn make_plaintext_vault(n: usize) -> Vault {
-    let mut vault = Vault::new(plaintext_header());
-    for i in 0..n {
-        vault
-            .add_record(make_record(&format!("label-{i}"), &format!("value-{i}")))
-            .unwrap();
-    }
-    vault
-}
 
 // ---------------------------------------------------------------------------
 // TC-I24: save 後の load が成功する（vault.db の 4 不変条件がすべて満たされる）

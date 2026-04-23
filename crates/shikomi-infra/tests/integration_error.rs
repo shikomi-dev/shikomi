@@ -3,7 +3,7 @@
 mod helpers;
 use helpers::{make_plaintext_vault, make_repo};
 use shikomi_core::{KdfSalt, Vault, VaultHeader, VaultVersion, WrappedVek};
-use shikomi_infra::persistence::PersistenceError;
+use shikomi_infra::persistence::{PersistenceError, VaultRepository};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 

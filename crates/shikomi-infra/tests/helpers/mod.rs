@@ -8,7 +8,6 @@ use shikomi_core::{
     VaultVersion,
 };
 use shikomi_infra::persistence::SqliteVaultRepository;
-use tempfile::TempDir;
 use time::OffsetDateTime;
 use uuid::Uuid;
 

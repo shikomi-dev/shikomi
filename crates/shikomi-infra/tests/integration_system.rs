@@ -1,8 +1,10 @@
 //! vault-persistence 結合テスト — TC-I07, I10〜I12, I20〜I23
 //! システム検証・パーミッション・環境変数バリデーション・監査ログ
 mod helpers;
-use helpers::{ENV_MUTEX, make_plaintext_vault, make_record, make_repo, plaintext_header};
-use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultDirReason, VaultRepository};
+use helpers::{make_plaintext_vault, make_record, make_repo, plaintext_header, ENV_MUTEX};
+use shikomi_infra::persistence::{
+    PersistenceError, SqliteVaultRepository, VaultDirReason, VaultRepository,
+};
 use std::path::Path;
 use tempfile::TempDir;
 
