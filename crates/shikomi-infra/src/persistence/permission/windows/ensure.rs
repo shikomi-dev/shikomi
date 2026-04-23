@@ -21,7 +21,7 @@ use crate::persistence::error::PersistenceError;
 ///
 /// - ディレクトリ作成失敗: `PersistenceError::Io`
 /// - Win32 ACL API 失敗: `PersistenceError::Io` / `PersistenceError::InvalidPermission`
-pub(super) fn ensure_dir(path: &Path) -> Result<(), PersistenceError> {
+pub(in crate::persistence::permission) fn ensure_dir(path: &Path) -> Result<(), PersistenceError> {
     std::fs::create_dir_all(path).map_err(|e| PersistenceError::Io {
         path: path.to_path_buf(),
         source: e,
@@ -43,7 +43,7 @@ pub(super) fn ensure_dir(path: &Path) -> Result<(), PersistenceError> {
 /// # Errors
 ///
 /// - Win32 ACL API 失敗: `PersistenceError::Io` / `PersistenceError::InvalidPermission`
-pub(super) fn ensure_file(path: &Path) -> Result<(), PersistenceError> {
+pub(in crate::persistence::permission) fn ensure_file(path: &Path) -> Result<(), PersistenceError> {
     let (_sd_guard, owner_sid) = fetch_owner_sid_from_path(path)?;
     let acl_guard = build_owner_only_dacl(owner_sid, EXPECTED_FILE_MASK, path, EXPECTED_FILE_STR)?;
     apply_protected_dacl(path, &acl_guard)?;
@@ -56,7 +56,7 @@ pub(super) fn ensure_file(path: &Path) -> Result<(), PersistenceError> {
 ///
 /// - Win32 API 失敗: `PersistenceError::Io`
 /// - 不変条件違反: `PersistenceError::InvalidPermission`
-pub(super) fn verify_dir(path: &Path) -> Result<(), PersistenceError> {
+pub(in crate::persistence::permission) fn verify_dir(path: &Path) -> Result<(), PersistenceError> {
     let (_sd_guard, owner_sid, dacl, control) = fetch_dacl_and_owner(path)?;
     verify_dacl_owner_only(
         path,
@@ -74,7 +74,7 @@ pub(super) fn verify_dir(path: &Path) -> Result<(), PersistenceError> {
 ///
 /// - Win32 API 失敗: `PersistenceError::Io`
 /// - 不変条件違反: `PersistenceError::InvalidPermission`
-pub(super) fn verify_file(path: &Path) -> Result<(), PersistenceError> {
+pub(in crate::persistence::permission) fn verify_file(path: &Path) -> Result<(), PersistenceError> {
     let (_sd_guard, owner_sid, dacl, control) = fetch_dacl_and_owner(path)?;
     verify_dacl_owner_only(
         path,
