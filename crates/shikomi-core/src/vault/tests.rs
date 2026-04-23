@@ -109,10 +109,7 @@ impl VekProvider for DummyVekProvider {
         }
     }
 
-    fn derive_new_wrapped_recovery(
-        &self,
-        _vek: &SecretBytes,
-    ) -> Result<WrappedVek, DomainError> {
+    fn derive_new_wrapped_recovery(&self, _vek: &SecretBytes) -> Result<WrappedVek, DomainError> {
         if self.should_fail {
             Err(DomainError::VaultConsistencyError(
                 VaultConsistencyReason::RekeyPartialFailure,

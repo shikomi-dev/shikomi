@@ -218,10 +218,8 @@ fn test_record_rehydrate_updated_at_before_created_at_returns_invalid_updated_at
 #[test]
 fn test_record_rehydrate_truncates_subsecond_to_microseconds() {
     // 789 ns のサブマイクロ秒成分を持つタイムスタンプ
-    let created_at =
-        OffsetDateTime::from_unix_timestamp_nanos(1_000_000_000_123_456_789).unwrap();
-    let updated_at =
-        OffsetDateTime::from_unix_timestamp_nanos(1_000_000_001_987_654_321).unwrap();
+    let created_at = OffsetDateTime::from_unix_timestamp_nanos(1_000_000_000_123_456_789).unwrap();
+    let updated_at = OffsetDateTime::from_unix_timestamp_nanos(1_000_000_001_987_654_321).unwrap();
     let record = Record::rehydrate(
         make_id(),
         RecordKind::Secret,
