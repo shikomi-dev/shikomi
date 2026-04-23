@@ -38,6 +38,31 @@ flowchart TB
    - **Linux (Autostart)**: 直接 `shikomi-daemon` をバックグラウンド起動（`setsid nohup`）。failsafe 経路
 5. **CLI の動作**: 常時 daemon に IPC 接続。daemon 未起動の場合は「起動せよ」と案内（`shikomi daemon start` を提示）
 
+#### 4.1.1 MVP フェーズ区分（CLI / GUI と vault の接続経路）
+
+§4.1 ルール1「`shikomi-cli` / `shikomi-gui` は**直接 vault を開かない**」は**最終形態（Phase 2）の規定**である。shikomi は MVP 段階で `shikomi-daemon` が未実装の期間があり、その間の CLI / GUI の動作規定を以下のフェーズ区分で明示する。
+
+| フェーズ | 期間 | `shikomi-cli` の vault 接続 | `shikomi-gui` の vault 接続 | 理由 |
+|---------|------|-------------------------|-------------------------|------|
+| **Phase 1（現在）** | `shikomi-daemon` 未実装期間 | `shikomi-infra::SqliteVaultRepository` を**直接構築**（CLI 直結） | 同左（GUI 実装着手時に同様の扱いとする。本書で先行記載） | daemon が存在しないため IPC 経由が物理的に不可能。Clean Arch の縦串を先に通して後続 feature の骨格テンプレートを確立する |
+| **Phase 2（最終形態）** | `shikomi-daemon` 実装以降 | `shikomi-infra::IpcVaultRepository`（将来追加）で daemon へ IPC 委任 | 同左 | daemon が vault の真実源となり、ホットキー・クリップボード・セッションキーキャッシュを統合管理する |
+
+**Phase 1 → Phase 2 の移行戦略**:
+
+- `shikomi-infra::VaultRepository` trait が**抽象化の壁**として機能し、CLI / GUI の UseCase 層・Presenter 層は trait 境界のみに依存する。
+- Phase 2 移行は**コンポジションルート（CLI の `main.rs` / GUI の Tauri setup）の 1 行差し替え**で完了する。UseCase / Presenter の本体コードは無変更。
+- 本方針は `docs/features/cli-vault-commands/` で最初に適用され、後続の `shikomi-gui` feature も同パターンを踏襲する。
+
+**Phase 1 の受容リスクと Fail Fast 動作**:
+
+- Phase 1 期間中に `shikomi-cli` と `shikomi-daemon`（実装途中で手動起動等）が同一 vault.db に同時アクセスする可能性は理論上ある。このケースは既存の `shikomi-infra::persistence::lock`（`VaultLock`、Unix `flock` / Windows `LockFileEx`）により一方が `PersistenceError::Locked` で Fail Fast する——**設計通りの挙動**で、データ破損は発生しない。
+- Phase 2 完了まで daemon を使わない運用で shikomi を導入したユーザは、Phase 2 移行後も自動的に IPC 経由へ切り替わる（CLI バイナリをアップグレードするだけ）。vault.db フォーマット（SQLite スキーマ）は Phase 1 / Phase 2 で同一で、データマイグレーションは発生しない。
+
+**暗号化モード（オプトイン）とフェーズ区分の交差**:
+
+- Phase 1 の CLI / GUI は**平文モードのみ対応**する。暗号化 vault を検出した場合は Fail Fast で「encryption not yet supported」エラーを返す（`shikomi-cli` は終了コード 3 で終了、`docs/features/cli-vault-commands/requirements.md` REQ-CLI-009）。
+- 暗号化モード対応は Phase 2 と独立に将来 feature で導入可能（VEK キャッシュを daemon プロセスで持つ必要があるため、Phase 2 完了後に実装するのが自然だが、Phase 1 の CLI に「unlock + in-memory decrypt」を一時実装する選択肢も残す）。判断は将来 feature（`cli-vault-encryption`）の要求分析時に行う。
+
 ### 4.2 プロセス間通信（IPC）設計
 
 **経路**: OS 標準のユーザ権限ローカル通信。**TCP は使わない**（同ネットワーク上の他端末から攻撃されない保証が必要なため）。
