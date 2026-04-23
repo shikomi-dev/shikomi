@@ -180,7 +180,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-U13 |
-| 対応する受入基準ID | AC-16 |
+| 対応する受入基準ID | AC-15 |
 | 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::NotAbsolute、バリデーション step ①） |
 | 種別 | 異常系 |
 | 前提条件 | — |
@@ -194,7 +194,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-U14 |
-| 対応する受入基準ID | AC-16 |
+| 対応する受入基準ID | AC-15 |
 | 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::PathTraversal、バリデーション step ②） |
 | 種別 | 異常系 |
 | 前提条件 | — |
@@ -208,7 +208,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-U15 |
-| 対応する受入基準ID | AC-16 |
+| 対応する受入基準ID | AC-15 |
 | 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::SymlinkNotAllowed、バリデーション step ③） |
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(unix)]`。`std::os::unix::fs::symlink(real_dir, symlink_path)` でシンボリックリンクを作成済み。実際のディレクトリ（`real_dir`）が存在する |
@@ -222,7 +222,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-U16 |
-| 対応する受入基準ID | AC-16 |
+| 対応する受入基準ID | AC-15 |
 | 対応する工程 | 詳細設計（REQ-P15、VaultDirReason::ProtectedSystemArea、バリデーション step ⑤） |
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(unix)]`。`/etc/shikomi_test_dir` は実際に作成しない（`canonicalize` 失敗の前にバリデーションで拒否されるため） |

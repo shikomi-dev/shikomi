@@ -22,27 +22,27 @@
 
 ## 2. テスト対象と受入基準
 
-> **注**: AC-01〜AC-13 は `docs/features/vault-persistence/requirements-analysis.md` §受入基準に定義（元の受入基準#1〜#12に対応。#3が TC-03/04 の 2 ケースに分割のためAC番号に1ずれあり）。AC-14 は第1回レビュー差し戻しで追加（save 側 `.new` 残存検出、要件側受入基準#13）。AC-15〜AC-17 は第2回レビュー差し戻しで新設 REQ-P13〜P15 に対して追加。**要件側との対応**: セルのリナンバー後は要件側の受入基準番号と全AC番号が1:1対応する。
+> **注**: AC-01〜AC-17 は `docs/features/vault-persistence/requirements-analysis.md` §受入基準#1〜#17 と **完全 1:1 対応**する（第3回レビュー差し戻し後の番号整理で確定）。AC-03 は要件#3「暗号化モード save/load → UnsupportedYet」に対応し、TC-I03（save 側）と TC-I04（load 側）の 2 ケースが共に AC-03 に紐付く（1 受入基準に複数 TC が対応する形式）。AC-05（参考観点：クラッシュ耐性）は要件#5の記述を継承し、TC-I06（write_new_only 論理等価テスト）が AC-06 として決定的に検証する。
 
 | 受入基準ID | 受入基準 | 検証レベル |
 |-----------|---------|-----------|
 | AC-01 | 全機能 REQ-P01〜REQ-P15 の型とメソッドが `shikomi-infra` の公開 API に存在する（`VaultLock`・`audit.rs`・`VaultDirReason` 含む） | 結合 |
 | AC-02 | 平文 vault の `save` → `load` で同一 `Vault` が復元される（レコード順含む） | 結合 |
-| AC-03 | 暗号化モード vault を `save` すると `PersistenceError::UnsupportedYet` が返る | 結合 |
-| AC-04 | 暗号化モード vault を `load` すると `PersistenceError::UnsupportedYet` が返る | 結合 |
-| AC-05 | `.new` ファイルを手動で残した状態で `load` を呼ぶと `PersistenceError::OrphanNewFile` が返る | 結合 |
-| AC-06 | `AtomicWriter::write_new_only` テストフックを使って `.new` 書込完了後 rename なし状態を再現 → `vault.db` 本体が未変更で `OrphanNewFile` が返る | 結合 |
-| AC-07 | vault ディレクトリが `0777` で作られている状態で `load` すると `PersistenceError::InvalidPermission` が返る | 結合（Unix） |
-| AC-08 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | 結合 |
-| AC-09 | 生 SQL 連結を使っていない（`rusqlite::params!` マクロ経由でのみバインドしている） | 結合（静的 grep） |
-| AC-10 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | 結合（CI） |
-| AC-11 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | 結合（CI） |
-| AC-12 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | 結合（Unix） |
-| AC-13 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` または `PersistenceError::Sqlite` が返り panic しない | 結合 |
-| AC-14 | `vault.db.new` が残存した状態で `save()` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側の `.new` 残存検出、REQ-P05 の詳細設計 §save アルゴリズム step 3） | 結合 |
-| AC-15 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない（REQ-P14 監査ログ秘密漏洩防止） | 結合 |
-| AC-16 | `SHIKOMI_VAULT_DIR` に `/etc/` / `..` 含むパス / シンボリックリンクを指定するとそれぞれ `PersistenceError::InvalidVaultDir` で拒否される（REQ-P15 `VaultPaths::new` 7段階バリデーション） | 結合（Unix） |
-| AC-17 | `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（REQ-P13 advisory lock 競合検知） | 結合 |
+| AC-03 | 暗号化モード vault を `save` または `load` すると `PersistenceError::UnsupportedYet` が返る（TC-I03: save 側 / TC-I04: load 側） | 結合 |
+| AC-04 | `.new` ファイルを手動で残した状態で `load` を呼ぶと `PersistenceError::OrphanNewFile` が返る | 結合 |
+| AC-05 | save 中クラッシュ（電源断相当）後 `vault.db` 本体が破損しない（参考観点：AC-06 / TC-I06 の `write_new_only` テストで論理等価に検証） | 結合 |
+| AC-06 | `AtomicWriter::write_new_only` テストフックを使って `.new` 書込完了後 rename なし状態を再現 → `vault.db` 本体が未変更で `OrphanNewFile` が返る（AC-05 参考観点の決定的等価テスト） | 結合 |
+| AC-07 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | 結合 |
+| AC-08 | 生 SQL 連結を使っていない（`rusqlite::params!` マクロ経由でのみバインドしている） | 結合（静的 grep） |
+| AC-09 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | 結合（CI） |
+| AC-10 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | 結合（CI） |
+| AC-11 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | 結合（Unix） |
+| AC-12 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` または `PersistenceError::Sqlite` が返り panic しない | 結合 |
+| AC-13 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない（REQ-P14 監査ログ秘密漏洩防止） | 結合 |
+| AC-14 | `vault.db.new` が残存した状態で `save()` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、REQ-P05） | 結合 |
+| AC-15 | `SHIKOMI_VAULT_DIR` に `/etc/` / `..` 含むパス / シンボリックリンクを指定するとそれぞれ `PersistenceError::InvalidVaultDir` で拒否される（REQ-P15 `VaultPaths::new` 7段階バリデーション） | 結合（Unix） |
+| AC-16 | `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（REQ-P13 advisory lock 競合検知） | 結合 |
+| AC-17 | vault ディレクトリが `0777` で作られている状態で `load` すると `PersistenceError::InvalidPermission` が返る（REQ-P06 load 側検証） | 結合（Unix） |
 
 > **AC-06 改訂メモ**: 初版では「SIGKILL を子プロセスに送信」という非決定的テストとして定義していた。ペテルギウスレビューの指摘を受け「タイミング依存しない論理等価テスト」に差し替えた。`AtomicWriter::write_new_only`（`#[cfg(test)]` 限定フック）の実装が実装担当の必須タスクとなる。
 
@@ -55,26 +55,26 @@
 | TC-I01 | AC-01 | REQ-P01〜P15 | `cargo doc -p shikomi-infra --no-deps` が成功し公開型（`VaultLock`・`VaultDirReason` 含む）が出力される | 結合 | 正常系 |
 | TC-I02 | AC-02 | REQ-P01, P02, P03, P04, P09 | 平文 vault（レコード 5 件）の save → load round-trip で `Vault` が等価復元される | 結合 | 正常系 |
 | TC-I03 | AC-03 | REQ-P11 | 暗号化モード `Vault` を save → `UnsupportedYet` が返る。`.new` が作成されていない | 結合 | 異常系 |
-| TC-I04 | AC-04 | REQ-P11 | `protection_mode='encrypted'` の vault.db を直接作成して load → `UnsupportedYet` が返る | 結合 | 異常系 |
-| TC-I05 | AC-05 | REQ-P05 | `vault.db.new` 手動作成後 `load()` → `OrphanNewFile` が返る | 結合 | 異常系 |
-| TC-I06 | AC-06 | REQ-P04 | `write_new_only` フックで `.new` のみ作成 → `vault.db` 未変更・`load()` が `OrphanNewFile` を返す | 結合 | 異常系 |
-| TC-I07 | AC-07 | REQ-P06 | vault ディレクトリを `chmod 0777` → `load()` が `InvalidPermission` を返す（Unix） | 結合 | 異常系 |
-| TC-I08 | AC-08 | REQ-P09, P12 | 絵文字・CJK・アラビア文字を含む label の save → load round-trip でバイト同一を確認 | 結合 | 境界値 |
-| TC-I09 | AC-09 | REQ-P12 | SQL 文字列連結パターンの静的 grep → マッチ行ゼロ | 結合（静的） | 正常系 |
-| TC-I10 | AC-10 | — | `cargo test -p shikomi-infra` が pass かつ行カバレッジ ≥ 80% | 結合（CI） | 正常系 |
-| TC-I11 | AC-11 | — | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check --all` / `cargo deny check` が全て pass | 結合（CI） | 正常系 |
-| TC-I12 | AC-12 | REQ-P06 | save 完了後 `stat(vault.db).mode() & 0o777 == 0o600` を確認（Unix） | 結合 | 正常系 |
-| TC-I13 | AC-13 | REQ-P09, P10 | ゼロバイト vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
-| TC-I14 | AC-13 | REQ-P09, P10 | 不正バイト列 vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
+| TC-I04 | AC-03 | REQ-P11 | `protection_mode='encrypted'` の vault.db を直接作成して load → `UnsupportedYet` が返る | 結合 | 異常系 |
+| TC-I05 | AC-04 | REQ-P05 | `vault.db.new` 手動作成後 `load()` → `OrphanNewFile` が返る | 結合 | 異常系 |
+| TC-I06 | AC-05, AC-06 | REQ-P04 | `write_new_only` フックで `.new` のみ作成 → `vault.db` 未変更・`load()` が `OrphanNewFile` を返す（AC-05 参考観点の論理等価、AC-06 の決定的テスト） | 結合 | 異常系 |
+| TC-I07 | AC-17 | REQ-P06 | vault ディレクトリを `chmod 0777` → `load()` が `InvalidPermission` を返す（Unix） | 結合 | 異常系 |
+| TC-I08 | AC-07 | REQ-P09, P12 | 絵文字・CJK・アラビア文字を含む label の save → load round-trip でバイト同一を確認 | 結合 | 境界値 |
+| TC-I09 | AC-08 | REQ-P12 | SQL 文字列連結パターンの静的 grep → マッチ行ゼロ | 結合（静的） | 正常系 |
+| TC-I10 | AC-09 | — | `cargo test -p shikomi-infra` が pass かつ行カバレッジ ≥ 80% | 結合（CI） | 正常系 |
+| TC-I11 | AC-10 | — | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check --all` / `cargo deny check` が全て pass | 結合（CI） | 正常系 |
+| TC-I12 | AC-11 | REQ-P06 | save 完了後 `stat(vault.db).mode() & 0o777 == 0o600` を確認（Unix） | 結合 | 正常系 |
+| TC-I13 | AC-12 | REQ-P09, P10 | ゼロバイト vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
+| TC-I14 | AC-12 | REQ-P09, P10 | 不正バイト列 vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
 | TC-I15 | AC-14 | REQ-P05 | `vault.db.new` 手動作成後 `save()` → `OrphanNewFile` が返る。`vault.db` 未変更 | 結合 | 異常系 |
 | TC-I16 | — | REQ-P01 | `exists()` が vault.db 非存在時に `Ok(false)` を返す | 結合 | 正常系 |
 | TC-I17 | — | REQ-P01 | `exists()` が vault.db 存在時に `Ok(true)` を返す（save 後に確認） | 結合 | 正常系 |
 | TC-I18 | — | REQ-P08 | `SHIKOMI_VAULT_DIR` 環境変数を tempdir に設定 → 指定ディレクトリに vault.db が作成される（`serial_test` クレートで直列化） | 結合 | 正常系 |
 | TC-I19 | AC-02 | REQ-P02, P03 | ゼロレコード平文 vault の save → load round-trip（境界値） | 結合 | 境界値 |
 | TC-I20 | — | REQ-P03, P12 | CHECK 制約違反の生 SQL を直接実行 → `SQLITE_CONSTRAINT_CHECK` エラーが返る（防衛線確認） | 結合 | 異常系 |
-| TC-I21 | AC-17 | REQ-P13 | 子プロセス 2 本が同 vault ディレクトリで `save()` を同時呼出 → 後発プロセスが `PersistenceError::Locked` を返す | 結合 | 異常系 |
-| TC-I22 | AC-16 | REQ-P15 | `SHIKOMI_VAULT_DIR` に `..` 含むパス / シンボリックリンク / `/etc/` 配下 をそれぞれ指定 → 全ケースで `PersistenceError::InvalidVaultDir` が返る（Unix） | 結合 | 異常系 |
-| TC-I23 | AC-15 | REQ-P14 | `tracing-test` で全操作（save/load/exists/error）のログを収集し、秘密値パターンがマッチしないことを確認 | 結合 | 正常系 |
+| TC-I21 | AC-16 | REQ-P13 | 子プロセス 2 本が同 vault ディレクトリで `save()` を同時呼出 → 後発プロセスが `PersistenceError::Locked` を返す | 結合 | 異常系 |
+| TC-I22 | AC-15 | REQ-P15 | `SHIKOMI_VAULT_DIR` に `..` 含むパス / シンボリックリンク / `/etc/` 配下 をそれぞれ指定 → 全ケースで `PersistenceError::InvalidVaultDir` が返る（Unix） | 結合 | 異常系 |
+| TC-I23 | AC-13 | REQ-P14 | `tracing-test` で全操作（save/load/exists/error）のログを収集し、秘密値パターンがマッチしないことを確認 | 結合 | 正常系 |
 | TC-U01 | — | REQ-P08, P15 | `VaultPaths::new` が正常パスで `Ok(VaultPaths)` を返し `vault_db()` / `vault_db_new()` / `vault_db_lock()` が正しいパスを返す | ユニット | 正常系 |
 | TC-U02 | — | REQ-P09 | `Mapping::vault_header_to_params` が平文モードで `kdf_salt = None` を返す | ユニット | 正常系 |
 | TC-U03 | — | REQ-P09 | `Mapping::row_to_vault_header` が正常行から `VaultHeader` を復元する | ユニット | 正常系 |
@@ -87,10 +87,10 @@
 | TC-U10 | — | REQ-P06 | `PermissionGuard::verify_dir` に `mode=0o755` → `Err(InvalidPermission)` （Unix） | ユニット | 異常系 |
 | TC-U11 | — | REQ-P06 | `PermissionGuard::verify_file` に `mode=0o600` → `Ok(())` （Unix） | ユニット | 正常系 |
 | TC-U12 | — | REQ-P06 | `PermissionGuard::verify_file` に `mode=0o644` → `Err(InvalidPermission)` （Unix） | ユニット | 異常系 |
-| TC-U13 | AC-16 | REQ-P15 | `VaultPaths::new` に相対パスを渡す → `Err(InvalidVaultDir { reason: NotAbsolute })` | ユニット | 異常系 |
-| TC-U14 | AC-16 | REQ-P15 | `VaultPaths::new` に `..` を含むパスを渡す → `Err(InvalidVaultDir { reason: PathTraversal })` | ユニット | 異常系 |
-| TC-U15 | AC-16 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
-| TC-U16 | AC-16 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
+| TC-U13 | AC-15 | REQ-P15 | `VaultPaths::new` に相対パスを渡す → `Err(InvalidVaultDir { reason: NotAbsolute })` | ユニット | 異常系 |
+| TC-U14 | AC-15 | REQ-P15 | `VaultPaths::new` に `..` を含むパスを渡す → `Err(InvalidVaultDir { reason: PathTraversal })` | ユニット | 異常系 |
+| TC-U15 | AC-15 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
+| TC-U16 | AC-15 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
 
 ---
 
@@ -188,7 +188,7 @@ echo "=== 全テスト PASS ==="
 | 正常系 | 全 正常系テストケース必須（TC-I02, I16, I17, I18, I19, I23, TC-U01〜U03, U06, U09, U11） |
 | 異常系 | 全 11 種 `PersistenceError` バリアント（`Io` / `Sqlite` / `Corrupted` / `InvalidPermission` / `InvalidVaultDir` / `OrphanNewFile` / `AtomicWriteFailed` / `SchemaMismatch` / `UnsupportedYet` / `CannotResolveVaultDir` / `Locked`）が少なくとも 1 ケースで発生・検証されること。`panic!` が一切発生しないことを確認 |
 | 境界値 | ゼロレコード（TC-I19）、絵文字ラベル（TC-I08）、ゼロバイトファイル（TC-I13）、不正バイト列（TC-I14） |
-| カバレッジ数値 | `cargo llvm-cov` 行カバレッジ 80% 以上（AC-10） |
+| カバレッジ数値 | `cargo llvm-cov` 行カバレッジ 80% 以上（AC-09） |
 | Fail Secure ケース | `.new` 残存 load 側（TC-I05）・`.new` 残存 save 側（TC-I15）・OS パーミッション異常（TC-I07, TC-I12, TC-U10, TC-U12）・暗号化モード拒否（TC-I03, TC-I04）・VaultDir バリデーション（TC-I22, TC-U13〜U16）・ロック競合（TC-I21）が**必須**（省略不可） |
 
 ---
@@ -196,4 +196,5 @@ echo "=== 全テスト PASS ==="
 *作成: 涅マユリ（テスト担当）/ 2026-04-23*
 *改訂 v2: 涅マユリ（テスト担当）/ 2026-04-23 — 第1回レビュー差し戻し対応: ① `test-design/` ディレクトリ分割 ② AC-14 追加（TC-I15 トレーサビリティ修正） ③ TC-I06 を決定的テストに変更（`write_new_only` フック） ④ §6 実行環境に `serial_test` 明記*
 *改訂 v3: 涅マユリ（テスト担当）/ 2026-04-23 — 第2回レビュー差し戻し対応: ⑤ AC-01 範囲を REQ-P15 まで更新 ⑥ AC-15〜17 追加（REQ-P14/P15/P13 対応） ⑦ TC-I21〜I23（VaultLock競合・VaultPaths::newバリデーション・tracing秘密漏洩）追加 ⑧ TC-U01 更新（VaultPaths::new が Result 返却）⑨ TC-U13〜U16（VaultPaths::new 異常系 4 件）追加 ⑩ カバレッジ基準のバリアント数を 11 種に修正*
+*改訂 v4: 涅マユリ（テスト担当）/ 2026-04-23 — 第3回レビュー差し戻し対応: ⑪ AC 番号を要件側受入基準#1〜#17 と完全 1:1 に整合。AC-03 を「save/load 両方」に統合し旧 AC-04 を廃止（TC-I03/TC-I04 共に AC-03 対応）。以降 AC-04〜AC-17 を繰り上げ再番号付け（AC-05=参考観点新設、AC-07=UTF-8、AC-08=SQL grep、AC-09=cargo test、AC-10=clippy、AC-11=パーミッション、AC-12=破損SQLite、AC-13=tracing秘密漏洩、AC-15=VaultDir バリデーション、AC-16=lock 競合、AC-17=0777 load）。テストマトリクス・integration.md・unit.md の全受入基準IDを追随更新。*
 *対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード）*
