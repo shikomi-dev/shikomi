@@ -1,14 +1,14 @@
-//! 結合テスト: RecordLabel 境界値（TC-I03）
+//! 結合テスト: `RecordLabel` 境界値（TC-I03）
 //! REQ-005 / AC-03, AC-06
 
 use shikomi_core::{DomainError, InvalidRecordLabelReason, RecordLabel};
 
-/// TC-I03: RecordLabel 境界値を外部 API から検証
+/// TC-I03: `RecordLabel` 境界値を外部 API から検証
 #[test]
 fn test_record_label_boundaries_from_public_api() {
     // (a) empty -> Err(Empty)
     assert!(matches!(
-        RecordLabel::try_new("".to_string()).unwrap_err(),
+        RecordLabel::try_new(String::new()).unwrap_err(),
         DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty)
     ));
 

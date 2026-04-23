@@ -31,5 +31,14 @@ serde           = { version = "1",    features = ["derive"] }
 secrecy         = { version = "0.10" }
 zeroize         = { version = "1",    features = ["derive"] }
 thiserror       = "2"
-time            = { version = "0.3",  features = ["serde", "macros"] }
+time            = { version = "0.3",  features = ["serde", "macros", "formatting", "parsing"] }
 unicode-segmentation = "1"
+rusqlite        = { version = "0.31", features = ["bundled"] }
+fs4             = { version = "0.9",  default-features = false, features = ["sync"] }
+cfg-if          = "1"
+tracing         = "0.1"
+dirs            = "5"
+shikomi-core    = { path = "crates/shikomi-core", version = "0.1.0" }
+tempfile        = "3"
+tracing-test    = "0.2"
+serial_test     = "3"
