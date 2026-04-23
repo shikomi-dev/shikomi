@@ -47,7 +47,6 @@ impl AtomicWriter {
     ///
     /// - ファイル作成失敗: `PersistenceError::AtomicWriteFailed { stage: PrepareNew }`
     /// - SQLite エラー: `PersistenceError::Sqlite`
-    /// - パーミッション設定失敗: `PersistenceError::Io`
     pub(crate) fn write_new(paths: &VaultPaths, vault: &Vault) -> Result<(), PersistenceError> {
         let new_path = paths.vault_db_new();
 
@@ -74,9 +73,6 @@ impl AtomicWriter {
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
         conn.execute_batch(SchemaSql::CREATE_RECORDS)
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
-
-        // SQLite open 後にパーミッションを再設定
-        PermissionGuard::ensure_file(new_path)?;
 
         // トランザクション: vault_header と全レコードを挿入
         {
@@ -133,6 +129,7 @@ impl AtomicWriter {
     /// - fsync 失敗: `PersistenceError::AtomicWriteFailed { stage: FsyncTemp }`
     /// - ディレクトリ fsync 失敗（Unix のみ）: `PersistenceError::AtomicWriteFailed { stage: FsyncDir }`
     /// - リネーム失敗: `PersistenceError::AtomicWriteFailed { stage: Rename }`
+    /// - リネーム後の DACL 設定失敗: `PersistenceError::Io` / `PersistenceError::InvalidPermission`
     pub(crate) fn fsync_and_rename(paths: &VaultPaths) -> Result<(), PersistenceError> {
         let new_path = paths.vault_db_new();
         let final_path = paths.vault_db();
@@ -177,6 +174,8 @@ impl AtomicWriter {
         }
 
         // アトミックリネーム（POSIX では原子的）
+        // Windows では MoveFileExW が source に DELETE アクセスを要求する。
+        // ensure_file は DELETE を含まない DACL を設定するため、rename 前ではなく rename 後に適用する。
         std::fs::rename(new_path, final_path).map_err(|e| {
             Self::cleanup_orphan_best_effort(new_path);
             PersistenceError::AtomicWriteFailed {
@@ -184,6 +183,9 @@ impl AtomicWriter {
                 source: e,
             }
         })?;
+
+        // リネーム後に最終ファイルへ owner-only DACL を適用する
+        PermissionGuard::ensure_file(final_path)?;
 
         Ok(())
     }
