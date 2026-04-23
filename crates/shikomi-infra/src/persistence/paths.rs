@@ -87,7 +87,7 @@ impl VaultPaths {
         match std::fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // パスが存在しない（新規作成予定）→ シンボリックリンク/ディレクトリチェック不要
-                // Step 5 (非存在パス向け): 保護されたシステム領域チェック（raw パスで評価）
+                // Step 5 (非存在パス向け): 保護されたシステム領域チェック（canonicalize 不要の raw パスで評価）
                 for &prefix in PROTECTED_PATH_PREFIXES {
                     if dir.starts_with(prefix) {
                         return Err(PersistenceError::InvalidVaultDir {
