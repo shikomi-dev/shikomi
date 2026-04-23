@@ -25,13 +25,15 @@ const ACE_TYPE_ACCESS_ALLOWED: u8 = 0x00;
 
 /// ファイルの期待 AccessMask（`FILE_GENERIC_READ | FILE_GENERIC_WRITE`）。
 ///
-/// - FILE_GENERIC_READ  = SYNCHRONIZE(0x100000) | READ_CONTROL(0x20000)
-///                      | FILE_READ_DATA(0x1) | FILE_READ_ATTRIBUTES(0x80) | FILE_READ_EA(0x8)
-///                      = 0x0012_0089
-/// - FILE_GENERIC_WRITE = SYNCHRONIZE(0x100000) | READ_CONTROL(0x20000)
-///                      | FILE_WRITE_DATA(0x2) | FILE_WRITE_ATTRIBUTES(0x100)
-///                      | FILE_WRITE_EA(0x10) | FILE_APPEND_DATA(0x4)
-///                      = 0x0012_0116
+/// ```text
+/// FILE_GENERIC_READ  = SYNCHRONIZE(0x100000) | READ_CONTROL(0x20000)
+///                    | FILE_READ_DATA(0x1) | FILE_READ_ATTRIBUTES(0x80) | FILE_READ_EA(0x8)
+///                    = 0x0012_0089
+/// FILE_GENERIC_WRITE = SYNCHRONIZE(0x100000) | READ_CONTROL(0x20000)
+///                    | FILE_WRITE_DATA(0x2) | FILE_WRITE_ATTRIBUTES(0x100)
+///                    | FILE_WRITE_EA(0x10) | FILE_APPEND_DATA(0x4)
+///                    = 0x0012_0116
+/// ```
 const EXPECTED_FILE_MASK: u32 = 0x0012_0089 | 0x0012_0116; // = 0x0012_019F
 
 /// ディレクトリの期待 AccessMask（`FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_TRAVERSE`）。
