@@ -11,7 +11,7 @@
 |------|------|
 | 入力 | `Vault` 値（save）、vault パス（load の構築時引数） |
 | 処理 | 永続化の抽象インターフェース。`load` / `save` / `exists` の 3 メソッドを定義する。`shikomi-infra` が所有し、将来の別実装（テスト用 in-memory、別フォーマット）もこの trait に従う |
-| 出力 | `load`: `Result<Vault, PersistenceError>` ／ `save`: `Result<(), PersistenceError>` ／ `exists`: `bool` |
+| 出力 | `load`: `Result<Vault, PersistenceError>` ／ `save`: `Result<(), PersistenceError>` ／ `exists`: `Result<bool, PersistenceError>`（パス解決時に I/O エラーが起きうるため `bool` に潰さず `Result` で返す、Fail Fast） |
 | エラー時 | `PersistenceError`（REQ-P10）の各バリアントで区別 |
 
 ### REQ-P02: `SqliteVaultRepository`（`VaultRepository` 実装）
@@ -73,7 +73,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | なし（環境変数・OS デフォルト）／テスト用に明示パス |
-| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け）。テスト用コンストラクタ `SqliteVaultRepository::with_dir(PathBuf)` を提供し tempdir を直接受け取れる |
+| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け、**`VaultPaths::new` でパストラバーサル・シンボリックリンク検証を必ず通す**、basic-design.md §セキュリティ設計参照）。内部・テスト専用の構築口として `#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` を提供し、tempdir を直接受け取れる（正規 API は `new()`） |
 | 出力 | `PathBuf`（vault ディレクトリ） |
 | エラー時 | `dirs` が解決失敗（例: HOME 未設定の極端環境）→ `PersistenceError::CannotResolveVaultDir` |
 
@@ -113,6 +113,33 @@
 | 出力 | 正常: 続行 |
 | エラー時 | 設計上発生しない（型とマクロで排除）。コードレビュー / grep / clippy で機械的検証 |
 
+### REQ-P13: プロセス間 advisory lock
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `VaultPaths`（`vault.db.lock` ファイルを派生パスに持つ） |
+| 処理 | `VaultLock::acquire_exclusive(&paths)` を `save` 冒頭で、`VaultLock::acquire_shared(&paths)` を `load` 冒頭で呼ぶ。`fs2` crate の `try_lock_exclusive` / `try_lock_shared`（Unix: `flock(LOCK_EX/LOCK_SH, LOCK_NB)`、Windows: `LockFileEx(LOCKFILE_FAIL_IMMEDIATELY [+LOCKFILE_EXCLUSIVE_LOCK])`）。`Drop` 実装でロック解放（RAII）。非ブロッキング、失敗時は即時エラー |
+| 出力 | `Ok(VaultLock)`。呼出側のスコープで生存 |
+| エラー時 | `PersistenceError::Locked { path, holder_hint }`（`holder_hint` は Unix `F_GETLK` 由来の競合プロセス PID、取得不能時 `None`）。呼出側（CLI）はエラー表示して別プロセス終了をユーザに促す責務 |
+
+### REQ-P14: 監査ログ（秘密漏洩防止）
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `load` / `save` / `exists` の各メソッド呼出、および `PersistenceError` 発生イベント |
+| 処理 | 本 crate は `audit.rs` モジュールを介してのみ `tracing` を呼ぶ。`audit::entry_load(paths)` / `entry_save(paths, record_count)` / `exit_ok_load(record_count, protection_mode, elapsed_ms)` / `exit_ok_save(record_count, elapsed_ms, bytes_written)` / `exit_err(err, elapsed_ms)` の 5 関数のみが公開。直接 `tracing::info!` 等を payload に対して呼ぶことは clippy の `disallowed-methods` lint で禁止。全関数のシグネチャは**秘密値を受けない型**のみ |
+| 出力 | `tracing` subscriber（daemon 側の別 Issue で設定）へイベント発行 |
+| エラー時 | 発生しない（`tracing` 自体は panic しない）。監査ログの欠落は上位エラーを上書きしない |
+
+### REQ-P15: `SHIKOMI_VAULT_DIR` バリデーション
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `PathBuf`（環境変数または `dirs::data_dir()` の戻り値） |
+| 処理 | `VaultPaths::new(dir)` 内で 7 段階検証（`basic-design.md` §vault ディレクトリ検証）: ①絶対パス必須、②`..` 要素早期拒否、③シンボリックリンク全面禁止、④`canonicalize`、⑤保護領域 prefix 拒否、⑥ディレクトリ判定、⑦パス派生（`vault.db` / `vault.db.new` / `vault.db.lock`） |
+| 出力 | `Ok(VaultPaths)` |
+| エラー時 | `PersistenceError::InvalidVaultDir { path, reason: VaultDirReason }`。`VaultDirReason` の各バリアントで拒否理由を区別 |
+
 ## 画面・CLI仕様
 
 該当なし — 理由: 本 Issue は `shikomi-infra` の内部ライブラリ実装。CLI/GUI は後続 Issue で本 crate を呼び出す側となる。本 Issue 自体は直接 CLI を提供しない。
@@ -125,13 +152,13 @@
 |----------|-------|------|
 | `shikomi_infra::persistence` | `VaultRepository` trait | 永続化抽象 |
 | 〃 | `SqliteVaultRepository` | `VaultRepository` の SQLite 実装 |
-| 〃 | `PersistenceError`, `CorruptedReason`, `AtomicWriteStage` | エラー型と付随 Reason 列挙 |
-| 〃 | `VaultPaths` | vault ディレクトリ / ファイルパスを束ねる値オブジェクト |
+| 〃 | `PersistenceError`, `CorruptedReason`, `AtomicWriteStage`, `VaultDirReason` | エラー型と付随 Reason 列挙 |
+| 〃 | `VaultPaths` | vault ディレクトリ / ファイルパスを束ねる値オブジェクト（`vault.db` / `vault.db.new` / `vault.db.lock`） |
 
 **公開 API のシグネチャ方針**:
 
 - 全 I/O メソッドは同期 API（`async` ではない）。呼び出し側 daemon は `tokio::task::spawn_blocking` でラップする
-- `SqliteVaultRepository::new()` は OS デフォルトディレクトリで構築、`SqliteVaultRepository::with_dir(PathBuf)` はテスト・CI 向けに任意ディレクトリを受ける
+- `SqliteVaultRepository::new()` は OS デフォルトディレクトリ（または検証済み `SHIKOMI_VAULT_DIR`）で構築する正規 API。`#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` は内部・テスト専用で公開 doc から隠蔽される（パス検証は呼出側責務）
 - 秘密値は `shikomi_core::SecretString` / `SecretBytes` の型のまま API に出し入れする。生 `String` / `Vec<u8>` で平文レコード値を渡さない
 
 ## データモデル
@@ -180,9 +207,10 @@
 | MSG-DEV-P05 | 開発者エラー | `orphan .new file detected at {path}; recovery required` | `PersistenceError::OrphanNewFile` |
 | MSG-DEV-P06 | 開発者エラー | `atomic write failed at stage {stage}: {source}` | `PersistenceError::AtomicWriteFailed` |
 | MSG-DEV-P07 | 開発者エラー | `schema mismatch: file_version={file_version}, supported={supported_range}` | `PersistenceError::SchemaMismatch` |
-| MSG-DEV-P08 | 開発者エラー | `feature {feature} is not yet supported (tracking issue #{tracking_issue})` | `PersistenceError::UnsupportedYet` |
+| MSG-DEV-P08 | 開発者エラー | `feature {feature} is not yet supported` ／ tracking issue が `Some(n)` なら末尾に ` (tracking issue #{n})` を付加、`None` なら `(tracking issue not yet assigned)` を付加 | `PersistenceError::UnsupportedYet` |
 | MSG-DEV-P09 | 開発者エラー | `cannot resolve vault directory from environment` | `PersistenceError::CannotResolveVaultDir` |
-| MSG-DEV-P10 | 開発者エラー | 内包 `shikomi_core::DomainError` の `Display` を素通し（`#[error("{0}")]`）。具体文言は `shikomi-core/src/error.rs` を参照 | `PersistenceError::DomainError` |
+| MSG-DEV-P10 | 開発者エラー | `invalid vault directory at {path}: {reason}`（`reason` は `VaultDirReason` の variant 名を snake_case で） | `PersistenceError::InvalidVaultDir` |
+| MSG-DEV-P11 | 開発者エラー | `vault is locked by another process at {path}` ／ `holder_hint = Some(pid)` の時は末尾に ` (holder pid: {pid})` を付加 | `PersistenceError::Locked` |
 
 **エンドユーザー向け文言**（例: 「vault ファイルが破損しています。バックアップから復旧してください」）は CLI/GUI Issue で `MSG-UI-xxx` として別途定義する。
 
@@ -198,7 +226,11 @@
 | `time` | 0.3.x | `serde`, `macros`, `formatting`, `parsing` | RFC3339 入出力 |
 | `tempfile` | 3.x（dev-deps） | — | 結合テストで tempdir |
 | `cfg-if` | 1.x | — | OS 別コード分岐の可読性向上 |
-| `windows` | 最新安定（Windows のみ） | `Win32_Security_Authorization`, `Win32_Foundation`, `Win32_Storage_FileSystem` | Windows ACL 設定・検証・`ReplaceFileW` |
+| `windows` | 最新安定（Windows のみ） | `Win32_Security_Authorization`, `Win32_Foundation`, `Win32_Storage_FileSystem` | Windows ACL 設定・検証・`ReplaceFileW`・`LockFileEx` |
+| `fs2` | 0.4.x | — | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用 |
+| `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design.md` §セキュリティ設計 §監査ログ規約参照 |
+| `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-14） |
+| `serial_test` | 3.x（dev-deps） | — | `std::env::set_var` を触るテストの直列化（test-design §実行環境） |
 
 全て `Cargo.toml` ルートの `[workspace.dependencies]` 経由で指定し、`crates/shikomi-infra/Cargo.toml` では `{ workspace = true }` で参照する（`docs/architecture/tech-stack.md` §4.1 / §4.4）。
 

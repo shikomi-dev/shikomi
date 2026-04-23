@@ -66,6 +66,9 @@ Issue #7 マージ直後の工程1で以下を合意:
 | REQ-P10 | `PersistenceError` 型 | 永続化層固有のエラー列挙。I/O / SQLite / ドメイン違反 / パーミッション異常 / `.new` 残存を排他区別 | 必須 |
 | REQ-P11 | 暗号化モード vault の明示拒否 | 暗号化モード vault を load/save しようとすると `PersistenceError::UnsupportedYet` を返す。別 Issue 完成まで静かに壊れない | 必須 |
 | REQ-P12 | SQL インジェクション禁止設計 | 生 SQL 連結禁止、`rusqlite` の parameter binding のみ使用 | 必須 |
+| REQ-P13 | プロセス間 advisory lock | `VaultLock` が `save` 時排他ロック・`load` 時共有ロックを取得。別プロセス競合時は `Locked` で即 return（Fail Fast、待機禁止） | 必須 |
+| REQ-P14 | 監査ログ（秘密漏洩防止） | `tracing` を `audit.rs` 経由でのみ呼び出す。save / load / exists / error を所定レベルで記録し、秘密値を一切含めない。clippy lint と `tracing-test` で二重検証 | 必須 |
+| REQ-P15 | `SHIKOMI_VAULT_DIR` バリデーション | `VaultPaths::new` でパストラバーサル（`..`）・シンボリックリンク・保護領域（`/proc` `/etc` `C:\Windows` 等）・非絶対パス・非ディレクトリを拒否。`InvalidVaultDir { reason }` で Fail Fast | 必須 |
 
 ## Sub-issue分割計画
 
@@ -103,6 +106,10 @@ Issue #7 マージ直後の工程1で以下を合意:
 | 10 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | CI |
 | 11 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | Unix 結合テスト |
 | 12 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` が返り panic しない | 結合テスト |
+| 13 | `.new` ファイルが既に存在する状態で `save` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、勝手に上書き削除しない。REQ-P05 の save 経路側検証） | 結合テスト（test-design TC-I15 対応） |
+| 14 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `ciphertext` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない | `tracing-test` crate で log 収集 → 各秘密値の Debug/Display パターンを grep 検証 |
+| 15 | `SHIKOMI_VAULT_DIR` に `/etc/`・`/proc/`・`..` を含むパス・シンボリックリンクを指定するといずれも `PersistenceError::InvalidVaultDir` で拒否される | Unix 結合テスト（`cfg(unix)`、`tempfile::symlink` で実リンク作成） |
+| 16 | daemon 未起動時の CLI 直接呼出シナリオで `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（advisory lock の競合検知） | 結合テスト（子プロセス 2 本並列 save） |
 
 ## 扱うデータと機密レベル
 

@@ -40,10 +40,12 @@ classDiagram
         -dir: PathBuf
         -vault_db: PathBuf
         -vault_db_new: PathBuf
-        +new(dir) VaultPaths
+        -vault_db_lock: PathBuf
+        +new(dir) Result_VaultPaths
         +dir() Path_ref
         +vault_db() Path_ref
         +vault_db_new() Path_ref
+        +vault_db_lock() Path_ref
     }
 
     class PermissionGuard {
@@ -85,12 +87,13 @@ classDiagram
         Sqlite
         Corrupted
         InvalidPermission
+        InvalidVaultDir
         OrphanNewFile
         AtomicWriteFailed
         SchemaMismatch
         UnsupportedYet
         CannotResolveVaultDir
-        DomainError
+        Locked
     }
 
     class CorruptedReason {
@@ -102,6 +105,22 @@ classDiagram
         InvalidUuidString
         PayloadVariantMismatch
         NullViolation
+    }
+
+    class VaultDirReason {
+        <<enumeration>>
+        PathTraversal
+        SymlinkNotAllowed
+        NotAbsolute
+        ProtectedSystemArea
+        NotADirectory
+        Canonicalize
+    }
+
+    class VaultLock {
+        -file: File
+        +acquire_exclusive(paths) Result_Self
+        +acquire_shared(paths) Result_Self
     }
 
     class AtomicWriteStage {
@@ -176,6 +195,22 @@ classDiagram
 
 **10. なぜ `SqliteVaultRepository::save(&self, ...)` か（`&mut self` でない）**: 内部で `Connection` を都度 open するため、`self` 自体には可変状態がない。`&self` なら `Arc<dyn VaultRepository>` で daemon / CLI 間の共有が容易になる。SQLite ファイルへの並行書込は**プロセス内の別スレッドから起きないこと**を daemon のシングルインスタンス保証（`context/process-model.md` §4.1）で担保する。
 
+**11. プロセス間排他（advisory lock）の設計**: daemon シングルインスタンス保証（§4.1）は **daemon が起動している時のみ**有効。daemon 未起動時に CLI / GUI / 将来のリカバリツールが `SqliteVaultRepository` を直接利用するシナリオがあり、複数プロセスが同じ vault ディレクトリで `save` を同時実行する可能性が残る。以下の多層防御で対応する:
+
+- **ロックファイル**: `VaultPaths` が `vault.db.lock` を派生パスに持つ（`vault.db` / `vault.db.new` / `vault.db.lock` の 3 パス体系）。`lock` ファイルは内容ゼロバイト、mode `0o600`
+- **ロック獲得 API**: `pub(crate) struct VaultLock` 型を定義。`VaultLock::acquire(paths: &VaultPaths) -> Result<VaultLock, PersistenceError>` で排他ロックを取得、`Drop` で解放（RAII）。Unix は `fs2::FileExt::try_lock_exclusive`（`flock(LOCK_EX | LOCK_NB)`）、Windows は `LockFileEx` の `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY`
+- **ロック取得に失敗したら即 return**: `PersistenceError::Locked { path: PathBuf, holder_hint: Option<u32> }`（`holder_hint` は Unix の `F_GETLK` から得た PID、Windows では `None` 固定）。Fail Fast、待機・再試行しない（CLI ユーザに即座にエラー表示し、別プロセス終了を待つか確認させる）
+- **適用範囲**: `save` の全工程（`.new` 作成から rename 完了まで）を `VaultLock` のスコープで囲む。`load` は共有ロック（`LOCK_SH`）を使い、複数プロセス同時 read を許可。`exists` はロック不要
+- **依存 crate**: `fs2 = "0.4"`（既存の安定 crate、OS 差を吸収）を `[workspace.dependencies]` に追加
+- **別 Issue に出さない根拠**: ロックは「save の整合性」の一部であり、atomic write と同じレイヤで完結させないと中途半端な実装が develop に残る（Boy Scout Rule）。`VaultLock` 型と `PersistenceError::Locked` バリアントを本 Issue 設計に含め、実装も本 Issue で一緒に入れる
+
+**12. `PersistenceError::DomainError` と `Corrupted` の統合**: 当初 `DomainError`（SQLite から読み出したドメイン整合性違反のスルー用）と `Corrupted { source: Option<DomainError> }` の 2 バリアントで `shikomi_core::DomainError` を内包する経路が冗長になっていた（YAGNI 違反）。**本 Issue では `DomainError` バリアントを廃止し、`Corrupted` に一本化**する。理由:
+
+- 永続化層から見て「ドメイン層エラー」と「行データ破損」は**同じ一次事象**（SQLite 行を newtype に通したら不変条件違反が出た）であり、呼出側が区別して処理する動機がない
+- `Corrupted { table, row_key, reason, source: Option<shikomi_core::DomainError> }` 単独で `table`・`row_key`・分類理由（`CorruptedReason`）・下位エラー（`#[source]`）が全て揃う。診断性は `DomainError` バリアントと同等以上
+- 公開 API バリアント数が 10 → 9 に減り、呼出側 `match` が簡素化（Tell, Don't Ask / YAGNI）
+- `From<shikomi_core::DomainError>` は `Corrupted { reason: InvalidRowCombination, source: Some(e), .. }` へマップする手動実装とする（`?` の透過伝播は限定的に残す、ただし `table`/`row_key` 情報が付かないので呼出側が明示で `Corrupted { .. }` を組み立てる方を推奨）
+
 ## データ構造
 
 ### 定数・境界値
@@ -188,12 +223,15 @@ classDiagram
 | `SchemaSql::USER_VERSION_SUPPORTED_MAX` | `u32` | 読込み時の上限 | `1` |
 | `VAULT_DB_FILENAME` | `&'static str` | vault ファイル名 | `"vault.db"` |
 | `VAULT_DB_NEW_FILENAME` | `&'static str` | atomic write 中間ファイル名 | `"vault.db.new"` |
+| `VAULT_DB_LOCK_FILENAME` | `&'static str` | advisory lock ファイル名 | `"vault.db.lock"` |
+| `PROTECTED_PATH_PREFIXES_UNIX` | `&'static [&'static str]` | `SHIKOMI_VAULT_DIR` で拒否する保護領域プレフィックス（Unix） | `["/proc", "/sys", "/dev", "/etc", "/boot", "/root"]` |
+| `PROTECTED_PATH_PREFIXES_WIN` | `&'static [&'static str]` | 同上（Windows、case-insensitive 比較） | `["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"]` |
 | `DIR_MODE_UNIX` | `u32` | ディレクトリの期待 mode（Unix） | `0o700` |
 | `FILE_MODE_UNIX` | `u32` | ファイルの期待 mode（Unix） | `0o600` |
 | `MODE_MASK_UNIX` | `u32` | mode 比較時に有効な下位 bit | `0o777` |
 | `ENV_VAR_VAULT_DIR` | `&'static str` | 環境変数名 | `"SHIKOMI_VAULT_DIR"` |
 | `APP_SUBDIR_NAME` | `&'static str` | `dirs::data_dir()` 下のサブディレクトリ | `"shikomi"` |
-| `TRACKING_ISSUE_ENCRYPTED_VAULT` | `u32` | `UnsupportedYet` で参照する tracking issue 番号（本 Issue 次の暗号化 Issue） | 発行後に確定、本 Issue 設計段階では **TBD** として定数化し TBD 値は `0` で placehold。**実装段階で暗号化 Issue が発行されたら値を差替え、必ず commit 前に確定**する |
+| `TRACKING_ISSUE_ENCRYPTED_VAULT` | `Option<u32>` | `UnsupportedYet` で参照する tracking issue 番号（本 Issue 次の暗号化 Issue）。**`Option` 型で保持**し、暗号化 Issue 発行前は `None`、発行後に `Some(n)` へ定数差替え。`0` プレースホルダ運用を禁止（commit 忘れで `#0` を永遠に出し続けるバグ温床を型で防止、Fail Safe by type） | 本 Issue マージ時点では `None`。暗号化 Issue 発行 PR 内で `Some(<number>)` に更新し、`PersistenceError::UnsupportedYet::Display` が `tracking issue: (未発行)` / `tracking issue: #<番号>` を出し分ける |
 
 **日時表現**:
 
@@ -230,16 +268,22 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 `SqliteVaultRepository`:
 - `impl SqliteVaultRepository`:
   - `pub fn new() -> Result<Self, PersistenceError>` — OS 標準 vault ディレクトリで構築
-  - `pub fn with_dir(dir: PathBuf) -> Self` — 明示ディレクトリで構築（テスト・CI 向け、失敗しない。パーミッション検証は `load`/`save` 冒頭で行う）
+  - `#[doc(hidden)] pub fn with_dir(dir: PathBuf) -> Self` — 明示ディレクトリで構築。**`#[doc(hidden)]` で公開 doc から隠蔽する内部・テスト専用 API**。`rustdoc` には現れず、`use shikomi_infra::persistence::SqliteVaultRepository` 経由でのみ参照可能（`cargo doc` 標準利用者には見えない）。本関数の正当用途は以下に限定する: (a) `shikomi-infra` 内部の統合テスト（`#[cfg(test)]` 配下）、(b) `SHIKOMI_VAULT_DIR` バリデーション済みパスでの内部呼出、(c) 将来の CLI から `--vault-dir` オプション経由で渡す場合（この場合 CLI 側が再度バリデーションを通す責務）。`new()` が正規 API であり、一般開発者はこちらを使う。**設計根拠**: 「テスト用」と言い切ると CI / 将来の CLI 用途が使えず、「正規 API」と言い切るとパス未検証の裏口になる。`#[doc(hidden)]` + 用途限定コメントで「存在するが公式ではない」ポジションを型とツールで固定する（二枚舌解消）
   - `pub fn paths(&self) -> &VaultPaths`
 - `impl VaultRepository for SqliteVaultRepository`:
   - `load`, `save`, `exists`（trait シグネチャに従う）
 
 `VaultPaths`:
-- `pub fn new(dir: PathBuf) -> Self`
-- `pub fn dir(&self) -> &Path`
+- `pub fn new(dir: PathBuf) -> Result<Self, PersistenceError>` — **パス検証（パストラバーサル / シンボリックリンク / 保護領域 / 絶対パス / ディレクトリ判定）を通す**。詳細は `basic-design.md` §セキュリティ設計 §vault ディレクトリ検証を参照。失敗は `InvalidVaultDir { path, reason: VaultDirReason }`
+- `pub fn dir(&self) -> &Path` — canonicalize 済みの絶対パス
 - `pub fn vault_db(&self) -> &Path`
 - `pub fn vault_db_new(&self) -> &Path`
+- `pub fn vault_db_lock(&self) -> &Path` — advisory lock ファイル（`vault.db.lock`）
+
+`VaultLock`（`pub(crate)`、RAII ハンドル）:
+- `pub(crate) fn acquire_exclusive(paths: &VaultPaths) -> Result<VaultLock, PersistenceError>` — `save` 用。`fs2::FileExt::try_lock_exclusive`（Unix）／ `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY)`（Windows）。非ブロッキング、失敗時は `Locked { path, holder_hint }`
+- `pub(crate) fn acquire_shared(paths: &VaultPaths) -> Result<VaultLock, PersistenceError>` — `load` 用。`try_lock_shared` / `LockFileEx(LOCKFILE_FAIL_IMMEDIATELY)`（`LOCKFILE_EXCLUSIVE_LOCK` なし）
+- `Drop` 実装でロック解放とファイルハンドル close。`vault.db.lock` ファイル自体は残す（再利用、0 bytes）
 
 `PersistenceError`（`thiserror::Error` derive）:
 - バリアントは `CorruptedReason` / `AtomicWriteStage` を内包する（下記「エラー型詳細」参照）
@@ -329,14 +373,26 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 |-----------|-----------|---------|
 | `Io { path: PathBuf, #[source] source: std::io::Error }` | 対象パスと原因 | ファイルシステム操作 |
 | `Sqlite { #[source] source: rusqlite::Error }` | — | SQLite API |
-| `Corrupted { table: &'static str, row_key: Option<String>, reason: CorruptedReason, #[source] source: Option<shikomi_core::DomainError> }` | 対象テーブル名、特定できる場合は row PK（UUID 文字列）、原因分類、下位ドメインエラー | `Mapping::row_to_*` |
+| `Corrupted { table: &'static str, row_key: Option<String>, reason: CorruptedReason, #[source] source: Option<shikomi_core::DomainError> }` | 対象テーブル名、特定できる場合は row PK（UUID 文字列）、原因分類、下位ドメインエラー（旧 `DomainError` バリアントを本バリアントに統合、設計判断メモ §12 参照） | `Mapping::row_to_*` / `Vault::add_record` 失敗 |
 | `InvalidPermission { path: PathBuf, expected: &'static str, actual: String }` | 対象パス、期待値（例: `"0600"` or `"owner-only DACL"`）、実測（mode 数値文字列または DACL 要約） | `PermissionGuard::verify_*` |
+| `InvalidVaultDir { path: PathBuf, reason: VaultDirReason }` | `SHIKOMI_VAULT_DIR` が危険パス（パストラバーサル・シンボリックリンク・root 保護領域等）を指している場合 | `VaultPaths::new` のバリデーション |
 | `OrphanNewFile { path: PathBuf }` | `.new` 絶対パス | `AtomicWriter::detect_orphan` |
 | `AtomicWriteFailed { stage: AtomicWriteStage, #[source] source: std::io::Error }` | stage 列挙、下位 I/O error | `AtomicWriter::*` |
 | `SchemaMismatch { expected_application_id: u32, found_application_id: u32, expected_version_range: (u32, u32), found_user_version: u32 }` | 期待値と実測値 | `SqliteVaultRepository::load` 冒頭 |
-| `UnsupportedYet { feature: &'static str, tracking_issue: u32 }` | 未対応機能名、tracking issue 番号 | 暗号化モード検出時 |
+| `UnsupportedYet { feature: &'static str, tracking_issue: Option<u32> }` | 未対応機能名、tracking issue 番号（発行前は `None`） | 暗号化モード検出時 |
 | `CannotResolveVaultDir` | — | `SqliteVaultRepository::new` |
-| `DomainError { #[source] source: shikomi_core::DomainError }` | ドメイン整合性違反のスルー（`Vault::add_record` 等） | `SqliteVaultRepository::load` でドメイン検証 |
+| `Locked { path: PathBuf, holder_hint: Option<u32> }` | 別プロセスが vault ディレクトリを排他ロック中（`holder_hint` は Unix の `F_GETLK` PID、Windows では `None`） | `VaultLock::acquire` 失敗時 |
+
+`VaultDirReason` の各バリアント（`InvalidVaultDir.reason`）:
+
+| バリアント | 意味 |
+|-----------|------|
+| `NotAbsolute` | 相対パスが指定された（`PathBuf::is_absolute()` が false） |
+| `PathTraversal` | パス要素に `..` を含む（`canonicalize` 前の生値チェック、早期拒否） |
+| `SymlinkNotAllowed` | `fs::symlink_metadata` → `FileType::is_symlink()` が true（シンボリックリンクを含む経路） |
+| `Canonicalize { #[source] source: std::io::Error }` | `fs::canonicalize` 自体が失敗（存在しない・読取不可等、但し「存在しない」は正常ケースとして扱い `NotADirectory` と区別） |
+| `ProtectedSystemArea { prefix: &'static str }` | canonicalize 後のパスが `/proc` / `/sys` / `/dev` / `/etc`（Unix）、または `C:\Windows` / `C:\Program Files`（Windows）配下を指す |
+| `NotADirectory` | 既存パスだがディレクトリではない |
 
 `CorruptedReason` の各バリアント:
 
@@ -366,26 +422,28 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 **`SqliteVaultRepository::load(&self)`**:
 
 1. `PermissionGuard::verify_dir(self.paths.dir())` — 失敗なら `InvalidPermission` を即 return
-2. `AtomicWriter::detect_orphan(self.paths.vault_db_new())` — 残存なら `OrphanNewFile` を即 return
-3. `self.paths.vault_db().try_exists()?` が `false` なら `Io { path, source: NotFound-like }` を即 return（「vault が無い」判定は `exists()` の責務）
-4. `PermissionGuard::verify_file(self.paths.vault_db())` — 失敗なら `InvalidPermission` を即 return
-5. `Connection::open_with_flags(self.paths.vault_db(), OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX)` — 失敗は `Sqlite` で return
-6. `PRAGMA application_id` を `query_row`、取得値が `SchemaSql::APPLICATION_ID` でなければ `SchemaMismatch`
-7. `PRAGMA user_version` を `query_row`、取得値が `[USER_VERSION_SUPPORTED_MIN, USER_VERSION_SUPPORTED_MAX]` 範囲外なら `SchemaMismatch`
-8. `SELECT_VAULT_HEADER` を実行、0 行なら `Corrupted { reason: MissingVaultHeader }`、2 行以上は `CHECK(id=1)` により物理的に起きないが防御で `Corrupted { reason: InvalidRowCombination }`
-9. `Mapping::row_to_vault_header(&row)` で `VaultHeader` を再構築（失敗は `Corrupted` or `DomainError`）
-10. `VaultHeader::protection_mode() == ProtectionMode::Encrypted` なら **`UnsupportedYet { feature: "encrypted vault persistence", tracking_issue: TRACKING_ISSUE_ENCRYPTED_VAULT }` を即 return**（step 9 で得た `header` を使わず、records を読まない）
-11. `Vault::new(header)` で集約を構築
-12. `SELECT_RECORDS_ORDERED` を実行、各行を `Mapping::row_to_record` で `Record` に変換
-13. 各 `Record` を `Vault::add_record` で集約に追加（**ドメイン側でモード整合とID重複が検証される**）。失敗は `DomainError` にラップして return
-14. `Ok(vault)`
+2. `VaultLock::acquire_shared(&self.paths)?` — 共有ロック取得（複数プロセス read は許可）。別プロセスが排他ロック保持中なら `Locked { path, holder_hint }` を即 return（Fail Fast、待機しない）。以降 step 12 まで `VaultLock` がスコープに生存し、drop 時に自動解放（RAII）
+3. `AtomicWriter::detect_orphan(self.paths.vault_db_new())` — 残存なら `OrphanNewFile` を即 return
+4. `self.paths.vault_db().try_exists()?` が `false` なら `Io { path, source: NotFound-like }` を即 return（「vault が無い」判定は `exists()` の責務）
+5. `PermissionGuard::verify_file(self.paths.vault_db())` — 失敗なら `InvalidPermission` を即 return
+6. `Connection::open_with_flags(self.paths.vault_db(), OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX)` — 失敗は `Sqlite` で return
+7. `PRAGMA application_id` を `query_row`、取得値が `SchemaSql::APPLICATION_ID` でなければ `SchemaMismatch`
+8. `PRAGMA user_version` を `query_row`、取得値が `[USER_VERSION_SUPPORTED_MIN, USER_VERSION_SUPPORTED_MAX]` 範囲外なら `SchemaMismatch`
+9. `SELECT_VAULT_HEADER` を実行、0 行なら `Corrupted { reason: MissingVaultHeader }`、2 行以上は `CHECK(id=1)` により物理的に起きないが防御で `Corrupted { reason: InvalidRowCombination }`
+10. `Mapping::row_to_vault_header(&row)` で `VaultHeader` を再構築（失敗は `Corrupted { reason: ..., source: Some(domain_error) }` に統合、設計判断 §12 参照）
+11. `VaultHeader::protection_mode() == ProtectionMode::Encrypted` なら **`UnsupportedYet { feature: "encrypted vault persistence", tracking_issue: TRACKING_ISSUE_ENCRYPTED_VAULT }` を即 return**（step 10 で得た `header` を使わず、records を読まない）
+12. `Vault::new(header)` で集約を構築
+13. `SELECT_RECORDS_ORDERED` を実行、各行を `Mapping::row_to_record` で `Record` に変換
+14. 各 `Record` を `Vault::add_record` で集約に追加（**ドメイン側でモード整合とID重複が検証される**）。失敗は `Corrupted { table: "records", row_key: Some(uuid_str), reason: InvalidRowCombination, source: Some(domain_error) }` にラップして return
+15. `Ok(vault)` — この時点で `VaultLock` が drop され、共有ロックが解放される
 
 **`SqliteVaultRepository::save(&self, vault: &Vault)`**:
 
 1. `vault.protection_mode() == ProtectionMode::Encrypted` なら **`UnsupportedYet { ... }` を即 return**（Fail Fast、step 2 以降のファイル操作を一切しない）
 2. `PermissionGuard::ensure_dir(self.paths.dir())` — 作成 or 既存強制
-3. `AtomicWriter::detect_orphan(self.paths.vault_db_new())` — 残存なら `OrphanNewFile` を return（ユーザ操作待ち）
-4. `AtomicWriter::write_new(self.paths, vault)`:
+3. `VaultLock::acquire_exclusive(&self.paths)?` — 排他ロック取得。別プロセスが排他/共有ロックを保持中なら `Locked { path, holder_hint }` を即 return（Fail Fast、待機・再試行しない）。以降 step 6 完了まで `VaultLock` がスコープに生存し drop 時に自動解放（RAII）
+4. `AtomicWriter::detect_orphan(self.paths.vault_db_new())` — 残存なら `OrphanNewFile` を return（ユーザ操作待ち）
+5. `AtomicWriter::write_new(self.paths, vault)`:
    1. `File::create(new_path)` 相当の mode 指定 open（Unix: `OpenOptions::mode(0o600)`、Windows: 作成後に ACL 設定）
    2. file handle を drop（SQLite が同じパスを再 open できるようにする）
    3. `Connection::open_with_flags(new_path, SQLITE_OPEN_CREATE | SQLITE_OPEN_READ_WRITE | SQLITE_OPEN_NO_MUTEX)`
@@ -397,12 +455,12 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
    9. `for record in vault.records()`: `Mapping::record_to_params(record)` → `tx.execute(INSERT_RECORD, params)`
    10. `tx.commit()?`
    11. `drop(conn)`
-5. `AtomicWriter::fsync_and_rename(self.paths)`:
+6. `AtomicWriter::fsync_and_rename(self.paths)`:
    1. `File::open(new_path)?.sync_all()?`（`FsyncTemp`）
    2. `File::open(dir)?.sync_all()?`（`FsyncDir`、Unix のみ。Windows では no-op）
    3. `fs::rename(new_path, final_path)?` または `ReplaceFileW(..., REPLACEFILE_WRITE_THROUGH)`（`Rename`）
    4. 各段階で失敗したら `AtomicWriter::cleanup_new(new_path)` を呼び、best-effort で `.new` を削除。元のエラーを `AtomicWriteFailed { stage, source }` にラップして return
-6. `Ok(())`
+7. `Ok(())` — この時点で `VaultLock` が drop され、排他ロックが解放される
 
 **`SqliteVaultRepository::exists(&self)`**:
 
