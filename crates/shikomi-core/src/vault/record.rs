@@ -527,4 +527,64 @@ mod tests {
         assert_eq!(record.updated_at().nanosecond() % 1_000, 0);
         assert_eq!(record.updated_at(), record.created_at());
     }
+
+    // --- TC-U13: Record::rehydrate — updated_at < created_at → InvalidUpdatedAt ---
+
+    #[test]
+    fn test_record_rehydrate_updated_at_before_created_at_returns_invalid_updated_at() {
+        let created_at = OffsetDateTime::from_unix_timestamp(1_000_000).unwrap();
+        let updated_at = OffsetDateTime::from_unix_timestamp(999_999).unwrap(); // 1秒前
+        let result = Record::rehydrate(
+            make_id(),
+            RecordKind::Secret,
+            RecordLabel::try_new("label".to_string()).unwrap(),
+            RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
+            created_at,
+            updated_at,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(DomainError::VaultConsistencyError(
+                    crate::error::VaultConsistencyReason::InvalidUpdatedAt
+                ))
+            ),
+            "updated_at < created_at は InvalidUpdatedAt を期待したが: {result:?}"
+        );
+    }
+
+    // --- TC-U14: Record::rehydrate — サブマイクロ秒成分切り捨て ---
+
+    #[test]
+    fn test_record_rehydrate_truncates_subsecond_to_microseconds() {
+        // 789 ns のサブマイクロ秒成分を持つタイムスタンプ
+        let created_at =
+            OffsetDateTime::from_unix_timestamp_nanos(1_000_000_000_123_456_789).unwrap();
+        let updated_at =
+            OffsetDateTime::from_unix_timestamp_nanos(1_000_000_001_987_654_321).unwrap();
+        let record = Record::rehydrate(
+            make_id(),
+            RecordKind::Secret,
+            RecordLabel::try_new("label".to_string()).unwrap(),
+            RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
+            created_at,
+            updated_at,
+        )
+        .expect("rehydrate が失敗した");
+
+        assert_eq!(
+            record.created_at().nanosecond() % 1_000,
+            0,
+            "created_at のサブマイクロ秒成分が切り捨てられていない"
+        );
+        assert_eq!(
+            record.updated_at().nanosecond() % 1_000,
+            0,
+            "updated_at のサブマイクロ秒成分が切り捨てられていない"
+        );
+        assert!(
+            record.updated_at() >= record.created_at(),
+            "切り捨て後も updated_at >= created_at を保持すべき"
+        );
+    }
 }
