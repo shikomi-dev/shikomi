@@ -27,10 +27,12 @@
 
 | 項目 | 内容 |
 |------|------|
-| 入力 | サブコマンド `edit` + 必須フラグ `--id <UUID>`、任意フラグ `--label <STRING>` / `--value <STRING>` / `--stdin` / `--kind <text\|secret>` のうち**1 つ以上**。 `--value` と `--stdin` の同時指定は Fail Fast |
-| 処理 | (1) vault path 解決、(2) `RecordId::try_from_str` で id 検証、(3) `load()` → 暗号化モードなら Fail Fast、(4) `Vault::find_record` で対象レコード取得 → 無ければ Fail Fast、(5) label 更新時は `Record::with_updated_label(now)`、value / kind 更新時は `Record::with_updated_payload(now)` を集約メソッド経由で呼ぶ（Tell, Don't Ask）、(6) `Vault::update_record` で置換、(7) `save()` で atomic write |
-| 出力 | stdout: `updated: <uuid>` / stderr: shell 履歴警告（`--kind secret` + `--value` 指定時） |
+| 入力 | サブコマンド `edit` + 必須フラグ `--id <UUID>`、任意フラグ `--label <STRING>` / `--value <STRING>` / `--stdin` のうち**1 つ以上**。`--value` と `--stdin` の同時指定は Fail Fast。**`--kind` フラグは Phase 1 スコープ外**（下記「スコープ外注記」参照） |
+| 処理 | (1) vault path 解決、(2) `RecordId::try_from_str` で id 検証、(3) `load()` → 暗号化モードなら Fail Fast、(4) `Vault::find_record` で対象レコード取得 → 無ければ Fail Fast、(5) label 更新時は `Record::with_updated_label(now)`、value 更新時は `Record::with_updated_payload(now)` を集約メソッド経由で呼ぶ（Tell, Don't Ask）、(6) `Vault::update_record` で置換、(7) `save()` で atomic write |
+| 出力 | stdout: `updated: <uuid>` / stderr: shell 履歴警告（`--kind secret` でなく Text kind 既存レコードへの `--value` 更新時も、既存 kind が `Secret` なら警告対象） |
 | エラー時 | 全フラグ未指定 / 併用禁止違反 / id 不存在 / 暗号化モード / save 失敗 → 各終了コード（REQ-CLI-006 参照） |
+
+**スコープ外注記（`edit --kind` の扱い）**: `edit` サブコマンドでの `--kind` 指定（text ↔ secret 変換）は**本 feature のスコープ外**とする。理由: (a) kind 変更は `shikomi-core` の `Record` に `with_updated_kind` メソッド追加を要し、本 feature の「`shikomi-core` / `shikomi-infra` を極力変更しない」方針と衝突する、(b) Text → Secret 変換時に既存値の secret 扱い開始は UX として曖昧（過去の値が shell 履歴や clipboard 履歴に残っている可能性）。将来 feature（`cli-record-kind-migration` 等、未起票）で要件分析から取り組む。本 feature では `edit` の CLI に `--kind` フラグを**そもそも定義しない**（clap の不明フラグエラーで終了コード 1）。誤って `--kind` を書いたユーザには clap のエラーが案内として十分機能する。
 
 ### REQ-CLI-004: `shikomi remove`
 
@@ -45,12 +47,12 @@
 
 | 項目 | 内容 |
 |------|------|
-| 入力 | 環境変数 `SHIKOMI_VAULT_DIR` / グローバルフラグ `--vault-dir <PATH>` / OS デフォルト |
-| 処理 | 優先順位: **フラグ > 環境変数 > OS デフォルト**。`SqliteVaultRepository::new` 呼び出し前に `--vault-dir` 指定があれば `std::env::set_var(SHIKOMI_VAULT_DIR, <path>)` **ではなく**、`VaultPaths::new(<path>)` を直接構築して `SqliteVaultRepository::from_paths`（新規追加 API、要 infra への trait 経由ファクトリ追加。**本 feature では infra 変更を避けるため、`SHIKOMI_VAULT_DIR` env var の一時 set で実装**する） |
+| 入力 | 環境変数 `SHIKOMI_VAULT_DIR`（clap attribute `#[arg(env = "SHIKOMI_VAULT_DIR")]` で `--vault-dir` へ自動フォールバック）/ グローバルフラグ `--vault-dir <PATH>` / OS デフォルト（`dirs::data_dir().join("shikomi")`） |
+| 処理 | 優先順位: **`--vault-dir` フラグ > `SHIKOMI_VAULT_DIR` 環境変数（clap 経由）> OS デフォルト**。env の読取は **clap 単一ルート**とし、アプリ層で重ねて `std::env::var` を読まない（DRY / 真実源の一本化）。`--vault-dir` または env 由来の path が `Some` なら `SqliteVaultRepository::from_directory(&path)`（本 feature で新規追加する infra API）で構築、`None` なら OS デフォルトで構築 |
 | 出力 | `SqliteVaultRepository` インスタンス |
-| エラー時 | path 検証失敗（既存 infra の `PersistenceError`）→ 終了コード 2 / path 未解決（OS デフォルトも取れない）→ 終了コード 2 |
+| エラー時 | path 検証失敗 → `CliError::Persistence(PersistenceError::InvalidVaultDir{..})` → 終了コード 2 / path 未解決（OS デフォルトも取れない） → `CliError::Persistence(PersistenceError::CannotResolveVaultDir)` → 終了コード 2 |
 
-**注記**: `--vault-dir` 実装は詳細設計で決定する 2 案があり、案 A「env var の一時 set」は単純だが並列テストで問題となる可能性があり、案 B「infra に `VaultPaths` 公開 + `SqliteVaultRepository::from_paths` 追加」は infra 変更が発生する。本 feature では**案 B を採用**し、`shikomi-infra` 側で `VaultPaths` を `pub` 公開し、`SqliteVaultRepository::from_paths(paths: VaultPaths) -> Self` を追加する（既存の `new()` は内部で `from_paths` を呼ぶリファクタ）。これにより並列 E2E テスト（`tempfile::TempDir` ごとに独立した vault）が安全に書ける。Boy Scout Rule（Issue #1 でも `VaultPaths` はすでに pub crate の構造体として存在、公開昇格のみ）。
+**採用理由（案 B に確定）**: `std::env::set_var` を CLI 層で呼ぶ案 A は thread-unsafe で並列 E2E テストとの相性が悪い。`shikomi-infra` に**プリミティブ引数**の `SqliteVaultRepository::from_directory(path: &Path) -> Result<Self, PersistenceError>` を追加し、CLI はフラグ値 / env 値をそのまま渡す。`VaultPaths` は既存どおり `pub(crate)` のまま公開しない（公開 API 契約を増やさない、詳細設計 `detailed-design/infra-changes.md` 参照）。既存 `SqliteVaultRepository::new()` は内部的に OS デフォルトの `from_directory` を呼ぶリファクタとなる（Boy Scout Rule、既存テストは無変更）。
 
 ### REQ-CLI-006: 終了コード契約
 
@@ -97,7 +99,7 @@
 | 出力 | `add` の stdout: `initialized plaintext vault at <path>` （初回のみ）+ `added: <uuid>` / 他コマンドの stderr: `MSG-CLI-104` |
 | エラー時 | — |
 
-### REQ-CLI-011: 非 TTY での `remove` 確認プロンプト扱い
+### REQ-CLI-011: 非 TTY での `remove` 確認プロンプト扱い + 型による確認強制
 
 | 項目 | 内容 |
 |------|------|
@@ -105,6 +107,7 @@
 | 処理 | 即時エラー（削除しない）。`is_terminal::IsTerminal` で stdin を判定し、false なら `MSG-CLI-105` を stderr に出力して終了コード 1 |
 | 出力 | stderr: `error: refusing to delete without --yes in non-interactive mode` + `hint: re-run with --yes to confirm deletion` |
 | 理由 | スクリプト誤実行で意図せぬ削除が発生することを Fail Fast で防ぐ（Unix の `rm` に `-i` を付けずスクリプト実行するのは一般慣習だが、本 CLI は削除が取り消せない性質を重視して**明示的確認を必須化**） |
+| 型レベル強制 | UseCase の入力型は **`ConfirmedRemoveInput { id: RecordId }`**（タプル構造体でなく名前付きフィールドにして拡張余地を残す）。`confirmed: bool` フィールドは**持たない**。確認を経ていない呼び出しは**そもそもこの型を構築できない**ため、`debug_assert!` に頼らずコンパイル時に Fail Fast が成立する。`main` 側で TTY + プロンプト or `--yes` 指定の両経路を経て初めて `ConfirmedRemoveInput::new(id)` を構築できる（Parse, don't validate パターン） |
 
 ### REQ-CLI-012: Presenter / UseCase / Repository の 3 層分離
 
@@ -121,8 +124,8 @@
 ```
 shikomi                         ヘルプ表示
 shikomi list                    vault 内のレコード一覧
-shikomi add --kind <K> --label <L> (--value <V> | --stdin) [--yes]
-shikomi edit --id <ID> [--kind <K>] [--label <L>] [--value <V> | --stdin]
+shikomi add --kind <K> --label <L> (--value <V> | --stdin)
+shikomi edit --id <ID> [--label <L>] [--value <V> | --stdin]    # --kind は Phase 1 スコープ外（未定義）
 shikomi remove --id <ID> [--yes]
 shikomi --help / shikomi <sub> --help
 shikomi --version
@@ -161,25 +164,35 @@ removed: 018f1234-...-7890
 
 ## API仕様
 
-本 feature は HTTP エンドポイントを持たない。CLI の外部 I/F は「サブコマンド + フラグ」と「終了コード」で表現される。以下に**内部公開 Rust API**を列挙する（`shikomi-cli` crate 内の `pub` 型 / trait。crate 外から利用されることは想定しない。`shikomi-cli` は bin crate で lib を公開しない方針）。
+本 feature は HTTP エンドポイントを持たない。CLI の外部 I/F は「サブコマンド + フラグ」と「終了コード」で表現される。以下に**内部公開 Rust API**を列挙する。
+
+**`shikomi-cli` の crate 構成（決定事項）**: 本 feature で `shikomi-cli` を **`[lib] + [[bin]]` の 2 ターゲット構成**にする。
+
+- `[lib] name = "shikomi_cli"`（`src/lib.rs`）— UseCase / Presenter / input / view / error などの**内部公開 Rust API** を提供。結合テスト（`tests/` 配下）から `shikomi_cli::usecase::add::add_record` 等を直接呼び出す目的。
+- `[[bin]] name = "shikomi"`（`src/main.rs`）— `shikomi_cli::run()` を呼ぶ薄い bin。コンポジションルートは `lib` 側の `run()` に移す。
+- **外部公開契約ではない**: lib の全 `pub` 項目は `#[doc(hidden)]` 属性を付け、`cargo doc` で隠す。workspace `publish = false` は既存のまま維持し、crates.io 公開はしない。ABI / API 安定化の保証は行わない（将来 bin 内部実装変更でシグネチャ変更可能）。
+- 判断理由: `[[bin]]` のみの場合、結合テストから UseCase の pure 関数を呼べず、E2E（プロセス起動）に過度に依存する。`lib` 化することで結合テストが書けるようになり、テストピラミッドの中段（Integration）を厚くできる（テスト設計との整合）。`doc(hidden)` により「crate 内部構造の公開 = 外部契約化」の副作用を抑止する。
+
+**内部公開 API 一覧**:
 
 | モジュール | 公開型 / 関数 | 用途 |
 |----------|-------------|------|
 | `shikomi_cli::usecase::list` | `fn list_records(repo: &dyn VaultRepository) -> Result<Vec<RecordView>, CliError>` | list 操作の orchestration |
-| `shikomi_cli::usecase::add` | `fn add_record(repo: &dyn VaultRepository, input: AddInput) -> Result<RecordId, CliError>` | add 操作 |
-| `shikomi_cli::usecase::edit` | `fn edit_record(repo: &dyn VaultRepository, input: EditInput) -> Result<RecordId, CliError>` | edit 操作 |
-| `shikomi_cli::usecase::remove` | `fn remove_record(repo: &dyn VaultRepository, input: RemoveInput) -> Result<RecordId, CliError>` | remove 操作（確認プロンプトは外側責務、入力側で `confirmed: bool` を受け取る） |
-| `shikomi_cli::presenter::list` | `fn render_list(records: &[RecordView]) -> String` | 表整形 |
+| `shikomi_cli::usecase::add` | `fn add_record(repo: &dyn VaultRepository, input: AddInput, now: OffsetDateTime) -> Result<RecordId, CliError>` | add 操作 |
+| `shikomi_cli::usecase::edit` | `fn edit_record(repo: &dyn VaultRepository, input: EditInput, now: OffsetDateTime) -> Result<RecordId, CliError>` | edit 操作 |
+| `shikomi_cli::usecase::remove` | `fn remove_record(repo: &dyn VaultRepository, input: ConfirmedRemoveInput) -> Result<RecordId, CliError>` | remove 操作（確認プロンプトは外側責務。**`ConfirmedRemoveInput` は「確認済み」を型で表現** — 下記 REQ-CLI-011 注記） |
+| `shikomi_cli::presenter::list` | `fn render_list(records: &[RecordView], locale: Locale) -> String` | 表整形 |
 | `shikomi_cli::presenter::error` | `fn render_error(err: &CliError, locale: Locale) -> String` | エラーメッセージ整形 |
 | `shikomi_cli::error` | `enum CliError`, `enum ExitCode` | CLI エラー型と終了コード写像 |
-| `shikomi_cli::input` | `struct AddInput`, `struct EditInput`, `struct RemoveInput`, `struct ListInput` | UseCase への入力 DTO |
+| `shikomi_cli::input` | `struct AddInput`, `struct EditInput`, `struct ConfirmedRemoveInput` | UseCase への入力 DTO |
 | `shikomi_cli::view` | `struct RecordView`, `enum ValueView` | Presenter への出力 DTO（Secret は `ValueView::Masked`、Text は `ValueView::Plain(String)`） |
+| `shikomi_cli` | `fn run() -> ExitCode` | コンポジションルート（clap パース + ディスパッチ + 終了コード）。bin の `main.rs` はこれを呼ぶだけ |
 
 **依存方向の厳守**:
 
 - `usecase` → `shikomi-core` + `shikomi-infra::VaultRepository`（**trait のみ**、具体実装は依存しない）
 - `presenter` → `shikomi-core`（読み取り型のみ）
-- `main.rs` → `usecase` + `presenter` + `shikomi-infra::SqliteVaultRepository`（具体型参照はコンポジションルート 1 箇所のみ）
+- `run()` / `main.rs` → `usecase` + `presenter` + `shikomi-infra::SqliteVaultRepository`（具体型参照はコンポジションルート 1 箇所のみ）
 - `presenter` と `usecase` の相互参照は禁止（単方向）
 
 ## データモデル
@@ -192,11 +205,9 @@ removed: 018f1234-...-7890
 | AddInput | label | `RecordLabel` | 必須、検証済み | — |
 | AddInput | value | `SecretString` | 必須、`SecretString` で受取 | — |
 | EditInput | id | `RecordId` | 必須、検証済み | — |
-| EditInput | kind | `Option<RecordKind>` | 任意 | — |
 | EditInput | label | `Option<RecordLabel>` | 任意、検証済み | — |
 | EditInput | value | `Option<SecretString>` | 任意 | — |
-| RemoveInput | id | `RecordId` | 必須 | — |
-| RemoveInput | confirmed | `bool` | 必須（UseCase の責務外で確認済みとする） | — |
+| ConfirmedRemoveInput | id | `RecordId` | 必須（**`confirmed: bool` フィールドは持たない**。型の存在そのものが「確認済み」を表す — REQ-CLI-011） | — |
 | RecordView | id | `RecordId` | 必須 | Record から射影 |
 | RecordView | kind | `RecordKind` | 必須 | — |
 | RecordView | label | `RecordLabel` | 必須 | — |
@@ -204,6 +215,8 @@ removed: 018f1234-...-7890
 | ValueView | — | `enum { Plain(String), Masked }` | — | — |
 | CliError | — | `enum` | 下表参照 | — |
 | ExitCode | — | `enum { Success=0, UserError=1, SystemError=2, EncryptionUnsupported=3 }` | — | — |
+
+**注記**: 空構造体 `ListInput` / `EditInput.kind` は**定義しない**（YAGNI）。`list` UseCase は引数に `repo: &dyn VaultRepository` のみ取り、将来 `--json` / `--filter` 等のフラグが追加される際に**その時点で**入力 DTO を導入する（空構造体の予約は不採用）。`edit --kind` は Phase 1 スコープ外のため `EditInput` からも除外（REQ-CLI-003 注記）。
 
 **`CliError` バリアント**（詳細設計で thiserror フィールドを確定）:
 
@@ -264,7 +277,8 @@ removed: 018f1234-...-7890
 | `is-terminal` | 0.4.x | — | stdin / stdout の TTY 判定（`remove` 確認プロンプト / i18n 切替のスマート化） |
 | `rpassword` | 7.x | — | 非エコー stdin 入力（secret 値）|
 | `shikomi-core` | workspace path | — | ドメイン型 |
-| `shikomi-infra` | workspace path | — | `VaultRepository` trait / `SqliteVaultRepository` / `VaultPaths` / `PersistenceError` |
+| `shikomi-infra` | workspace path | — | `VaultRepository` trait / `SqliteVaultRepository`（`from_directory` 新規追加）/ `PersistenceError`。**`VaultPaths` は公開しない**（プリミティブ引数 `&Path` で受け取る設計） |
+| `time` | 0.3.x（workspace 既存） | `serde`, `macros` | `OffsetDateTime` — UseCase に `now` を引数で渡すため（`OffsetDateTime::now_utc()` 呼び出しは `main` 側に隔離し、UseCase を pure に保つ）|
 | `assert_cmd` | 2.x（dev） | — | E2E テストのプロセス実行 |
 | `predicates` | 3.x（dev） | — | `assert_cmd` のアサーション |
 | `tempfile` | 3.x（dev、workspace 既存） | — | E2E テストの独立 vault ディレクトリ |
@@ -276,7 +290,7 @@ removed: 018f1234-...-7890
 | feature | 関係 | 参照先 |
 |---------|------|--------|
 | `vault`（Issue #7） | 本 feature は `shikomi-core` の `Vault` / `Record` / `RecordLabel` / `RecordId` / `SecretString` / `ProtectionMode` / `DomainError` を利用する。CLI 層は pure ドメイン型を変更せずそのまま組み立てる | `docs/features/vault/` |
-| `vault-persistence`（Issue #10） | 本 feature は `VaultRepository` trait の呼び出し側。`SqliteVaultRepository::from_paths` を新規追加（既存の `new()` をリファクタ）。`VaultPaths` の `pub` 公開を要する。`PersistenceError` を `CliError::Persistence(...)` でラップ | `docs/features/vault-persistence/` |
+| `vault-persistence`（Issue #10） | 本 feature は `VaultRepository` trait の呼び出し側。`SqliteVaultRepository::from_directory(path: &Path) -> Result<Self, PersistenceError>` を新規追加（既存の `new()` は内部で `from_directory(OS_default)` を呼ぶリファクタ、既存テストは無変更）。**`VaultPaths` は公開しない**（crate 内部実装のまま、公開 API 契約を増やさない）。`PersistenceError` を `CliError::Persistence(...)` でラップ | `docs/features/vault-persistence/` |
 | `workspace-init`（Issue #4） | 本 feature は `shikomi-cli` crate 内に実体を積む。既存の `fn main() {}` を置換 | `docs/features/workspace-init/` |
 | **未起票 — cli-daemon-bridge（Phase 2 相当）** | 将来、`IpcVaultRepository` を `shikomi-infra` に追加し、`shikomi-cli/src/main.rs` のコンポジションルートを差し替える。本 feature のレイヤ分離がそのまま活きる | （将来 Issue） |
 | **未起票 — cli-vault-encryption** | `shikomi vault encrypt` / `decrypt` は別 feature。本 feature の `MSG-CLI-103` が誘導先となる | （将来 Issue） |
