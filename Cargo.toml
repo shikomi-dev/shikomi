@@ -19,7 +19,9 @@ rust-version = "1.80.0"
 publish = false
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Windows 固有の Win32 Security API モジュール（permission/windows/）のみ allow(unsafe_code) で上書きする。
+# forbid だとサブモジュールで allow できないため deny を使用する。
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

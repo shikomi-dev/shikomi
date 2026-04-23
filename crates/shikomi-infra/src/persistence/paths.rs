@@ -237,9 +237,32 @@ mod tests {
 
     // --- TC-U14: VaultPaths::new — `..` 含むパス → PathTraversal ---
 
+    /// TC-U14 (Unix) — Unix 絶対パスに `..` が含まれる → PathTraversal
+    #[cfg(unix)]
     #[test]
     fn tc_u14_path_traversal_rejected() {
         let result = VaultPaths::new(PathBuf::from("/tmp/shikomi/../../etc/passwd"));
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidVaultDir {
+                    reason: VaultDirReason::PathTraversal,
+                    ..
+                })
+            ),
+            "PathTraversal を期待したが Err={:?}",
+            result.as_ref().err()
+        );
+    }
+
+    /// TC-U14 (Windows) — Windows 絶対パスに `..` が含まれる → PathTraversal
+    ///
+    /// Unix パス `/tmp/shikomi/../../etc/passwd` は Windows では絶対パスと判定されないため
+    /// `NotAbsolute` になる。代わりに `C:\foo\bar\..\..\etc\passwd` を使う。
+    #[cfg(windows)]
+    #[test]
+    fn tc_u14_path_traversal_rejected() {
+        let result = VaultPaths::new(PathBuf::from(r"C:\foo\bar\..\..\etc\passwd"));
         assert!(
             matches!(
                 result,

@@ -359,4 +359,18 @@
 
 ---
 
+## TC-U26: PermissionGuard::verify_dir — ACE に継承フラグ（AceFlags != 0）→ AceFlags==0 違反（Windows）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-U26 |
+| 対応する受入基準ID | REQ-P07 受入観点② |
+| 対応する工程 | 詳細設計（REQ-P07、verify_dacl_owner_only AceFlags==0 検証） |
+| 種別 | 異常系 |
+| 前提条件 | `#[cfg(windows)]`。`ensure_dir` 適用済みディレクトリに対し、`InitializeAcl` + `AddAccessAllowedAceEx(AceFlags=CONTAINER_INHERIT_ACE=0x02)` で ACE=1・`EXPECTED_DIR_MASK`・owner SID の DACL を構築し、`SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION \| PROTECTED_DACL_SECURITY_INFORMATION, ...)` で適用する。`SE_DACL_PROTECTED`・AceCount=1・AceType=ACCESS_ALLOWED・owner SID・`EXPECTED_DIR_MASK` は全て維持し、AceFlags だけを `0x02` にする（不変条件①②③④ の他の条件はすべて通過させ、AceFlags チェックのみを違反させる）。**ファイルではなくディレクトリを対象とする理由**: Windows は `SetNamedSecurityInfoW` でファイル ACE に設定した `CONTAINER_INHERIT_ACE` を自動的に除去するため（ファイルはコンテナでないため）、ファイルで検証しても AceFlags=0 違反を再現できない。ディレクトリに対しては `CONTAINER_INHERIT_ACE` が保持されるため再現可能 |
+| 操作 | `PermissionGuard::verify_dir(dir_path)` を呼ぶ |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { actual, .. })` が返る。`actual` フィールドが `"ace_count: 1 (expected 1); ace[0]: ace_flags=0x02 (expected 0x00, no inheritance flags)"` で始まる文字列（`actual.starts_with("ace_count: 1 (expected 1); ace[0]: ace_flags=")` で検証）。① PROTECTED 通過 / ② AceCount=1 通過 / ② AceType=ACCESS_ALLOWED 通過 / **② AceFlags=0x02 ≠ 0x00 で Fail Fast**（③ EqualSid / ④ AccessMask には到達しない） |
+
+---
+
 *対応 Issue: #14 / 親ドキュメント: `test-design/index.md`*
