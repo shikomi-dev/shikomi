@@ -2,13 +2,13 @@
 //!
 //! `Mapping` はドメイン型 → SQLite パラメータ、SQLite 行 → ドメイン型の変換を提供する。
 
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use shikomi_core::{
-    Aad, CipherText, NonceBytes, ProtectionMode, Record, RecordId, RecordKind, RecordLabel,
-    RecordPayload, RecordPayloadEncrypted, SecretString, VaultHeader, VaultVersion, WrappedVek,
-    KdfSalt,
+    Aad, CipherText, KdfSalt, NonceBytes, ProtectionMode, Record, RecordId, RecordKind,
+    RecordLabel, RecordPayload, RecordPayloadEncrypted, SecretString, VaultHeader, VaultVersion,
+    WrappedVek,
 };
 
 use crate::persistence::error::{CorruptedReason, PersistenceError};
@@ -84,12 +84,8 @@ impl Mapping {
                 wrapped_vek_by_recovery: None,
             },
             ProtectionMode::Encrypted => {
-                let kdf_salt = header
-                    .kdf_salt()
-                    .map(|s| s.as_array().to_vec());
-                let wrapped_vek_by_pw = header
-                    .wrapped_vek_by_pw()
-                    .map(|w| w.as_bytes().to_vec());
+                let kdf_salt = header.kdf_salt().map(|s| s.as_array().to_vec());
+                let wrapped_vek_by_pw = header.wrapped_vek_by_pw().map(|w| w.as_bytes().to_vec());
                 let wrapped_vek_by_recovery = header
                     .wrapped_vek_by_recovery()
                     .map(|w| w.as_bytes().to_vec());
@@ -118,23 +114,23 @@ impl Mapping {
         row: &rusqlite::Row<'_>,
     ) -> Result<VaultHeader, PersistenceError> {
         // Col 0: protection_mode
-        let protection_mode_raw: String =
-            row.get(0).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let protection_mode =
-            ProtectionMode::try_from_persisted_str(&protection_mode_raw).map_err(|e| {
-                PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::UnknownProtectionMode {
-                        raw: protection_mode_raw.clone(),
-                    },
-                    source: Some(e),
-                }
+        let protection_mode_raw: String = row
+            .get(0)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let protection_mode = ProtectionMode::try_from_persisted_str(&protection_mode_raw)
+            .map_err(|e| PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::UnknownProtectionMode {
+                    raw: protection_mode_raw.clone(),
+                },
+                source: Some(e),
             })?;
 
         // Col 1: vault_version (INTEGER → i64 → u16)
-        let vault_version_raw: i64 =
-            row.get(1).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let vault_version_raw: i64 = row
+            .get(1)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let vault_version_u16 =
             u16::try_from(vault_version_raw).map_err(|_| PersistenceError::Corrupted {
                 table: "vault_header",
@@ -155,38 +151,36 @@ impl Mapping {
             })?;
 
         // Col 2: created_at (RFC3339 TEXT)
-        let created_at_raw: String =
-            row.get(2).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let created_at =
-            OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "created_at",
-                        raw: created_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let created_at_raw: String = row
+            .get(2)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let created_at = OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "created_at",
+                    raw: created_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         match protection_mode {
-            ProtectionMode::Plaintext => {
-                VaultHeader::new_plaintext(vault_version, created_at).map_err(|e| {
-                    PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    }
-                })
-            }
+            ProtectionMode::Plaintext => VaultHeader::new_plaintext(vault_version, created_at)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "vault_header",
+                    row_key: Some("1".to_string()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: e.to_string(),
+                    },
+                    source: Some(e),
+                }),
             ProtectionMode::Encrypted => {
                 // Col 3: kdf_salt (BLOB)
-                let kdf_salt_raw: Option<Vec<u8>> =
-                    row.get(3).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let kdf_salt_raw: Option<Vec<u8>> = row
+                    .get(3)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let kdf_salt_bytes = kdf_salt_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "vault_header",
                     row_key: Some("1".to_string()),
@@ -204,8 +198,9 @@ impl Mapping {
                     })?;
 
                 // Col 4: wrapped_vek_by_pw (BLOB)
-                let pw_raw: Option<Vec<u8>> =
-                    row.get(4).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let pw_raw: Option<Vec<u8>> = row
+                    .get(4)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let pw_bytes = pw_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "vault_header",
                     row_key: Some("1".to_string()),
@@ -214,29 +209,8 @@ impl Mapping {
                     },
                     source: None,
                 })?;
-                let wrapped_vek_by_pw = WrappedVek::try_new(pw_bytes.into_boxed_slice())
-                    .map_err(|e| PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    })?;
-
-                // Col 5: wrapped_vek_by_recovery (BLOB)
-                let rec_raw: Option<Vec<u8>> =
-                    row.get(5).map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let rec_bytes = rec_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_recovery",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_recovery =
-                    WrappedVek::try_new(rec_bytes.into_boxed_slice()).map_err(|e| {
+                let wrapped_vek_by_pw =
+                    WrappedVek::try_new(pw_bytes.into_boxed_slice()).map_err(|e| {
                         PersistenceError::Corrupted {
                             table: "vault_header",
                             row_key: Some("1".to_string()),
@@ -245,6 +219,28 @@ impl Mapping {
                             },
                             source: Some(e),
                         }
+                    })?;
+
+                // Col 5: wrapped_vek_by_recovery (BLOB)
+                let rec_raw: Option<Vec<u8>> = row
+                    .get(5)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let rec_bytes = rec_raw.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "vault_header",
+                    row_key: Some("1".to_string()),
+                    reason: CorruptedReason::NullViolation {
+                        column: "wrapped_vek_by_recovery",
+                    },
+                    source: None,
+                })?;
+                let wrapped_vek_by_recovery = WrappedVek::try_new(rec_bytes.into_boxed_slice())
+                    .map_err(|e| PersistenceError::Corrupted {
+                        table: "vault_header",
+                        row_key: Some("1".to_string()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: e.to_string(),
+                        },
+                        source: Some(e),
                     })?;
 
                 VaultHeader::new_encrypted(
@@ -322,17 +318,23 @@ impl Mapping {
     /// - ドメイン型の構築失敗: `PersistenceError::Corrupted`
     pub(crate) fn row_to_record(row: &rusqlite::Row<'_>) -> Result<Record, PersistenceError> {
         // Col 0: id (TEXT)
-        let id_str: String = row.get(0).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let id_str: String = row
+            .get(0)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let record_id =
             RecordId::try_from_str(&id_str).map_err(|e| PersistenceError::Corrupted {
                 table: "records",
                 row_key: Some(id_str.clone()),
-                reason: CorruptedReason::InvalidUuidString { raw: id_str.clone() },
+                reason: CorruptedReason::InvalidUuidString {
+                    raw: id_str.clone(),
+                },
                 source: Some(e),
             })?;
 
         // Col 1: kind (TEXT)
-        let kind_str: String = row.get(1).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let kind_str: String = row
+            .get(1)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let kind = match kind_str.as_str() {
             "text" => RecordKind::Text,
             "secret" => RecordKind::Secret,
@@ -349,59 +351,62 @@ impl Mapping {
         };
 
         // Col 2: label (TEXT)
-        let label_str: String = row.get(2).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let label =
-            RecordLabel::try_new(label_str).map_err(|e| PersistenceError::Corrupted {
-                table: "records",
-                row_key: Some(id_str.clone()),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("invalid label: {e}"),
-                },
-                source: Some(e),
-            })?;
+        let label_str: String = row
+            .get(2)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let label = RecordLabel::try_new(label_str).map_err(|e| PersistenceError::Corrupted {
+            table: "records",
+            row_key: Some(id_str.clone()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: format!("invalid label: {e}"),
+            },
+            source: Some(e),
+        })?;
 
         // Col 3: payload_variant (TEXT)
-        let payload_variant: String =
-            row.get(3).map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let payload_variant: String = row
+            .get(3)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
         // Col 8: created_at (RFC3339 TEXT)
-        let created_at_raw: String =
-            row.get(8).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let created_at =
-            OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "records",
-                    row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "created_at",
-                        raw: created_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let created_at_raw: String = row
+            .get(8)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let created_at = OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "created_at",
+                    raw: created_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         // Col 9: updated_at (RFC3339 TEXT)
-        let updated_at_raw: String =
-            row.get(9).map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let updated_at =
-            OffsetDateTime::parse(&updated_at_raw, &Rfc3339).map_err(|_| {
-                PersistenceError::Corrupted {
-                    table: "records",
-                    row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::InvalidRfc3339 {
-                        column: "updated_at",
-                        raw: updated_at_raw.clone(),
-                    },
-                    source: None,
-                }
-            })?;
+        let updated_at_raw: String = row
+            .get(9)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let updated_at = OffsetDateTime::parse(&updated_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "updated_at",
+                    raw: updated_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
 
         // ペイロード構築
         let payload = match payload_variant.as_str() {
             "plaintext" => {
                 // Col 4: plaintext_value (TEXT)
-                let plaintext: Option<String> =
-                    row.get(4).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let plaintext: Option<String> = row
+                    .get(4)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let value = plaintext.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -414,8 +419,9 @@ impl Mapping {
             }
             "encrypted" => {
                 // Col 5: nonce (BLOB, 12 bytes)
-                let nonce_raw: Option<Vec<u8>> =
-                    row.get(5).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let nonce_raw: Option<Vec<u8>> = row
+                    .get(5)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let nonce_bytes = nonce_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -433,12 +439,15 @@ impl Mapping {
                     })?;
 
                 // Col 6: ciphertext (BLOB)
-                let ct_raw: Option<Vec<u8>> =
-                    row.get(6).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let ct_raw: Option<Vec<u8>> = row
+                    .get(6)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let ct_bytes = ct_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
-                    reason: CorruptedReason::NullViolation { column: "ciphertext" },
+                    reason: CorruptedReason::NullViolation {
+                        column: "ciphertext",
+                    },
                     source: None,
                 })?;
                 let ciphertext = CipherText::try_new(ct_bytes.into_boxed_slice()).map_err(|e| {
@@ -453,8 +462,9 @@ impl Mapping {
                 })?;
 
                 // Col 7: aad (BLOB, 26 bytes)
-                let aad_raw: Option<Vec<u8>> =
-                    row.get(7).map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let aad_raw: Option<Vec<u8>> = row
+                    .get(7)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
                 let aad_bytes = aad_raw.ok_or_else(|| PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
@@ -466,10 +476,7 @@ impl Mapping {
                         table: "records",
                         row_key: Some(id_str.clone()),
                         reason: CorruptedReason::InvalidRowCombination {
-                            detail: format!(
-                                "aad must be 26 bytes, got {}",
-                                aad_bytes.len()
-                            ),
+                            detail: format!("aad must be 26 bytes, got {}", aad_bytes.len()),
                         },
                         source: None,
                     });
@@ -499,17 +506,16 @@ impl Mapping {
                     }
                 })?;
 
-                let enc =
-                    RecordPayloadEncrypted::new(nonce, ciphertext, aad).map_err(|e| {
-                        PersistenceError::Corrupted {
-                            table: "records",
-                            row_key: Some(id_str.clone()),
-                            reason: CorruptedReason::InvalidRowCombination {
-                                detail: format!("failed to build encrypted payload: {e}"),
-                            },
-                            source: Some(e),
-                        }
-                    })?;
+                let enc = RecordPayloadEncrypted::new(nonce, ciphertext, aad).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.clone()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("failed to build encrypted payload: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
 
                 RecordPayload::Encrypted(enc)
             }
@@ -532,20 +538,284 @@ impl Mapping {
 
         // If updated_at differs from created_at, apply it via with_updated_label
         let record = if updated_at != record.created_at() {
-            record
-                .with_updated_label(label, updated_at)
-                .map_err(|e| PersistenceError::Corrupted {
+            record.with_updated_label(label, updated_at).map_err(|e| {
+                PersistenceError::Corrupted {
                     table: "records",
                     row_key: Some(id_str.clone()),
                     reason: CorruptedReason::InvalidRowCombination {
                         detail: format!("failed to restore updated_at: {e}"),
                     },
                     source: Some(e),
-                })?
+                }
+            })?
         } else {
             record
         };
 
         Ok(record)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ユニットテスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use shikomi_core::{
+        ProtectionMode, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString,
+        Vault, VaultHeader, VaultVersion,
+    };
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    fn open_in_memory() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
+    fn setup_schema(conn: &Connection) {
+        conn.execute_batch(concat!(
+            "PRAGMA application_id = 1936223085;",
+            "PRAGMA user_version = 1;",
+            "CREATE TABLE IF NOT EXISTS vault_header (",
+            "  id INTEGER PRIMARY KEY CHECK(id = 1),",
+            "  protection_mode TEXT NOT NULL CHECK(protection_mode IN ('plaintext', 'encrypted')),",
+            "  vault_version INTEGER NOT NULL CHECK(vault_version >= 1),",
+            "  created_at TEXT NOT NULL,",
+            "  kdf_salt BLOB,",
+            "  wrapped_vek_by_pw BLOB,",
+            "  wrapped_vek_by_recovery BLOB",
+            ");",
+            "CREATE TABLE IF NOT EXISTS records (",
+            "  id TEXT PRIMARY KEY,",
+            "  kind TEXT NOT NULL,",
+            "  label TEXT NOT NULL,",
+            "  payload_variant TEXT NOT NULL,",
+            "  plaintext_value TEXT,",
+            "  nonce BLOB,",
+            "  ciphertext BLOB,",
+            "  aad BLOB,",
+            "  created_at TEXT NOT NULL,",
+            "  updated_at TEXT NOT NULL",
+            ");",
+        ))
+        .unwrap();
+    }
+
+    fn setup_schema_no_check(conn: &Connection) {
+        conn.execute_batch(concat!(
+            "CREATE TABLE IF NOT EXISTS vault_header (",
+            "  id INTEGER PRIMARY KEY,",
+            "  protection_mode TEXT NOT NULL,",
+            "  vault_version INTEGER NOT NULL,",
+            "  created_at TEXT NOT NULL,",
+            "  kdf_salt BLOB,",
+            "  wrapped_vek_by_pw BLOB,",
+            "  wrapped_vek_by_recovery BLOB",
+            ");",
+            "CREATE TABLE IF NOT EXISTS records (",
+            "  id TEXT PRIMARY KEY,",
+            "  kind TEXT NOT NULL,",
+            "  label TEXT NOT NULL,",
+            "  payload_variant TEXT NOT NULL,",
+            "  plaintext_value TEXT,",
+            "  nonce BLOB,",
+            "  ciphertext BLOB,",
+            "  aad BLOB,",
+            "  created_at TEXT NOT NULL,",
+            "  updated_at TEXT NOT NULL",
+            ");",
+        ))
+        .unwrap();
+    }
+
+    // --- TC-U02: Mapping::vault_header_to_params — 平文モード ---
+
+    #[test]
+    fn tc_u02_vault_header_to_params_plaintext() {
+        let header =
+            VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc()).unwrap();
+        let params = Mapping::vault_header_to_params(&header);
+
+        assert_eq!(params.protection_mode, "plaintext");
+        assert!(params.kdf_salt.is_none(), "kdf_salt は None のはず");
+        assert!(params.wrapped_vek_by_pw.is_none());
+        assert!(params.wrapped_vek_by_recovery.is_none());
+    }
+
+    // --- TC-U03: Mapping::row_to_vault_header — 正常系 ---
+
+    #[test]
+    fn tc_u03_row_to_vault_header_plaintext() {
+        let conn = open_in_memory();
+        setup_schema(&conn);
+        conn.execute(
+            "INSERT INTO vault_header VALUES (1, 'plaintext', 1, '2026-01-01T00:00:00+00:00', NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT protection_mode, vault_version, created_at, kdf_salt, wrapped_vek_by_pw, wrapped_vek_by_recovery FROM vault_header WHERE id = 1")
+            .unwrap();
+        let header = stmt
+            .query_row([], |row| Ok(Mapping::row_to_vault_header(row).unwrap()))
+            .unwrap();
+
+        assert_eq!(header.protection_mode(), ProtectionMode::Plaintext);
+    }
+
+    // --- TC-U04: Mapping::row_to_vault_header — UnknownProtectionMode ---
+
+    #[test]
+    fn tc_u04_row_to_vault_header_unknown_mode() {
+        let conn = open_in_memory();
+        setup_schema_no_check(&conn);
+        conn.execute(
+            "INSERT INTO vault_header VALUES (1, 'unknown_future_mode', 1, '2026-01-01T00:00:00+00:00', NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT protection_mode, vault_version, created_at, kdf_salt, wrapped_vek_by_pw, wrapped_vek_by_recovery FROM vault_header WHERE id = 1")
+            .unwrap();
+        let result = stmt
+            .query_row([], |row| Ok(Mapping::row_to_vault_header(row)))
+            .unwrap();
+
+        match result {
+            Err(PersistenceError::Corrupted {
+                reason: CorruptedReason::UnknownProtectionMode { raw },
+                ..
+            }) => {
+                assert_eq!(raw, "unknown_future_mode");
+            }
+            other => panic!("UnknownProtectionMode を期待したが {other:?}"),
+        }
+    }
+
+    // --- TC-U05: Mapping::row_to_vault_header — InvalidRfc3339 ---
+
+    #[test]
+    fn tc_u05_row_to_vault_header_invalid_rfc3339() {
+        let conn = open_in_memory();
+        setup_schema_no_check(&conn);
+        conn.execute(
+            "INSERT INTO vault_header VALUES (1, 'plaintext', 1, 'not-a-date', NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT protection_mode, vault_version, created_at, kdf_salt, wrapped_vek_by_pw, wrapped_vek_by_recovery FROM vault_header WHERE id = 1")
+            .unwrap();
+        let result = stmt
+            .query_row([], |row| Ok(Mapping::row_to_vault_header(row)))
+            .unwrap();
+
+        match result {
+            Err(PersistenceError::Corrupted {
+                reason: CorruptedReason::InvalidRfc3339 { column, raw },
+                ..
+            }) => {
+                assert_eq!(column, "created_at");
+                assert_eq!(raw, "not-a-date");
+            }
+            other => panic!("InvalidRfc3339 を期待したが {other:?}"),
+        }
+    }
+
+    // --- TC-U06: Mapping::row_to_record — 正常系（plaintext variant）---
+
+    #[test]
+    fn tc_u06_row_to_record_plaintext() {
+        let conn = open_in_memory();
+        setup_schema(&conn);
+        let id = Uuid::now_v7().to_string();
+        conn.execute(
+            "INSERT INTO records VALUES (?, 'secret', 'test-label', 'plaintext', 'test value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            [&id],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+            .unwrap();
+        let record = stmt
+            .query_row([], |row| Ok(Mapping::row_to_record(row).unwrap()))
+            .unwrap();
+
+        assert_eq!(record.label().as_str(), "test-label");
+        assert!(matches!(record.payload(), RecordPayload::Plaintext(_)));
+    }
+
+    // --- TC-U07: Mapping::row_to_record — InvalidUuidString ---
+
+    #[test]
+    fn tc_u07_row_to_record_invalid_uuid() {
+        let conn = open_in_memory();
+        setup_schema_no_check(&conn);
+        conn.execute(
+            "INSERT INTO records VALUES ('not-a-uuid', 'secret', 'label', 'plaintext', 'value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            [],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+            .unwrap();
+        let result = stmt
+            .query_row([], |row| Ok(Mapping::row_to_record(row)))
+            .unwrap();
+
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::Corrupted {
+                    reason: CorruptedReason::InvalidUuidString { ref raw },
+                    ..
+                }) if raw == "not-a-uuid"
+            ),
+            "InvalidUuidString を期待したが Err={:?}",
+            result.err()
+        );
+    }
+
+    // --- TC-U08: Mapping::row_to_record — NullViolation ---
+
+    #[test]
+    fn tc_u08_row_to_record_null_violation() {
+        let conn = open_in_memory();
+        setup_schema_no_check(&conn);
+        let id = Uuid::now_v7().to_string();
+        // payload_variant='plaintext' だが plaintext_value=NULL
+        conn.execute(
+            "INSERT INTO records VALUES (?, 'secret', 'label', 'plaintext', NULL, NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            [&id],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+            .unwrap();
+        let result = stmt
+            .query_row([], |row| Ok(Mapping::row_to_record(row)))
+            .unwrap();
+
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::Corrupted {
+                    reason: CorruptedReason::NullViolation {
+                        column: "plaintext_value"
+                    },
+                    ..
+                })
+            ),
+            "NullViolation を期待したが {result:?}"
+        );
     }
 }

@@ -138,10 +138,11 @@ impl AtomicWriter {
         let final_path = paths.vault_db();
 
         // `.new` ファイルを fsync
-        let file = std::fs::File::open(new_path).map_err(|e| PersistenceError::AtomicWriteFailed {
-            stage: AtomicWriteStage::FsyncTemp,
-            source: e,
-        })?;
+        let file =
+            std::fs::File::open(new_path).map_err(|e| PersistenceError::AtomicWriteFailed {
+                stage: AtomicWriteStage::FsyncTemp,
+                source: e,
+            })?;
         file.sync_all().map_err(|e| {
             Self::cleanup_orphan_best_effort(new_path);
             PersistenceError::AtomicWriteFailed {
@@ -154,14 +155,13 @@ impl AtomicWriter {
         // 親ディレクトリの fsync（Unix: POSIX 耐久性保証のため）
         #[cfg(unix)]
         {
-            let dir =
-                std::fs::File::open(paths.dir()).map_err(|e| {
-                    Self::cleanup_orphan_best_effort(new_path);
-                    PersistenceError::AtomicWriteFailed {
-                        stage: AtomicWriteStage::FsyncDir,
-                        source: e,
-                    }
-                })?;
+            let dir = std::fs::File::open(paths.dir()).map_err(|e| {
+                Self::cleanup_orphan_best_effort(new_path);
+                PersistenceError::AtomicWriteFailed {
+                    stage: AtomicWriteStage::FsyncDir,
+                    source: e,
+                }
+            })?;
             dir.sync_all().map_err(|e| {
                 Self::cleanup_orphan_best_effort(new_path);
                 PersistenceError::AtomicWriteFailed {
@@ -203,7 +203,10 @@ impl AtomicWriter {
     ///
     /// - `write_new` と同じ
     #[cfg(test)]
-    pub(crate) fn write_new_only(paths: &VaultPaths, vault: &Vault) -> Result<(), PersistenceError> {
+    pub(crate) fn write_new_only(
+        paths: &VaultPaths,
+        vault: &Vault,
+    ) -> Result<(), PersistenceError> {
         Self::write_new(paths, vault)
     }
 
@@ -239,5 +242,82 @@ impl AtomicWriter {
             }
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 内部テスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shikomi_core::{
+        Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString, Vault, VaultHeader,
+        VaultVersion,
+    };
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+
+    fn plaintext_vault(label: &str, value: &str) -> Vault {
+        let header =
+            VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc()).unwrap();
+        let mut vault = Vault::new(header);
+        let record = Record::new(
+            RecordId::new(Uuid::now_v7()).unwrap(),
+            RecordKind::Secret,
+            RecordLabel::try_new(label.to_string()).unwrap(),
+            RecordPayload::Plaintext(SecretString::from_string(value.to_string())),
+            OffsetDateTime::now_utc(),
+        );
+        vault.add_record(record).unwrap();
+        vault
+    }
+
+    /// TC-I06 — write_new_only フックで .new のみ書き込み→load が OrphanNewFile を返す。
+    ///
+    /// AC-06 対応。write_new_only は fsync_and_rename を呼ばないため .new が残り、
+    /// vault.db の内容は初期 vault のままになる。
+    #[test]
+    fn tc_i06_write_new_only_hook_orphan() {
+        let dir = TempDir::new().unwrap();
+        let paths = VaultPaths::new_unchecked(dir.path().to_path_buf());
+
+        // ディレクトリのパーミッションを設定
+        crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
+
+        // 初期 vault を save（vault.db が存在する状態にする）
+        let initial_vault = plaintext_vault("initial", "initial-value");
+        AtomicWriter::write_new(&paths, &initial_vault).unwrap();
+        AtomicWriter::fsync_and_rename(&paths).unwrap();
+
+        // vault.db のバイト列を記録
+        let db_bytes_before = std::fs::read(paths.vault_db()).unwrap();
+
+        // write_new_only で別内容の .new のみ作成（rename しない）
+        let new_vault = plaintext_vault("updated", "updated-value");
+        AtomicWriter::write_new_only(&paths, &new_vault).unwrap();
+
+        // .new ファイルが存在することを確認
+        assert!(
+            paths.vault_db_new().exists(),
+            ".new ファイルが作成されていない"
+        );
+
+        // .new が残存している状態での load は OrphanNewFile になる
+        // （ここでは detect_orphan を直接呼んでテスト）
+        let orphan_result = AtomicWriter::detect_orphan(paths.vault_db_new());
+        assert!(
+            matches!(orphan_result, Err(PersistenceError::OrphanNewFile { .. })),
+            "OrphanNewFile を期待したが {orphan_result:?}"
+        );
+
+        // vault.db の内容が初期 vault のまま（.new の内容が反映されていない）
+        let db_bytes_after = std::fs::read(paths.vault_db()).unwrap();
+        assert_eq!(
+            db_bytes_before, db_bytes_after,
+            "vault.db の内容が変わっている（.new がリネームされてしまった）"
+        );
     }
 }

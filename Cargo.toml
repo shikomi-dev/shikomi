@@ -34,7 +34,7 @@ thiserror       = "2"
 time            = { version = "0.3",  features = ["serde", "macros", "formatting", "parsing"] }
 unicode-segmentation = "1"
 rusqlite        = { version = "0.31", features = ["bundled"] }
-fs4             = { version = "0.10", default-features = false, features = ["sync"] }
+fs4             = { version = "0.9", default-features = false, features = ["sync"] }
 cfg-if          = "1"
 tracing         = "0.1"
 dirs            = "5"

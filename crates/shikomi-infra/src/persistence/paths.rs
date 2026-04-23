@@ -27,9 +27,7 @@ pub const APP_SUBDIR_NAME: &str = "shikomi";
 
 /// アクセスを禁止するシステム領域のプレフィックス一覧（Unix）。
 #[cfg(unix)]
-const PROTECTED_PATH_PREFIXES: &[&str] = &[
-    "/proc", "/sys", "/dev", "/etc", "/boot", "/root",
-];
+const PROTECTED_PATH_PREFIXES: &[&str] = &["/proc", "/sys", "/dev", "/etc", "/boot", "/root"];
 
 /// アクセスを禁止するシステム領域のプレフィックス一覧（Windows）。
 #[cfg(windows)]
@@ -89,6 +87,15 @@ impl VaultPaths {
         match std::fs::symlink_metadata(&dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // パスが存在しない（新規作成予定）→ シンボリックリンク/ディレクトリチェック不要
+                // Step 5 (非存在パス向け): 保護されたシステム領域チェック（raw パスで評価）
+                for &prefix in PROTECTED_PATH_PREFIXES {
+                    if dir.starts_with(prefix) {
+                        return Err(PersistenceError::InvalidVaultDir {
+                            path: dir,
+                            reason: VaultDirReason::ProtectedSystemArea { prefix },
+                        });
+                    }
+                }
                 // Step 7: 子パスを導出して返す
                 return Ok(Self::derive(dir));
             }
@@ -115,12 +122,11 @@ impl VaultPaths {
         }
 
         // Step 4: canonicalize（パスが存在するので安全に呼び出せる）
-        let canonical = std::fs::canonicalize(&dir).map_err(|source| {
-            PersistenceError::InvalidVaultDir {
+        let canonical =
+            std::fs::canonicalize(&dir).map_err(|source| PersistenceError::InvalidVaultDir {
                 path: dir.clone(),
                 reason: VaultDirReason::Canonicalize { source },
-            }
-        })?;
+            })?;
 
         // Step 5: 保護されたシステム領域チェック
         for &prefix in PROTECTED_PATH_PREFIXES {
@@ -176,5 +182,117 @@ impl VaultPaths {
     #[must_use]
     pub fn vault_db_lock(&self) -> &Path {
         &self.vault_db_lock
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ユニットテスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // --- TC-U01: VaultPaths::new — 正常パスのパス導出 ---
+
+    #[test]
+    fn tc_u01_vault_paths_new_valid_dir() {
+        let dir = TempDir::new().unwrap();
+        let paths = VaultPaths::new(dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(paths.dir(), dir.path().canonicalize().unwrap());
+        assert_eq!(
+            paths.vault_db(),
+            dir.path().canonicalize().unwrap().join("vault.db")
+        );
+        assert_eq!(
+            paths.vault_db_new(),
+            dir.path().canonicalize().unwrap().join("vault.db.new")
+        );
+        assert_eq!(
+            paths.vault_db_lock(),
+            dir.path().canonicalize().unwrap().join("vault.db.lock")
+        );
+    }
+
+    // --- TC-U13: VaultPaths::new — 相対パス → NotAbsolute ---
+
+    #[test]
+    fn tc_u13_relative_path_not_absolute() {
+        let result = VaultPaths::new(PathBuf::from("relative/path"));
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidVaultDir {
+                    ref path,
+                    reason: VaultDirReason::NotAbsolute
+                }) if *path == PathBuf::from("relative/path")
+            ),
+            "NotAbsolute を期待したが Err={:?}",
+            result.as_ref().err()
+        );
+    }
+
+    // --- TC-U14: VaultPaths::new — `..` 含むパス → PathTraversal ---
+
+    #[test]
+    fn tc_u14_path_traversal_rejected() {
+        let result = VaultPaths::new(PathBuf::from("/tmp/shikomi/../../etc/passwd"));
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidVaultDir {
+                    reason: VaultDirReason::PathTraversal,
+                    ..
+                })
+            ),
+            "PathTraversal を期待したが Err={:?}",
+            result.as_ref().err()
+        );
+    }
+
+    // --- TC-U15: VaultPaths::new — シンボリックリンク → SymlinkNotAllowed（Unix）---
+
+    #[cfg(unix)]
+    #[test]
+    fn tc_u15_symlink_not_allowed() {
+        let dir = TempDir::new().unwrap();
+        let real_dir = dir.path().join("real");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let symlink_path = dir.path().join("link");
+        std::os::unix::fs::symlink(&real_dir, &symlink_path).unwrap();
+
+        let result = VaultPaths::new(symlink_path.clone());
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidVaultDir {
+                    reason: VaultDirReason::SymlinkNotAllowed,
+                    ..
+                })
+            ),
+            "SymlinkNotAllowed を期待したが Err={:?}",
+            result.as_ref().err()
+        );
+    }
+
+    // --- TC-U16: VaultPaths::new — 保護領域 → ProtectedSystemArea（Unix）---
+
+    #[cfg(unix)]
+    #[test]
+    fn tc_u16_protected_system_area() {
+        let result = VaultPaths::new(PathBuf::from("/etc/shikomi_test_dir"));
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidVaultDir {
+                    reason: VaultDirReason::ProtectedSystemArea { prefix: "/etc" },
+                    ..
+                })
+            ),
+            "ProtectedSystemArea を期待したが Err={:?}",
+            result.as_ref().err()
+        );
     }
 }

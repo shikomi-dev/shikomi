@@ -20,6 +20,8 @@ time          = { workspace = true }
 tempfile     = { workspace = true }
 tracing-test = { workspace = true }
 serial_test  = { workspace = true }
+rusqlite     = { workspace = true }
+uuid         = { workspace = true }
 
 [lints]
 workspace = true

@@ -12,7 +12,7 @@ pub(crate) struct SchemaSql;
 impl SchemaSql {
     /// shikomi vault DB の `application_id`。
     ///
-    /// ASCII: "shkm" = 0x73_68_6B_6D = 1934521197
+    /// ASCII: "shkm" = 0x73_68_6B_6D = 1936223085
     pub(crate) const APPLICATION_ID: u32 = 0x73_68_6B_6D;
 
     /// 初期スキーマバージョン（`user_version` PRAGMA）。
@@ -35,9 +35,9 @@ impl SchemaSql {
 
     /// `application_id` を shikomi の値に設定する PRAGMA クエリ。
     ///
-    /// 0x73_68_6B_6D = 1934521197
+    /// 0x73_68_6B_6D = 1936223085
     pub(crate) const PRAGMA_APPLICATION_ID_SET: &'static str =
-        "PRAGMA application_id = 1934521197;";
+        "PRAGMA application_id = 1936223085;";
 
     /// `user_version` を初期値に設定する PRAGMA クエリ。
     pub(crate) const PRAGMA_USER_VERSION_SET: &'static str = "PRAGMA user_version = 1;";

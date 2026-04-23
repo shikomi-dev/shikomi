@@ -100,3 +100,77 @@ pub(super) fn verify_file(path: &Path) -> Result<(), PersistenceError> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// ユニットテスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::error::PersistenceError;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    // --- TC-U09: PermissionGuard::verify_dir — 0700 → Ok ---
+
+    #[test]
+    fn tc_u09_verify_dir_0700_ok() {
+        let dir = TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(verify_dir(dir.path()).is_ok(), "0700 は Ok のはず");
+    }
+
+    // --- TC-U10: PermissionGuard::verify_dir — 0755 → InvalidPermission ---
+
+    #[test]
+    fn tc_u10_verify_dir_0755_invalid() {
+        let dir = TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = verify_dir(dir.path());
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidPermission {
+                    expected: "0700",
+                    ..
+                })
+            ),
+            "InvalidPermission を期待したが {result:?}"
+        );
+    }
+
+    // --- TC-U11: PermissionGuard::verify_file — 0600 → Ok ---
+
+    #[test]
+    fn tc_u11_verify_file_0600_ok() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.db");
+        std::fs::write(&file_path, b"").unwrap();
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(verify_file(&file_path).is_ok(), "0600 は Ok のはず");
+    }
+
+    // --- TC-U12: PermissionGuard::verify_file — 0644 → InvalidPermission ---
+
+    #[test]
+    fn tc_u12_verify_file_0644_invalid() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.db");
+        std::fs::write(&file_path, b"").unwrap();
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let result = verify_file(&file_path);
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::InvalidPermission {
+                    expected: "0600",
+                    ..
+                })
+            ),
+            "InvalidPermission を期待したが {result:?}"
+        );
+    }
+}
