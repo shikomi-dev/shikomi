@@ -10,7 +10,7 @@ use super::{
     audit::Audit,
     error::{CorruptedReason, PersistenceError},
     lock::VaultLock,
-    paths::VaultPaths,
+    paths::{self, VaultPaths},
     permission::PermissionGuard,
     sqlite::{atomic::AtomicWriter, mapping::Mapping, schema::SchemaSql},
     VaultRepository, TRACKING_ISSUE_ENCRYPTED_VAULT,
@@ -33,26 +33,15 @@ impl SqliteVaultRepository {
     /// - vault ディレクトリの解決失敗: `PersistenceError::CannotResolveVaultDir`
     /// - ディレクトリ検証失敗: `PersistenceError::InvalidVaultDir`
     pub fn new() -> Result<Self, PersistenceError> {
-        let dir = if let Ok(val) = std::env::var("SHIKOMI_VAULT_DIR") {
+        let dir = if let Ok(val) = std::env::var(paths::ENV_VAR_VAULT_DIR) {
             PathBuf::from(val)
         } else {
             dirs::data_dir()
                 .ok_or(PersistenceError::CannotResolveVaultDir)?
-                .join("shikomi")
+                .join(paths::APP_SUBDIR_NAME)
         };
         let paths = VaultPaths::new(dir)?;
         Ok(Self { paths })
-    }
-
-    /// 指定ディレクトリ（検証なし）で `SqliteVaultRepository` を構築する。
-    ///
-    /// テストや内部用途向け。検証をスキップするため、不正なパスを渡さないこと。
-    #[doc(hidden)]
-    #[must_use]
-    pub(crate) fn with_dir(dir: PathBuf) -> Self {
-        Self {
-            paths: VaultPaths::new_unchecked(dir),
-        }
     }
 
     /// vault パス情報への参照を返す。

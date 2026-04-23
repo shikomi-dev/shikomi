@@ -143,6 +143,7 @@ impl VaultPaths {
     }
 
     /// 検証をスキップして `VaultPaths` を構築する（テスト・内部用途のみ）。
+    #[cfg(test)]
     pub(crate) fn new_unchecked(dir: PathBuf) -> Self {
         Self::derive(dir)
     }
@@ -227,7 +228,7 @@ mod tests {
                 Err(PersistenceError::InvalidVaultDir {
                     ref path,
                     reason: VaultDirReason::NotAbsolute
-                }) if *path == PathBuf::from("relative/path")
+                }) if path.as_path() == Path::new("relative/path")
             ),
             "NotAbsolute を期待したが Err={:?}",
             result.as_ref().err()

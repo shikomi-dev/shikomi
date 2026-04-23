@@ -117,7 +117,7 @@ pub enum VaultDirReason {
 pub enum AtomicWriteStage {
     /// `.new` ファイル作成準備中。
     PrepareNew,
-    /// `.new` への SQLite 書き込み中。
+    /// `.new` への `SQLite` 書き込み中。
     WriteTemp,
     /// `.new` の fsync 中。
     FsyncTemp,
@@ -160,7 +160,7 @@ pub enum PersistenceError {
         source: std::io::Error,
     },
 
-    /// SQLite エラー。
+    /// `SQLite` エラー。
     #[error("SQLite error: {source}")]
     Sqlite {
         /// 元の rusqlite エラー。
@@ -219,7 +219,7 @@ pub enum PersistenceError {
         source: std::io::Error,
     },
 
-    /// SQLite スキーマの `application_id` または `user_version` が期待値と異なる。
+    /// `SQLite` スキーマの `application_id` または `user_version` が期待値と異なる。
     #[error(
         "schema mismatch: expected application_id={expected_application_id:#010x}, \
          found={found_application_id:#010x}; \

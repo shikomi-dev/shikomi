@@ -129,7 +129,7 @@ fn tc_i02_plaintext_vault_round_trip() {
         .map(|r| (r.id().to_string(), r))
         .collect();
 
-    for orig in vault.records().iter() {
+    for orig in vault.records() {
         let id_str = orig.id().to_string();
         let loaded_rec = loaded_by_id
             .get(&id_str)
@@ -158,7 +158,7 @@ fn tc_i02_plaintext_vault_round_trip() {
 // TC-I03: 暗号化モード vault を save → UnsupportedYet
 // ---------------------------------------------------------------------------
 
-/// TC-I03 — 暗号化モード vault を save すると UnsupportedYet が返る。
+/// TC-I03 — 暗号化モード vault を save すると `UnsupportedYet` が返る。
 ///
 /// AC-03 対応。
 #[test]
@@ -200,7 +200,7 @@ fn tc_i03_encrypted_vault_save_unsupported() {
 // TC-I04: 暗号化モード vault.db を load → UnsupportedYet
 // ---------------------------------------------------------------------------
 
-/// TC-I04 — protection_mode='encrypted' の vault.db を load すると UnsupportedYet が返る。
+/// TC-I04 — `protection_mode='encrypted'` の vault.db を load すると `UnsupportedYet` が返る。
 ///
 /// AC-04 対応。
 #[test]
@@ -271,7 +271,7 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
 // TC-I05: .new 残存 + load → OrphanNewFile
 // ---------------------------------------------------------------------------
 
-/// TC-I05 — vault.db.new が残存する状態で load を呼ぶと OrphanNewFile が返る。
+/// TC-I05 — vault.db.new が残存する状態で load を呼ぶと `OrphanNewFile` が返る。
 ///
 /// AC-05 対応。
 #[test]
@@ -304,7 +304,7 @@ fn tc_i05_orphan_new_file_on_load() {
 // TC-I07: 0777 ディレクトリ + load → InvalidPermission（Unix）
 // ---------------------------------------------------------------------------
 
-/// TC-I07 — ディレクトリが 0777 の場合 load で InvalidPermission が返る。
+/// TC-I07 — ディレクトリが 0777 の場合 load で `InvalidPermission` が返る。
 ///
 /// AC-07 対応。Unix のみ。
 #[cfg(unix)]
@@ -447,8 +447,8 @@ fn tc_i11_clippy_fmt_deny() {
         // ワークスペースルートを求める（2 階層上）
         std::path::PathBuf::from(&manifest)
             .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp/shikomi"))
     };
 
@@ -536,7 +536,7 @@ fn tc_i13_zero_byte_vault_db() {
 // TC-I14: 不正バイト列 vault.db → panic せずエラー返却
 // ---------------------------------------------------------------------------
 
-/// TC-I14 — 非 SQLite バイト列の vault.db を load しても panic しない。
+/// TC-I14 — 非 `SQLite` バイト列の vault.db を load しても panic しない。
 ///
 /// AC-13 対応。
 #[test]
@@ -569,7 +569,7 @@ fn tc_i14_corrupt_vault_db() {
 // TC-I15: .new 残存 + save → OrphanNewFile
 // ---------------------------------------------------------------------------
 
-/// TC-I15 — vault.db.new が残存する状態で save を呼ぶと OrphanNewFile が返る。
+/// TC-I15 — vault.db.new が残存する状態で save を呼ぶと `OrphanNewFile` が返る。
 ///
 /// AC-14 対応。
 #[test]
@@ -604,19 +604,19 @@ fn tc_i15_orphan_new_file_on_save() {
 // TC-I16: exists() — vault 非存在
 // ---------------------------------------------------------------------------
 
-/// TC-I16 — 空の tempdir で exists() を呼ぶと Ok(false) が返る。
+/// TC-I16 — 空の tempdir で `exists()` を呼ぶと Ok(false) が返る。
 #[test]
 fn tc_i16_exists_returns_false_when_no_vault() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
-    assert_eq!(repo.exists().unwrap(), false);
+    assert!(!repo.exists().unwrap());
 }
 
 // ---------------------------------------------------------------------------
 // TC-I17: exists() — vault 存在
 // ---------------------------------------------------------------------------
 
-/// TC-I17 — save 後に exists() を呼ぶと Ok(true) が返る。
+/// TC-I17 — save 後に `exists()` を呼ぶと Ok(true) が返る。
 #[test]
 fn tc_i17_exists_returns_true_after_save() {
     let dir = TempDir::new().unwrap();
@@ -624,16 +624,16 @@ fn tc_i17_exists_returns_true_after_save() {
     let vault = make_plaintext_vault(1);
 
     repo.save(&vault).unwrap();
-    assert_eq!(repo.exists().unwrap(), true);
+    assert!(repo.exists().unwrap());
 }
 
 // ---------------------------------------------------------------------------
 // TC-I18: SHIKOMI_VAULT_DIR 環境変数 override
 // ---------------------------------------------------------------------------
 
-/// TC-I18 — SHIKOMI_VAULT_DIR で指定したディレクトリに vault.db が作成される。
+/// TC-I18 — `SHIKOMI_VAULT_DIR` で指定したディレクトリに vault.db が作成される。
 ///
-/// `ENV_MUTEX` で直列化（std::env::set_var がグローバル状態を変更するため）。
+/// `ENV_MUTEX` で直列化（`std::env::set_var` がグローバル状態を変更するため）。
 #[test]
 fn tc_i18_env_var_vault_dir_override() {
     let dir = TempDir::new().unwrap();
@@ -790,7 +790,7 @@ fn tc_i21_vault_lock_contention() {
 // TC-I22: VaultPaths::new — SHIKOMI_VAULT_DIR 7 段階バリデーション（Unix）
 // ---------------------------------------------------------------------------
 
-/// TC-I22-A — 相対パスを SHIKOMI_VAULT_DIR に設定すると NotAbsolute が返る。
+/// TC-I22-A — 相対パスを `SHIKOMI_VAULT_DIR` に設定すると `NotAbsolute` が返る。
 #[cfg(unix)]
 #[test]
 fn tc_i22a_env_var_relative_path() {
@@ -814,7 +814,7 @@ fn tc_i22a_env_var_relative_path() {
     );
 }
 
-/// TC-I22-B — `..` を含むパスを SHIKOMI_VAULT_DIR に設定すると PathTraversal が返る。
+/// TC-I22-B — `..` を含むパスを `SHIKOMI_VAULT_DIR` に設定すると `PathTraversal` が返る。
 #[cfg(unix)]
 #[test]
 fn tc_i22b_env_var_path_traversal() {
@@ -838,7 +838,7 @@ fn tc_i22b_env_var_path_traversal() {
     );
 }
 
-/// TC-I22-C — シンボリックリンクを SHIKOMI_VAULT_DIR に設定すると SymlinkNotAllowed が返る。
+/// TC-I22-C — シンボリックリンクを `SHIKOMI_VAULT_DIR` に設定すると `SymlinkNotAllowed` が返る。
 #[cfg(unix)]
 #[test]
 fn tc_i22c_env_var_symlink_not_allowed() {
@@ -868,7 +868,7 @@ fn tc_i22c_env_var_symlink_not_allowed() {
     );
 }
 
-/// TC-I22-D — `/etc/` 配下のパスを SHIKOMI_VAULT_DIR に設定すると ProtectedSystemArea が返る。
+/// TC-I22-D — `/etc/` 配下のパスを `SHIKOMI_VAULT_DIR` に設定すると `ProtectedSystemArea` が返る。
 #[cfg(unix)]
 #[test]
 fn tc_i22d_env_var_protected_system_area() {
@@ -923,8 +923,7 @@ fn tc_i23_no_secret_leakage_in_logs() {
     for pattern in &forbidden_patterns {
         assert!(
             !logs_contain(pattern),
-            "監査ログに秘密値パターン {:?} が含まれていた（AC-15 違反）",
-            pattern
+            "監査ログに秘密値パターン {pattern:?} が含まれていた（AC-15 違反）"
         );
     }
 }

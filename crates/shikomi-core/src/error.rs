@@ -165,26 +165,25 @@ mod tests {
     #[test]
     fn test_display_invalid_protection_mode_contains_keyword() {
         let err = DomainError::InvalidProtectionMode("x".to_string());
-        let msg = format!("{}", err);
-        assert!(msg.contains("unknown protection mode"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown protection mode"), "got: {msg}");
     }
 
     #[test]
     fn test_display_unsupported_vault_version_contains_version_number() {
         let err = DomainError::UnsupportedVaultVersion(99);
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(
             msg.contains("unsupported vault version") && msg.contains("99"),
-            "got: {}",
-            msg
+            "got: {msg}"
         );
     }
 
     #[test]
     fn test_display_invalid_record_label_contains_keyword() {
         let err = DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty);
-        let msg = format!("{}", err);
-        assert!(msg.contains("invalid record label"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid record label"), "got: {msg}");
     }
 
     #[test]
@@ -193,13 +192,12 @@ mod tests {
             vault_mode: ProtectionMode::Plaintext,
             record_mode: ProtectionMode::Encrypted,
         });
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         // #[error("{0}")] により VaultConsistencyReason の Display が素通しになる。
         // ModeMismatch の Display: "vault is in ... mode but record payload is ..."
         assert!(
             msg.contains("vault") && msg.contains("mode"),
-            "got: {}",
-            msg
+            "got: {msg}"
         );
     }
 
@@ -209,36 +207,35 @@ mod tests {
         use uuid::Uuid;
         let id = RecordId::new(Uuid::now_v7()).unwrap();
         let err = DomainError::VaultConsistencyError(VaultConsistencyReason::DuplicateId(id));
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         // 以前は外枠の文言 "vault and record payload mode mismatch" が混入していた。
         // #[error("{0}")] により DuplicateId の Display だけが出ることを確認する。
         assert!(
             !msg.contains("mode mismatch"),
-            "DuplicateId should not contain 'mode mismatch', got: {}",
-            msg
+            "DuplicateId should not contain 'mode mismatch', got: {msg}"
         );
-        assert!(msg.contains("duplicate"), "got: {}", msg);
+        assert!(msg.contains("duplicate"), "got: {msg}");
     }
 
     #[test]
     fn test_display_nonce_overflow_contains_keyword() {
         let err = DomainError::NonceOverflow;
-        let msg = format!("{}", err);
-        assert!(msg.contains("nonce counter exhausted"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("nonce counter exhausted"), "got: {msg}");
     }
 
     #[test]
     fn test_display_invalid_record_id_contains_keyword() {
         let err = DomainError::InvalidRecordId(InvalidRecordIdReason::NilUuid);
-        let msg = format!("{}", err);
-        assert!(msg.contains("invalid record id"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid record id"), "got: {msg}");
     }
 
     #[test]
     fn test_display_invalid_record_payload_contains_keyword() {
         let err = DomainError::InvalidRecordPayload(InvalidRecordPayloadReason::CipherTextEmpty);
-        let msg = format!("{}", err);
-        assert!(msg.contains("invalid record payload"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid record payload"), "got: {msg}");
     }
 
     #[test]
@@ -247,7 +244,7 @@ mod tests {
             expected: 16,
             got: 15,
         });
-        let msg = format!("{}", err);
-        assert!(msg.contains("invalid vault header"), "got: {}", msg);
+        let msg = format!("{err}");
+        assert!(msg.contains("invalid vault header"), "got: {msg}");
     }
 }

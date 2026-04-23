@@ -17,7 +17,7 @@ use super::paths::VaultPaths;
 ///
 /// `Drop` 時にロックを解放する。
 pub(crate) struct VaultLock {
-    _file: std::fs::File,
+    file: std::fs::File,
 }
 
 impl VaultLock {
@@ -46,7 +46,7 @@ impl VaultLock {
                 holder_hint: None,
             })?;
 
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 
     /// 共有ロックを取得する。
@@ -77,7 +77,7 @@ impl VaultLock {
                 holder_hint: None,
             })?;
 
-        Ok(Self { _file: file })
+        Ok(Self { file })
     }
 }
 
@@ -86,6 +86,6 @@ impl Drop for VaultLock {
     #[allow(clippy::incompatible_msrv)]
     fn drop(&mut self) {
         // ロック解放失敗は無視する（プロセス終了時に OS が解放する）
-        self._file.unlock().ok();
+        self.file.unlock().ok();
     }
 }

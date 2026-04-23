@@ -15,9 +15,6 @@ impl SchemaSql {
     /// ASCII: "shkm" = 0x73_68_6B_6D = 1936223085
     pub(crate) const APPLICATION_ID: u32 = 0x73_68_6B_6D;
 
-    /// 初期スキーマバージョン（`user_version` PRAGMA）。
-    pub(crate) const USER_VERSION_INITIAL: u32 = 1;
-
     /// 読み込みに対応する最小 `user_version`。
     pub(crate) const USER_VERSION_SUPPORTED_MIN: u32 = 1;
 

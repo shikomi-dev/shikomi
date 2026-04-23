@@ -38,7 +38,7 @@ fs4             = { version = "0.9",  default-features = false, features = ["syn
 cfg-if          = "1"
 tracing         = "0.1"
 dirs            = "5"
-shikomi-core    = { path = "crates/shikomi-core" }
+shikomi-core    = { path = "crates/shikomi-core", version = "0.1.0" }
 tempfile        = "3"
 tracing-test    = "0.2"
 serial_test     = "3"
