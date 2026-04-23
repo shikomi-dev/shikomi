@@ -53,7 +53,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I04 |
-| 対応する受入基準ID | AC-03 |
+| 対応する受入基準ID | AC-04 |
 | 対応する工程 | 詳細設計（REQ-P11、load アルゴリズム step 10） |
 | 種別 | 異常系 |
 | 前提条件 | tempdir 配下に `protection_mode='encrypted'` を持つ vault.db を `rusqlite` で直接作成済み（スキーマは本 Issue の DDL に準拠、暗号化カラムに適当な BLOB を挿入） |
@@ -67,7 +67,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I05 |
-| 対応する受入基準ID | AC-04 |
+| 対応する受入基準ID | AC-05 |
 | 対応する工程 | 詳細設計（REQ-P05、load アルゴリズム step 2） |
 | 種別 | 異常系 |
 | 前提条件 | tempdir に `vault.db` が存在し、かつ `vault.db.new` を `std::fs::write` で空ファイルとして作成済み |
@@ -83,7 +83,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I06 |
-| 対応する受入基準ID | AC-05, AC-06 |
+| 対応する受入基準ID | AC-06 |
 | 対応する工程 | 詳細設計（REQ-P04、AtomicWriter アルゴリズム） |
 | 種別 | 異常系 |
 | 前提条件 | **実装担当への要求**: `AtomicWriter` に `#[cfg(test)]` 限定の `write_new_only(paths: &VaultPaths, vault: &Vault) -> Result<(), PersistenceError>` を追加すること。このフックは `write_new` を完了させた後に `fsync_and_rename` を呼ばずに返す（rename しない = クラッシュ後に `.new` が残った状態を論理的に再現する）。tempdir に既存の `vault.db`（初期平文 vault）を save 済み。初期 vault のレコード数を記録済み |
@@ -97,7 +97,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I07 |
-| 対応する受入基準ID | AC-17 |
+| 対応する受入基準ID | AC-07 |
 | 対応する工程 | 詳細設計（REQ-P06、load アルゴリズム step 1） |
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(unix)]` ガード付き。tempdir を `chmod 0o777` で変更済み（`std::os::unix::fs::PermissionsExt::set_mode` を使用） |
@@ -111,7 +111,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I08 |
-| 対応する受入基準ID | AC-07 |
+| 対応する受入基準ID | AC-08 |
 | 対応する工程 | 詳細設計（REQ-P09, P12、Mapping::record_to_params） |
 | 種別 | 境界値 |
 | 前提条件 | 以下の文字列が `RecordLabel::try_new` で受理されること（`shikomi-core` の制約内）: 絵文字（🗝️🔒💀）、CJK 文字（漢字・ひらがな）、アラビア文字、制御文字を除く全 Unicode コードポイント |
@@ -125,7 +125,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I09 |
-| 対応する受入基準ID | AC-08 |
+| 対応する受入基準ID | AC-09 |
 | 対応する工程 | 詳細設計（REQ-P12、SchemaSql 設計判断） |
 | 種別 | 正常系 |
 | 前提条件 | `crates/shikomi-infra/src/` 配下にソースが存在する |
@@ -139,7 +139,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I10 |
-| 対応する受入基準ID | AC-09 |
+| 対応する受入基準ID | AC-10 |
 | 対応する工程 | — |
 | 種別 | 正常系 |
 | 前提条件 | `cargo-llvm-cov` インストール済み |
@@ -153,7 +153,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I11 |
-| 対応する受入基準ID | AC-10 |
+| 対応する受入基準ID | AC-11 |
 | 対応する工程 | — |
 | 種別 | 正常系 |
 | 前提条件 | `deny.toml` がリポジトリルートに存在する |
@@ -167,7 +167,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I12 |
-| 対応する受入基準ID | AC-11 |
+| 対応する受入基準ID | AC-12 |
 | 対応する工程 | 詳細設計（REQ-P06、AtomicWriter::write_new step 4） |
 | 種別 | 正常系 |
 | 前提条件 | `#[cfg(unix)]` ガード付き。tempdir を使用 |
@@ -181,7 +181,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I13 |
-| 対応する受入基準ID | AC-12 |
+| 対応する受入基準ID | AC-13 |
 | 対応する工程 | 詳細設計（REQ-P09, P10） |
 | 種別 | 異常系 |
 | 前提条件 | tempdir に 0 バイトの `vault.db` を配置済み（`std::fs::write(path, b"")`） |
@@ -195,7 +195,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I14 |
-| 対応する受入基準ID | AC-12 |
+| 対応する受入基準ID | AC-13 |
 | 対応する工程 | 詳細設計（REQ-P09, P10） |
 | 種別 | 異常系 |
 | 前提条件 | tempdir に非 SQLite バイト列（`b"this is not a sqlite file\x00\xFF"`）の `vault.db` を配置済み |
@@ -293,7 +293,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I21 |
-| 対応する受入基準ID | AC-16 |
+| 対応する受入基準ID | AC-17 |
 | 対応する工程 | 詳細設計（REQ-P13、VaultLock::acquire_exclusive、save アルゴリズム step 3） |
 | 種別 | 異常系 |
 | 前提条件 | tempdir に vault.db が存在する。`std::process::Command` で子プロセスを起動し、子プロセスが `VaultLock::acquire_exclusive` でロックを保持したまま `std::io::stdin().read` でブロックする状態を作れること。親プロセスと子プロセスが同一 tempdir を共有する |
@@ -307,7 +307,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I22 |
-| 対応する受入基準ID | AC-15 |
+| 対応する受入基準ID | AC-16 |
 | 対応する工程 | 詳細設計（REQ-P15、VaultPaths::new バリデーション、VaultDirReason） |
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(unix)]` ガード付き。`serial_test` クレートで `std::env::set_var` の競合を防ぐ |
@@ -321,7 +321,7 @@
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I23 |
-| 対応する受入基準ID | AC-13 |
+| 対応する受入基準ID | AC-15 |
 | 対応する工程 | 詳細設計（REQ-P14、audit.rs 監査ログ規約） |
 | 種別 | 正常系 |
 | 前提条件 | `Cargo.toml` の `[dev-dependencies]` に `tracing-test = "0.2"` を追加済み。平文モードの `Vault`（レコード `plaintext_value` に秘密文字列 `"TOP_SECRET_VALUE"` を設定）を tempdir に save 済み |
