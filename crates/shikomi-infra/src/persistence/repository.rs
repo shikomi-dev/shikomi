@@ -7,17 +7,13 @@ use rusqlite::{Connection, OpenFlags};
 use shikomi_core::{ProtectionMode, Record, Vault};
 
 use super::{
-    TRACKING_ISSUE_ENCRYPTED_VAULT, VaultRepository,
     audit::Audit,
     error::{CorruptedReason, PersistenceError},
     lock::VaultLock,
     paths::VaultPaths,
     permission::PermissionGuard,
-    sqlite::{
-        atomic::AtomicWriter,
-        mapping::Mapping,
-        schema::SchemaSql,
-    },
+    sqlite::{atomic::AtomicWriter, mapping::Mapping, schema::SchemaSql},
+    VaultRepository, TRACKING_ISSUE_ENCRYPTED_VAULT,
 };
 
 // -------------------------------------------------------------------
@@ -220,21 +216,25 @@ impl SqliteVaultRepository {
         let record_count = records.len();
         for record in records {
             let row_key = record.id().to_string();
-            vault.add_record(record).map_err(|e| PersistenceError::Corrupted {
-                table: "records",
-                row_key: Some(row_key),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: e.to_string(),
-                },
-                source: Some(e),
-            })?;
+            vault
+                .add_record(record)
+                .map_err(|e| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(row_key),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: e.to_string(),
+                    },
+                    source: Some(e),
+                })?;
         }
 
         Ok((vault, record_count))
     }
 
     /// vault_header テーブルから1行を読み込む。
-    fn select_vault_header(conn: &Connection) -> Result<shikomi_core::VaultHeader, PersistenceError> {
+    fn select_vault_header(
+        conn: &Connection,
+    ) -> Result<shikomi_core::VaultHeader, PersistenceError> {
         let mut stmt = conn
             .prepare(SchemaSql::SELECT_VAULT_HEADER)
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
@@ -282,11 +282,11 @@ impl SqliteVaultRepository {
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
         let mut records = Vec::new();
-        loop {
-            match rows.next().map_err(|e| PersistenceError::Sqlite { source: e })? {
-                Some(row) => records.push(Mapping::row_to_record(row)?),
-                None => break,
-            }
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| PersistenceError::Sqlite { source: e })?
+        {
+            records.push(Mapping::row_to_record(row)?);
         }
         Ok(records)
     }

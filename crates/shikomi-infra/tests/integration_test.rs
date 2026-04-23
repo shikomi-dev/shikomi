@@ -4,6 +4,7 @@
 //! 対応 Issue: #10
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use shikomi_core::{
     KdfSalt, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString, Vault,
@@ -20,9 +21,23 @@ use uuid::Uuid;
 // ヘルパー
 // ---------------------------------------------------------------------------
 
-/// tempdir を使った `SqliteVaultRepository` を構築する（検証スキップ）。
+/// 環境変数 `SHIKOMI_VAULT_DIR` へのアクセスをプロセス全体で直列化するミューテックス。
+///
+/// `with_dir` は `pub(crate)` のため外部テストからアクセス不可。
+/// `ENV_MUTEX` を介してプロセス内での環境変数アクセスを直列化し、
+/// `SHIKOMI_VAULT_DIR` を設定した後に `new()` を呼ぶことで同等の動作を実現する。
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+/// tempdir を使った `SqliteVaultRepository` を構築する。
+///
+/// `SHIKOMI_VAULT_DIR` 環境変数経由で `SqliteVaultRepository::new()` を呼び出す。
+/// `ENV_MUTEX` でプロセス内アクセスを直列化し、並列テストでの env 競合を防ぐ。
 fn make_repo(dir: &Path) -> SqliteVaultRepository {
-    SqliteVaultRepository::with_dir(dir.to_path_buf())
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var("SHIKOMI_VAULT_DIR", dir);
+    let repo = SqliteVaultRepository::new().unwrap();
+    std::env::remove_var("SHIKOMI_VAULT_DIR");
+    repo
 }
 
 /// 平文モードの `VaultHeader` を作る。
@@ -98,14 +113,31 @@ fn tc_i02_plaintext_vault_round_trip() {
         loaded.header().version().value()
     );
 
-    // レコード件数・内容確認
-    assert_eq!(vault.records().len(), loaded.records().len());
-    for (orig, loaded_rec) in vault.records().iter().zip(loaded.records().iter()) {
-        assert_eq!(orig.id(), loaded_rec.id(), "RecordId が一致しない");
+    // レコード件数確認
+    assert_eq!(
+        vault.records().len(),
+        loaded.records().len(),
+        "レコード件数が一致しない"
+    );
+
+    // レコード内容確認（ID をキーに照合。DB の返却順は created_at ASC, id ASC のため
+    // 同一ミリ秒に複数レコードを作成すると挿入順と一致しない場合があり、
+    // zip 比較ではなく HashMap で順序非依存に照合する）。
+    let loaded_by_id: std::collections::HashMap<String, &Record> = loaded
+        .records()
+        .iter()
+        .map(|r| (r.id().to_string(), r))
+        .collect();
+
+    for orig in vault.records().iter() {
+        let id_str = orig.id().to_string();
+        let loaded_rec = loaded_by_id
+            .get(&id_str)
+            .unwrap_or_else(|| panic!("RecordId {id_str} が load 結果に見つからない"));
         assert_eq!(
             orig.label().as_str(),
             loaded_rec.label().as_str(),
-            "label が一致しない"
+            "label が一致しない (id={id_str})"
         );
         // payload は SecretString の Eq 未実装のためフォーマット比較
         if let (RecordPayload::Plaintext(a), RecordPayload::Plaintext(b)) =
@@ -114,10 +146,10 @@ fn tc_i02_plaintext_vault_round_trip() {
             assert_eq!(
                 a.expose_secret(),
                 b.expose_secret(),
-                "plaintext_value が一致しない"
+                "plaintext_value が一致しない (id={id_str})"
             );
         } else {
-            panic!("平文モードなのに暗号化ペイロードが返った");
+            panic!("平文モードなのに暗号化ペイロードが返った (id={id_str})");
         }
     }
 }
@@ -601,22 +633,22 @@ fn tc_i17_exists_returns_true_after_save() {
 
 /// TC-I18 — SHIKOMI_VAULT_DIR で指定したディレクトリに vault.db が作成される。
 ///
-/// `serial_test` で直列化（std::env::set_var がグローバル状態を変更するため）。
+/// `ENV_MUTEX` で直列化（std::env::set_var がグローバル状態を変更するため）。
 #[test]
-#[serial_test::serial]
 fn tc_i18_env_var_vault_dir_override() {
     let dir = TempDir::new().unwrap();
-    std::env::set_var("SHIKOMI_VAULT_DIR", dir.path().as_os_str());
-
-    let result = (|| -> Result<(), PersistenceError> {
-        let repo = SqliteVaultRepository::new()?;
-        let vault = make_plaintext_vault(1);
-        repo.save(&vault)?;
-        Ok(())
-    })();
-
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-
+    let result = {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SHIKOMI_VAULT_DIR", dir.path().as_os_str());
+        let r = (|| -> Result<(), PersistenceError> {
+            let repo = SqliteVaultRepository::new()?;
+            let vault = make_plaintext_vault(1);
+            repo.save(&vault)?;
+            Ok(())
+        })();
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+        r
+    };
     result.expect("SHIKOMI_VAULT_DIR 指定での save が失敗した");
     assert!(
         dir.path().join("vault.db").exists(),
@@ -761,12 +793,14 @@ fn tc_i21_vault_lock_contention() {
 /// TC-I22-A — 相対パスを SHIKOMI_VAULT_DIR に設定すると NotAbsolute が返る。
 #[cfg(unix)]
 #[test]
-#[serial_test::serial]
 fn tc_i22a_env_var_relative_path() {
-    std::env::set_var("SHIKOMI_VAULT_DIR", "relative/path");
-    let result = SqliteVaultRepository::new();
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-
+    let result = {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SHIKOMI_VAULT_DIR", "relative/path");
+        let r = SqliteVaultRepository::new();
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+        r
+    };
     assert!(
         matches!(
             result,
@@ -783,12 +817,14 @@ fn tc_i22a_env_var_relative_path() {
 /// TC-I22-B — `..` を含むパスを SHIKOMI_VAULT_DIR に設定すると PathTraversal が返る。
 #[cfg(unix)]
 #[test]
-#[serial_test::serial]
 fn tc_i22b_env_var_path_traversal() {
-    std::env::set_var("SHIKOMI_VAULT_DIR", "/tmp/shikomi/../../etc");
-    let result = SqliteVaultRepository::new();
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-
+    let result = {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SHIKOMI_VAULT_DIR", "/tmp/shikomi/../../etc");
+        let r = SqliteVaultRepository::new();
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+        r
+    };
     assert!(
         matches!(
             result,
@@ -805,7 +841,6 @@ fn tc_i22b_env_var_path_traversal() {
 /// TC-I22-C — シンボリックリンクを SHIKOMI_VAULT_DIR に設定すると SymlinkNotAllowed が返る。
 #[cfg(unix)]
 #[test]
-#[serial_test::serial]
 fn tc_i22c_env_var_symlink_not_allowed() {
     let dir = TempDir::new().unwrap();
     let real_dir = dir.path().join("real");
@@ -813,10 +848,13 @@ fn tc_i22c_env_var_symlink_not_allowed() {
     let symlink_path = dir.path().join("link");
     std::os::unix::fs::symlink(&real_dir, &symlink_path).unwrap();
 
-    std::env::set_var("SHIKOMI_VAULT_DIR", symlink_path.as_os_str());
-    let result = SqliteVaultRepository::new();
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-
+    let result = {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SHIKOMI_VAULT_DIR", symlink_path.as_os_str());
+        let r = SqliteVaultRepository::new();
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+        r
+    };
     assert!(
         matches!(
             result,
@@ -833,12 +871,14 @@ fn tc_i22c_env_var_symlink_not_allowed() {
 /// TC-I22-D — `/etc/` 配下のパスを SHIKOMI_VAULT_DIR に設定すると ProtectedSystemArea が返る。
 #[cfg(unix)]
 #[test]
-#[serial_test::serial]
 fn tc_i22d_env_var_protected_system_area() {
-    std::env::set_var("SHIKOMI_VAULT_DIR", "/etc/shikomi_test_vault");
-    let result = SqliteVaultRepository::new();
-    std::env::remove_var("SHIKOMI_VAULT_DIR");
-
+    let result = {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("SHIKOMI_VAULT_DIR", "/etc/shikomi_test_vault");
+        let r = SqliteVaultRepository::new();
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+        r
+    };
     assert!(
         matches!(
             result,
