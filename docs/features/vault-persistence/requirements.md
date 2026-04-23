@@ -91,7 +91,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | 各 I/O / SQLite / パーミッション異常の発生箇所 |
-| 処理 | `thiserror::Error` で列挙型として実装。`I/O` / `Sqlite` / `Corrupted` / `InvalidPermission` / `OrphanNewFile` / `AtomicWriteFailed` / `SchemaMismatch` / `UnsupportedYet` / `CannotResolveVaultDir` / `DomainError`（復元時のドメイン整合性違反）を排他区別。全バリアントに `#[source]` で下位 error を保持 |
+| 処理 | `thiserror::Error` で列挙型として実装。**11 バリアント**を排他区別: `Io` / `Sqlite` / `Corrupted`（ドメイン整合性違反も本バリアントに統合、旧 `DomainError` は廃止） / `InvalidPermission` / `InvalidVaultDir`（`SHIKOMI_VAULT_DIR` バリデーション違反、REQ-P15） / `OrphanNewFile` / `AtomicWriteFailed` / `SchemaMismatch` / `UnsupportedYet` / `CannotResolveVaultDir` / `Locked`（プロセス間 advisory lock 競合、REQ-P13）。全バリアントに `#[source]` または診断フィールド（`path` / `stage` / `reason` 等）を保持 |
 | 出力 | `PersistenceError` 値 |
 | エラー時 | エラー型自体は Fail しない（エラーを表現する型） |
 
@@ -118,7 +118,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | `VaultPaths`（`vault.db.lock` ファイルを派生パスに持つ） |
-| 処理 | `VaultLock::acquire_exclusive(&paths)` を `save` 冒頭で、`VaultLock::acquire_shared(&paths)` を `load` 冒頭で呼ぶ。`fs2` crate の `try_lock_exclusive` / `try_lock_shared`（Unix: `flock(LOCK_EX/LOCK_SH, LOCK_NB)`、Windows: `LockFileEx(LOCKFILE_FAIL_IMMEDIATELY [+LOCKFILE_EXCLUSIVE_LOCK])`）。`Drop` 実装でロック解放（RAII）。非ブロッキング、失敗時は即時エラー |
+| 処理 | `VaultLock::acquire_exclusive(&paths)` を `save` 冒頭で、`VaultLock::acquire_shared(&paths)` を `load` 冒頭で呼ぶ。`fs4` crate（fs2 の積極メンテ中フォーク、本体 fs2 は 2018 以降停止のため A06 回避）の `try_lock_exclusive` / `try_lock_shared`（Unix: `flock(LOCK_EX/LOCK_SH, LOCK_NB)`、Windows: `LockFileEx(LOCKFILE_FAIL_IMMEDIATELY [+LOCKFILE_EXCLUSIVE_LOCK])`）。`Drop` 実装でロック解放（RAII）。非ブロッキング、失敗時は即時エラー |
 | 出力 | `Ok(VaultLock)`。呼出側のスコープで生存 |
 | エラー時 | `PersistenceError::Locked { path, holder_hint }`（`holder_hint` は Unix `F_GETLK` 由来の競合プロセス PID、取得不能時 `None`）。呼出側（CLI）はエラー表示して別プロセス終了をユーザに促す責務 |
 
@@ -163,7 +163,7 @@
 
 ## データモデル
 
-論理データモデル（SQLite 物理スキーマは basic-design.md §ER 図 / detailed-design.md §テーブル定義を参照）:
+論理データモデル（SQLite 物理スキーマは basic-design.md §ER 図 / detailed-design/data.md §SQLite スキーマ詳細を参照）:
 
 | エンティティ | 属性 | 型 | 制約 | 関連 |
 |-------------|------|---|------|------|
@@ -227,9 +227,9 @@
 | `tempfile` | 3.x（dev-deps） | — | 結合テストで tempdir |
 | `cfg-if` | 1.x | — | OS 別コード分岐の可読性向上 |
 | `windows` | 最新安定（Windows のみ） | `Win32_Security_Authorization`, `Win32_Foundation`, `Win32_Storage_FileSystem` | Windows ACL 設定・検証・`ReplaceFileW`・`LockFileEx` |
-| `fs2` | 0.4.x | — | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用 |
+| `fs4` | 0.12 以上 | `sync` | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用。**`fs2` ではなく `fs4` を採用**した根拠: `fs2` は 2018-01 以降メンテ停止（OWASP A06 Vulnerable Components 該当）。`fs4` は同 API 面で fork された後継で、2024 年以降も継続的に release されている（`cargo deny advisories` で検証） |
 | `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design.md` §セキュリティ設計 §監査ログ規約参照 |
-| `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-14） |
+| `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-13） |
 | `serial_test` | 3.x（dev-deps） | — | `std::env::set_var` を触るテストの直列化（test-design §実行環境） |
 
 全て `Cargo.toml` ルートの `[workspace.dependencies]` 経由で指定し、`crates/shikomi-infra/Cargo.toml` では `{ workspace = true }` で参照する（`docs/architecture/tech-stack.md` §4.1 / §4.4）。

@@ -94,22 +94,23 @@ Issue #7 マージ直後の工程1で以下を合意:
 
 | # | 基準 | 検証方法 |
 |---|------|---------|
-| 1 | 全機能 REQ-P01〜REQ-P12 の型とメソッドが `shikomi-infra` の公開 API に存在する | `cargo doc -p shikomi-infra --no-deps` 出力確認 |
+| 1 | 全機能 REQ-P01〜REQ-P15 の型とメソッドが `shikomi-infra` の公開 API に存在する（REQ-P13 `VaultLock` / P14 `audit.rs` は `pub(crate)` 内部モジュールのため `cargo doc` には現れないが、`shikomi-infra` 内部の symbol tree に存在することを `cargo expand` 相当で確認） | `cargo doc -p shikomi-infra --no-deps` 出力確認 + クレート内部 symbol 確認 |
 | 2 | 平文 vault の `save` → `load` で同一 `Vault` が復元される（レコード順含む） | round-trip ユニットテスト |
 | 3 | 暗号化モード vault を `save`/`load` すると `PersistenceError::UnsupportedYet` が返る | ユニットテスト |
 | 4 | `.new` ファイルを手動で残した状態で `load` を呼ぶと `PersistenceError::OrphanNewFile` が返る | 結合テスト（tempdir 利用） |
-| 5 | save 中に `std::process::abort()` 相当のクラッシュを再現 → 再起動後 vault.db 本体が破損しないこと | 結合テスト（`std::process::Command` で子プロセス起動、SIGKILL 送信後に親で検証） |
-| 6 | vault ディレクトリが `0777` で作られている状態で `load` すると `PersistenceError::InvalidPermission` が返る | Unix 結合テスト（`cfg(unix)`） |
+| 5 | save 中に `std::process::abort()` 相当のクラッシュを再現 → 再起動後 vault.db 本体が破損しないこと | 結合テスト（`std::process::Command` で子プロセス起動、SIGKILL 送信後に親で検証） — **AC-06 の決定的テストが優先、これは参考観点として残置** |
+| 6 | `AtomicWriter::write_new_only` テストフック（`#[cfg(test)]` 限定）で「`.new` 書込完了直後・rename 未実施」状態を決定的に再現 → 後続の `load()` が `OrphanNewFile` を返し、`vault.db` 本体が未変更である（AC-05 の SIGKILL 実験の論理等価・決定的版、test-design TC-I06 対応） | 結合テスト（tempdir + テストフック） |
 | 7 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | プロパティテスト |
 | 8 | 生 SQL 連結を使っていない（`rusqlite::Connection::execute` に `params!` マクロ経由でのみバインドしている） | 静的 grep 検査 + clippy の lint |
 | 9 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | CI（`cargo llvm-cov`） |
 | 10 | `cargo clippy --workspace -- -D warnings` / `cargo fmt --check` / `cargo deny check` pass | CI |
 | 11 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | Unix 結合テスト |
 | 12 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` が返り panic しない | 結合テスト |
-| 13 | `.new` ファイルが既に存在する状態で `save` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、勝手に上書き削除しない。REQ-P05 の save 経路側検証） | 結合テスト（test-design TC-I15 対応） |
-| 14 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `ciphertext` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない | `tracing-test` crate で log 収集 → 各秘密値の Debug/Display パターンを grep 検証 |
+| 13 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `ciphertext` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない | `tracing-test` crate で log 収集 → 各秘密値の Debug/Display パターンを grep 検証 |
+| 14 | `.new` ファイルが既に存在する状態で `save` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、勝手に上書き削除しない。REQ-P05 の save 経路側検証、test-design TC-I15 対応） | 結合テスト（tempdir 利用） |
 | 15 | `SHIKOMI_VAULT_DIR` に `/etc/`・`/proc/`・`..` を含むパス・シンボリックリンクを指定するといずれも `PersistenceError::InvalidVaultDir` で拒否される | Unix 結合テスト（`cfg(unix)`、`tempfile::symlink` で実リンク作成） |
 | 16 | daemon 未起動時の CLI 直接呼出シナリオで `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（advisory lock の競合検知） | 結合テスト（子プロセス 2 本並列 save） |
+| 17 | vault ディレクトリが `0777` で作られている状態で `load` すると `PersistenceError::InvalidPermission` が返る（REQ-P06 の load 側検証。AC-11 は save 直後の正常系検証、本 AC は既存ディレクトリの異常系） | Unix 結合テスト（`cfg(unix)`） |
 
 ## 扱うデータと機密レベル
 
