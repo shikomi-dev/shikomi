@@ -356,7 +356,7 @@
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(windows)]`。`repo.save(&vault)` 完了済み。vault.db に対し、テストコード内で `BUILTIN\Users` への `GENERIC_READ` Allow ACE を `SetNamedSecurityInfoW` で追加し DACL を壊す（ACE 数 = 2 かつ `PROTECTED_DACL_SECURITY_INFORMATION` なし） |
 | 操作 | `repo.load()` を呼ぶ |
-| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE)", .. })` が返る。`actual` フィールドに ACE 列挙の診断文字列（`trustee_sid: <SID>, access_mask: 0x<hex>, ace_type: <type>` 形式）が含まれる。秘密値を含まない |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE)", actual, .. })` が返る。`actual` フィールドに全 ACE の列挙文字列（`trustee_sid=<SID>, ace_type=..., access_mask=0x<hex>` の形式 2 行分）が含まれる——不変条件②（`ace_count`）違反時のラベル形式（`flows.md §OS 別パーミッション実装詳細 §Windows` 参照）。秘密値を含まない |
 
 ---
 
@@ -384,7 +384,7 @@
 | 種別 | 異常系 |
 | 前提条件 | `#[cfg(windows)]`。`repo.save(&vault)` 完了済み。vault ディレクトリに対し、`SetNamedSecurityInfoW` で `DACL_SECURITY_INFORMATION`（`PROTECTED_DACL_SECURITY_INFORMATION` を除く）で書き換えることで `SE_DACL_PROTECTED` bit を意図的に落とす |
 | 操作 | `repo.load()` を呼ぶ |
-| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE\|FILE_TRAVERSE)", .. })` が返る（vault ディレクトリが verify_dir の不変条件①で失敗）。`vault.db` は変更されていない |
+| 期待結果 | `Err(PersistenceError::InvalidPermission { path, expected: "owner-only DACL (FILE_GENERIC_READ\|FILE_GENERIC_WRITE\|FILE_TRAVERSE)", actual, .. })` が返る。`actual` フィールドが `"inherited DACL (SE_DACL_PROTECTED not set)"` と等しい——不変条件①（`inherited`）違反時の確定ラベル（`flows.md §OS 別パーミッション実装詳細 §Windows` 参照）。`vault.db` は変更されていない |
 
 ---
 
