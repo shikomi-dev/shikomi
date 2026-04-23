@@ -347,8 +347,7 @@ fn tc_u10_roundtrip_record_updated_at_differs_from_created_at() {
     let vault = Vault::new(header.clone());
 
     // µs 非ゼロ: 1_234_567_890_123_456_000 ns → sub-second ns = 123_456_000 → µs = 123_456
-    let created_at =
-        OffsetDateTime::from_unix_timestamp_nanos(1_234_567_890_123_456_000).unwrap();
+    let created_at = OffsetDateTime::from_unix_timestamp_nanos(1_234_567_890_123_456_000).unwrap();
     // updated_at = created_at + 1 秒（created_at と明確に異なる値）
     let updated_at = created_at + time::Duration::seconds(1);
 
