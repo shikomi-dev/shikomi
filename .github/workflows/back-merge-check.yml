@@ -8,6 +8,8 @@ on:
   # 日次 cron で見落とし検知
   schedule:
     - cron: '0 9 * * *'  # UTC 09:00 = JST 18:00
+  # 手動実行（動作確認・緊急チェック用）
+  workflow_dispatch:
 
 jobs:
   check:
@@ -31,8 +33,16 @@ jobs:
 
           echo "Merged release/hotfix branches to main: $(echo "$MERGED_BRANCHES" | jq length)"
 
-          # ラベルが存在しない場合は作成（既存の場合はエラー無視）
-          gh api "repos/$REPO/labels" --method POST --field name="back-merge-missing" --field color="e11d48" 2>/dev/null || true
+          # ラベルが存在しない場合は作成（422=既存は無視、それ以外は致命的エラー）
+          if ! LABEL_ERR=$(gh api "repos/$REPO/labels" --method POST \
+              --field name="back-merge-missing" --field color="e11d48" 2>&1); then
+            if echo "$LABEL_ERR" | grep -q "HTTP 422"; then
+              echo "Label 'back-merge-missing' already exists, skipping."
+            else
+              echo "::error::Failed to create label: $LABEL_ERR"
+              exit 1
+            fi
+          fi
 
           MISSING=0
 
