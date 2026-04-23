@@ -3,6 +3,10 @@ name: Test Infra
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test-infra:
