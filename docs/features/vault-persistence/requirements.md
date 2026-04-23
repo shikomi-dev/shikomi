@@ -74,7 +74,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | なし（環境変数・OS デフォルト）／テスト用に明示パス |
-| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け、**`VaultPaths::new` でパストラバーサル・シンボリックリンク検証を必ず通す**、basic-design.md §セキュリティ設計参照）。内部・テスト専用の構築口として `#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` を提供し、tempdir を直接受け取れる（正規 API は `new()`） |
+| 処理 | デフォルト: `dirs::data_dir()` の戻り値に `shikomi/` を付加。環境変数 `SHIKOMI_VAULT_DIR` が設定されていれば優先（CI / 明示指定向け、**`VaultPaths::new` でパストラバーサル・シンボリックリンク検証を必ず通す**、`basic-design/security.md` §vault ディレクトリ検証）。内部・テスト専用の構築口として `#[doc(hidden)] SqliteVaultRepository::with_dir(PathBuf)` を提供し、tempdir を直接受け取れる（正規 API は `new()`） |
 | 出力 | `PathBuf`（vault ディレクトリ） |
 | エラー時 | `dirs` が解決失敗（例: HOME 未設定の極端環境）→ `PersistenceError::CannotResolveVaultDir` |
 
@@ -137,7 +137,7 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | `PathBuf`（環境変数または `dirs::data_dir()` の戻り値） |
-| 処理 | `VaultPaths::new(dir)` 内で 7 段階検証（`basic-design.md` §vault ディレクトリ検証）: ①絶対パス必須、②`..` 要素早期拒否、③シンボリックリンク全面禁止、④`canonicalize`、⑤保護領域 prefix 拒否、⑥ディレクトリ判定、⑦パス派生（`vault.db` / `vault.db.new` / `vault.db.lock`） |
+| 処理 | `VaultPaths::new(dir)` 内で 7 段階検証（`basic-design/security.md` §vault ディレクトリ検証）: ①絶対パス必須、②`..` 要素早期拒否、③シンボリックリンク全面禁止、④`canonicalize`、⑤保護領域 prefix 拒否、⑥ディレクトリ判定、⑦パス派生（`vault.db` / `vault.db.new` / `vault.db.lock`） |
 | 出力 | `Ok(VaultPaths)` |
 | エラー時 | `PersistenceError::InvalidVaultDir { path, reason: VaultDirReason }`。`VaultDirReason` の各バリアントで拒否理由を区別 |
 
@@ -164,7 +164,7 @@
 
 ## データモデル
 
-論理データモデル（SQLite 物理スキーマは basic-design.md §ER 図 / detailed-design/data.md §SQLite スキーマ詳細を参照）:
+論理データモデル（SQLite 物理スキーマは `basic-design/index.md` §ER 図 / `detailed-design/data.md` §SQLite スキーマ詳細を参照）:
 
 | エンティティ | 属性 | 型 | 制約 | 関連 |
 |-------------|------|---|------|------|
@@ -229,7 +229,7 @@
 | `cfg-if` | 1.x | — | OS 別コード分岐の可読性向上 |
 | `windows` | 0.58 以上（Windows のみ、major ピン） | `Win32_Security_Authorization`（`SetNamedSecurityInfoW` / `GetNamedSecurityInfoW` / `EXPLICIT_ACCESS_W` / `SetEntriesInAclW` / `TRUSTEE_W`）／ `Win32_Security`（`EqualSid` / `GetAclInformation` / `GetAce` / `GetSecurityDescriptorDacl` / `OpenProcessToken` / `GetTokenInformation` / `ConvertSidToStringSidW`）／ `Win32_Foundation`（`HLOCAL` / `LocalFree` / `HANDLE` / `CloseHandle`）／ `Win32_Storage_FileSystem`（`FILE_GENERIC_READ` / `FILE_GENERIC_WRITE` / `FILE_TRAVERSE` / `ReplaceFileW`）／ `Win32_System_Threading`（`GetCurrentProcess`） | Windows ACL 設定・検証（REQ-P07）・`ReplaceFileW`（REQ-P04）。Microsoft 公式 crate のため `[advisories].ignore` 登録禁止リスト（`tech-stack.md` §4.3.2）の対象外だが、major ピンで API 破壊を受ける版上げはレビュー必須。導入は `[target.'cfg(windows)'.dependencies]` で `shikomi-infra` に限定し、Linux / macOS ビルドに混入させない |
 | `fs4` | 0.12 以上 | `sync` | プロセス間 advisory lock（Unix `flock` / Windows `LockFileEx` 抽象）。`VaultLock` 型で利用。**`fs2` ではなく `fs4` を採用**した根拠: `fs2` は 2018-01 以降メンテ停止（OWASP A06 Vulnerable Components 該当）。`fs4` は同 API 面で fork された後継で、2024 年以降も継続的に release されている（`cargo deny advisories` で検証） |
-| `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design.md` §セキュリティ設計 §監査ログ規約参照 |
+| `tracing` | 0.1.x | — | 監査ログ（`save`/`load`/`exists`/error 各レベル）。`basic-design/security.md` §監査ログ規約参照 |
 | `tracing-test` | 0.2.x（dev-deps） | — | 監査ログに秘密値が漏れていないかの検証（AC-15） |
 | `serial_test` | 3.x（dev-deps） | — | `std::env::set_var` を触るテストの直列化（test-design §実行環境） |
 

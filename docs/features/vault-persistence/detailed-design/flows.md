@@ -113,7 +113,7 @@
 
 1. `self.paths.vault_db().try_exists().map_err(|e| PersistenceError::Io { path: self.paths.vault_db().to_path_buf(), source: e })`
 
-（`exists` は軽量クエリのため `audit::entry_*` / `exit_*` は呼ばず、`tracing::debug!` で「呼出と結果」を直接記録する例外扱いとする — `basic-design.md` §監査ログ規約）
+（`exists` は軽量クエリのため `audit::entry_*` / `exit_*` は呼ばず、`tracing::debug!` で「呼出と結果」を直接記録する例外扱いとする — `../basic-design/security.md` §監査ログ規約）
 
 ### `AtomicWriter::write_new_only`（テスト専用フック、AC-06 対応）
 
@@ -134,7 +134,7 @@
 
 ### Windows（`cfg(windows)`、REQ-P07 本実装）
 
-> **参照**: 設計根拠は `basic-design.md` §Windows owner-only DACL の適用戦略、クラス分解は `classes.md` §設計判断 §13 を参照。本節は制御フローのみを扱う。一次情報出典: Microsoft Learn "SetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow / "GetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow / "File Access Rights Constants" https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants / windows-rs docs https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Security/Authorization/index.html
+> **参照**: 設計根拠は `../basic-design/security.md` §Windows owner-only DACL の適用戦略、`unsafe_code` lint 例外方針は同 §`unsafe_code` 整合方針、クラス分解は `classes.md` §設計判断 §13 を参照。本節は制御フローのみを扱う。一次情報出典: Microsoft Learn "SetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow / "GetNamedSecurityInfoW" https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow / "File Access Rights Constants" https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants / windows-rs docs https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/Security/Authorization/index.html
 
 #### `ensure_dir(path: &Path)` / `ensure_file(path: &Path)` 制御フロー
 
@@ -148,7 +148,7 @@
    - `path_hstring = HSTRING::from(path.as_os_str())` を let-binding で束縛（一時式で drop 禁止）
    - `SetNamedSecurityInfoW(PCWSTR(path_hstring.as_ptr()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, None, None, Some(acl_guard.as_ptr()), None)` 呼出
    - 戻り値 `WIN32_ERROR == ERROR_SUCCESS (0)` 以外なら `Io { path, source: std::io::Error::from_raw_os_error(err as i32) }` で return（`SetNamedSecurityInfoW` は `WIN32_ERROR` を直接返す）
-5. **所有者 SID は touch しない** — `SetNamedSecurityInfoW` の `psidOwner` / `psidGroup` 引数は `None`、`SecurityInfo` からも `OWNER_SECURITY_INFORMATION` / `GROUP_SECURITY_INFORMATION` を落とす。これによりファイル作成時の OS デフォルト所有者（UAC 環境では `BUILTIN\Administrators`）を保持したまま DACL のみ書き換える（§`basic-design.md` §所有者 SID の取得ポリシー）
+5. **所有者 SID は touch しない** — `SetNamedSecurityInfoW` の `psidOwner` / `psidGroup` 引数は `None`、`SecurityInfo` からも `OWNER_SECURITY_INFORMATION` / `GROUP_SECURITY_INFORMATION` を落とす。これによりファイル作成時の OS デフォルト所有者（UAC 環境では `BUILTIN\Administrators`）を保持したまま DACL のみ書き換える（`../basic-design/security.md` §Windows owner-only DACL の適用戦略 §所有者 SID の取得）
 6. `acl_guard` / `sd_guard` が関数終了で drop し、`LocalFree` 経由で Win32 ヒープへ返却される
 7. `Ok(())`
 

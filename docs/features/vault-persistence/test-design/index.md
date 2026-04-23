@@ -7,7 +7,7 @@
 | 対象 feature | vault-persistence（`shikomi-infra` への `VaultRepository` trait + SQLite 実装 + atomic write） |
 | 対象 Issue | [#10](https://github.com/shikomi-dev/shikomi/issues/10) |
 | 対象ブランチ | `feat/issue-10-vault-persistence` |
-| 設計根拠 | `docs/features/vault-persistence/requirements-analysis.md`（REQ-P01〜P12・受入基準）、`docs/features/vault-persistence/basic-design.md`（モジュール構成）、`docs/features/vault-persistence/detailed-design.md`（エラー型・SQL・atomic write アルゴリズム） |
+| 設計根拠 | `docs/features/vault-persistence/requirements-analysis.md`（REQ-P01〜P12・受入基準）、`docs/features/vault-persistence/basic-design/`（`index.md` モジュール構成 / `security.md` 脅威モデル・監査ログ・Windows DACL / `error.md` エラー方針）、`docs/features/vault-persistence/detailed-design/`（エラー型・SQL・atomic write アルゴリズム・Windows 内部構造） |
 | テスト実行タイミング | `feat/issue-10-vault-persistence` → `develop` へのマージ前 |
 
 ### ファイル構成

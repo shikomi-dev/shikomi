@@ -56,7 +56,7 @@
 
 ## 関連設計書
 
-- 基本設計書: [`../basic-design.md`](../basic-design.md)
+- 基本設計書: [`../basic-design/`](../basic-design/)（`index.md` / `security.md` / `error.md` の 3 分冊）
 - 要件定義書: [`../requirements.md`](../requirements.md)
 - 要求分析書: [`../requirements-analysis.md`](../requirements-analysis.md)
 - テスト設計書: [`../test-design/`](../test-design/)
