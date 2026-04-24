@@ -70,7 +70,13 @@ check-all: fmt-check clippy test audit audit-secrets audit-pin-sync
 # commit-msg 用: Conventional Commits 1.0 準拠を convco で検証 (確定 E)
 # convco の commit-msg 統合は `check --from-stdin --strip`。
 # --strip で `#` コメント行を除去してから検証（git commit 時の COMMIT_EDITMSG 互換）。
+#
+# shebang レシピで bash 強制 (commit-msg-no-ai-footer と同じ方式)。
+# `windows-shell := pwsh` 環境では `<` が PowerShell の ParserError になるため、
+# bash に閉じる必要がある (確定 D: Git for Windows の bash.exe が前提)。
 commit-msg-check FILE:
+    #!/usr/bin/env bash
+    set -euo pipefail
     convco check --from-stdin --strip < {{FILE}}
 
 # commit-msg 用: AI 生成フッター検出 (REQ-DW-018)
