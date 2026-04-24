@@ -50,7 +50,10 @@ fn tc_it_002_list_records_mixed_kinds_returns_three_views_with_correct_masking()
     let mut vault = Vault::new(header);
 
     // Text x 2
-    for (label, value) in [("url-1", "https://example.com/a"), ("url-2", "https://example.com/b")] {
+    for (label, value) in [
+        ("url-1", "https://example.com/a"),
+        ("url-2", "https://example.com/b"),
+    ] {
         let record = Record::new(
             RecordId::new(Uuid::now_v7()).unwrap(),
             RecordKind::Text,
@@ -65,9 +68,7 @@ fn tc_it_002_list_records_mixed_kinds_returns_three_views_with_correct_masking()
         RecordId::new(Uuid::now_v7()).unwrap(),
         RecordKind::Secret,
         RecordLabel::try_new("pw".to_owned()).unwrap(),
-        RecordPayload::Plaintext(SecretString::from_string(
-            "SECRET_TEST_VALUE".to_owned(),
-        )),
+        RecordPayload::Plaintext(SecretString::from_string("SECRET_TEST_VALUE".to_owned())),
         now,
     );
     vault.add_record(record).unwrap();

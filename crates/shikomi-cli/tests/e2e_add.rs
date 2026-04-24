@@ -47,17 +47,17 @@ fn tc_e2e_010_add_text_roundtrips_through_list() {
         .expect("added line");
     let uuid = uuid_line.trim_start_matches("added: ").trim();
     // UUIDv7 全長 36
-    assert_eq!(uuid.chars().count(), 36, "uuid should be 36 chars, got {uuid}");
+    assert_eq!(
+        uuid.chars().count(),
+        36,
+        "uuid should be 36 chars, got {uuid}"
+    );
 
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains(uuid)
-                .and(predicate::str::contains("L"))
-                .and(predicate::str::contains("V")),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains(uuid)
+            .and(predicate::str::contains("L"))
+            .and(predicate::str::contains("V")),
+    );
 }
 
 // -------------------------------------------------------------------
@@ -74,17 +74,18 @@ fn tc_e2e_011_add_secret_stdin_never_echoes_secret_marker() {
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
-    assert!(!stdout.contains("SECRET_TEST_VALUE"), "stdout leaked secret: {stdout}");
-    assert!(!stderr.contains("SECRET_TEST_VALUE"), "stderr leaked secret: {stderr}");
+    assert!(
+        !stdout.contains("SECRET_TEST_VALUE"),
+        "stdout leaked secret: {stdout}"
+    );
+    assert!(
+        !stderr.contains("SECRET_TEST_VALUE"),
+        "stderr leaked secret: {stderr}"
+    );
 
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("****")
-                .and(predicate::str::contains("SECRET_TEST_VALUE").not()),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains("****").and(predicate::str::contains("SECRET_TEST_VALUE").not()),
+    );
 }
 
 // -------------------------------------------------------------------
@@ -106,7 +107,8 @@ fn tc_e2e_012_add_secret_value_warns_on_stderr_and_exits_zero() {
         "stderr should contain shell-history warning: {stderr}"
     );
     // warning 内に secret 値原文が出ないこと
-    assert!(!stderr.contains(" P ") && !stderr.ends_with("P\n") && !stderr.contains("value: P"),
+    assert!(
+        !stderr.contains(" P ") && !stderr.ends_with("P\n") && !stderr.contains("value: P"),
         "warning text unexpectedly contained secret value: {stderr}"
     );
 }

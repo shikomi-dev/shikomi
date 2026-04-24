@@ -49,7 +49,13 @@ fn tc_e2e_100_scn_a_fullstack_engineer_record_lifecycle() {
     // (1) add text
     let out1 = shikomi(dir.path())
         .args([
-            "add", "--kind", "text", "--label", "SSH: prod", "--value", "ssh -J bastion prod",
+            "add",
+            "--kind",
+            "text",
+            "--label",
+            "SSH: prod",
+            "--value",
+            "ssh -J bastion prod",
         ])
         .assert()
         .success();
@@ -66,16 +72,12 @@ fn tc_e2e_100_scn_a_fullstack_engineer_record_lifecycle() {
     assert!(!String::from_utf8_lossy(&out2.get_output().stderr).contains("SECRET_TEST_VALUE"));
 
     // (3) list で 2 件確認、Secret マスク、SECRET_TEST_VALUE 不在
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains(&text_uuid)
-                .and(predicate::str::contains(&secret_uuid))
-                .and(predicate::str::contains("****"))
-                .and(predicate::str::contains("SECRET_TEST_VALUE").not()),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains(&text_uuid)
+            .and(predicate::str::contains(&secret_uuid))
+            .and(predicate::str::contains("****"))
+            .and(predicate::str::contains("SECRET_TEST_VALUE").not()),
+    );
 
     // (4) edit label 更新
     shikomi(dir.path())
@@ -97,15 +99,11 @@ fn tc_e2e_100_scn_a_fullstack_engineer_record_lifecycle() {
         .success();
 
     // (7) list で 1 件残存、SECRET_TEST_VALUE 不在
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains(&text_uuid)
-                .and(predicate::str::contains(&secret_uuid).not())
-                .and(predicate::str::contains("SECRET_TEST_VALUE").not()),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains(&text_uuid)
+            .and(predicate::str::contains(&secret_uuid).not())
+            .and(predicate::str::contains("SECRET_TEST_VALUE").not()),
+    );
 }
 
 // -------------------------------------------------------------------
@@ -117,7 +115,15 @@ fn tc_e2e_101_scn_b_non_interactive_removal_is_refused_with_japanese_hint() {
     let dir = fresh_dir();
     // セットアップ: add 1 件
     let out = shikomi(dir.path())
-        .args(["add", "--kind", "text", "--label", "TAN", "--value", "田中のメモ"])
+        .args([
+            "add",
+            "--kind",
+            "text",
+            "--label",
+            "TAN",
+            "--value",
+            "田中のメモ",
+        ])
         .assert()
         .success();
     let uuid = extract_added_uuid(&String::from_utf8_lossy(&out.get_output().stdout));
@@ -176,7 +182,10 @@ fn tc_e2e_102_scn_c_help_and_version_messages_are_well_formed() {
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
     for sub in ["list", "add", "edit", "remove"] {
-        assert!(stdout.contains(sub), "--help missing subcommand '{sub}': {stdout}");
+        assert!(
+            stdout.contains(sub),
+            "--help missing subcommand '{sub}': {stdout}"
+        );
     }
 
     // (b) --version
@@ -204,7 +213,10 @@ fn tc_e2e_102_scn_c_help_and_version_messages_are_well_formed() {
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
     for flag in ["--kind", "--label", "--value", "--stdin"] {
-        assert!(stdout.contains(flag), "add --help missing flag '{flag}': {stdout}");
+        assert!(
+            stdout.contains(flag),
+            "add --help missing flag '{flag}': {stdout}"
+        );
     }
 
     // (d) edit --help → --kind は含まない（Phase 1 スコープ外）

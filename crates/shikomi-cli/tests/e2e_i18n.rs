@@ -57,7 +57,10 @@ fn tc_e2e_070_japanese_locale_produces_english_and_japanese_lines() {
 #[test]
 fn tc_e2e_071_c_locale_produces_english_only() {
     let dir = empty_vault_dir();
-    let out = shikomi_with_lang(dir.path(), "C").arg("list").assert().code(1);
+    let out = shikomi_with_lang(dir.path(), "C")
+        .arg("list")
+        .assert()
+        .code(1);
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
     assert!(
         stderr.contains("vault not initialized"),

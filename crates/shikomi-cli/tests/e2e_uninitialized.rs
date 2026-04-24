@@ -55,16 +55,17 @@ fn tc_e2e_051_add_on_uninitialized_vault_auto_initializes() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
-    assert!(stdout.contains("initialized plaintext vault"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("initialized plaintext vault"),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("added: "), "stdout: {stdout}");
 
     shikomi(dir.path())
         .arg("list")
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("L").and(predicate::str::contains("V")),
-        );
+        .stdout(predicate::str::contains("L").and(predicate::str::contains("V")));
 }
 
 // -------------------------------------------------------------------

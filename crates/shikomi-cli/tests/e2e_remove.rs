@@ -69,7 +69,9 @@ fn tc_e2e_031_remove_non_tty_without_yes_refuses_and_exits_one() {
         .code(1);
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
     assert!(
-        stderr.contains("--yes") || stderr.contains("non-interactive") || stderr.contains("refusing"),
+        stderr.contains("--yes")
+            || stderr.contains("non-interactive")
+            || stderr.contains("refusing"),
         "stderr should mention --yes requirement: {stderr}"
     );
 

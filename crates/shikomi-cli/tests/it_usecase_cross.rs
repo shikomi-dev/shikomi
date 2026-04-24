@@ -9,7 +9,9 @@ mod common;
 
 use shikomi_cli::error::CliError;
 use shikomi_cli::input::{AddInput, ConfirmedRemoveInput, EditInput};
-use shikomi_cli::usecase::{add::add_record, edit::edit_record, list::list_records, remove::remove_record};
+use shikomi_cli::usecase::{
+    add::add_record, edit::edit_record, list::list_records, remove::remove_record,
+};
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
 use uuid::Uuid;
 

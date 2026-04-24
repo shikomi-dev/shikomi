@@ -144,8 +144,7 @@ fn tc_it_023_edit_record_on_encrypted_vault_returns_encryption_unsupported() {
         label: Some(RecordLabel::try_new("L".to_owned()).unwrap()),
         value: None,
     };
-    let err =
-        edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
+    let err = edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
     assert!(
         matches!(err, CliError::EncryptionUnsupported),
         "expected EncryptionUnsupported, got {err:?}"
@@ -164,8 +163,7 @@ fn tc_it_050a_edit_record_on_uninitialized_vault_returns_vault_not_initialized()
         label: Some(RecordLabel::try_new("L".to_owned()).unwrap()),
         value: None,
     };
-    let err =
-        edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
+    let err = edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
     assert!(
         matches!(err, CliError::VaultNotInitialized(_)),
         "expected VaultNotInitialized, got {err:?}"

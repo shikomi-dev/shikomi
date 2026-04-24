@@ -71,19 +71,15 @@ fn tc_e2e_002_list_single_text_record_renders_value_with_header() {
         .assert()
         .success();
 
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("text")
-                .and(predicate::str::contains("L1"))
-                .and(predicate::str::contains("V1"))
-                .and(predicate::str::contains("ID"))
-                .and(predicate::str::contains("KIND"))
-                .and(predicate::str::contains("LABEL"))
-                .and(predicate::str::contains("VALUE")),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains("text")
+            .and(predicate::str::contains("L1"))
+            .and(predicate::str::contains("V1"))
+            .and(predicate::str::contains("ID"))
+            .and(predicate::str::contains("KIND"))
+            .and(predicate::str::contains("LABEL"))
+            .and(predicate::str::contains("VALUE")),
+    );
 }
 
 // -------------------------------------------------------------------
@@ -96,7 +92,13 @@ fn tc_e2e_003_list_mixed_records_masks_secret_and_preserves_text() {
     // text: PUBLIC_VAL
     shikomi(dir.path())
         .args([
-            "add", "--kind", "text", "--label", "T1", "--value", "PUBLIC_VAL",
+            "add",
+            "--kind",
+            "text",
+            "--label",
+            "T1",
+            "--value",
+            "PUBLIC_VAL",
         ])
         .assert()
         .success();
