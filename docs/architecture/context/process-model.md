@@ -25,7 +25,9 @@ flowchart TB
 **設計ルール**:
 
 1. **単一 daemon が真実源**: ホットキー登録・vault 保持・セッションキーキャッシュ（暗号化モード時のみ）・クリップボード操作は全て `shikomi-daemon` の責務。`shikomi-cli` / `shikomi-gui` は**直接 vault を開かない**。IPC 経由でのみ daemon に依頼する
-2. **シングルインスタンス保証**: daemon は起動時に PID ファイル（OS 標準位置、`dirs` crate で解決）＋ advisory ロック（Win: `LockFileEx`、Unix: `flock`）で**多重起動を拒否**。既に動いていたら新プロセスは fail fast で終了
+2. **シングルインスタンス保証**: daemon は起動時に**IPC エンドポイントの先取り**（Unix: UDS `bind` の排他性 / Windows: Named Pipe `FILE_FLAG_FIRST_PIPE_INSTANCE` による排他作成）で**多重起動を拒否**。既に動いていたら新プロセスは fail fast で終了。
+   - **Issue #26 の実装範囲**: 本 Issue ではエンドポイント先取りのみで多重起動拒否を成立させる。UDS/Named Pipe の bind 失敗自体が「既に動いている」と同義で十分 Fail Fast（追加の PID ファイルは stale PID のエッジケース対応で、shikomi の単一ユーザ単一 daemon 前提では付加価値が限定的なため YAGNI）
+   - **後続で追加を検討**: 自動起動 feature（tauri-plugin-autostart 統合）や暗号化モード対応時に、起動診断用の PID ファイル（OS 標準位置、`dirs` crate で解決）＋ advisory ロック（Win: `LockFileEx`、Unix: `flock`）の追加が必要になった時点で検討する。これは `shikomi-infra::persistence::lock::VaultLock`（vault データ側のロック）とは**別層**で、プロセス存在の診断専用
 3. **自動起動**: OS 標準機構を使う。Tauri プラグイン `tauri-plugin-autostart` を第一選択とし、使えない箇所は OS API を直接呼ぶ
    - **Windows**: タスクスケジューラにユーザ領域タスク登録（`schtasks /Create /SC ONLOGON /TN "shikomi-daemon" /TR ...`）。レジストリ Run キーは UAC プロンプトで不利なため避ける
    - **macOS**: `launchd` LaunchAgent（`~/Library/LaunchAgents/dev.shikomi.daemon.plist`）、`launchctl bootstrap gui/$(id -u) <plist>`
@@ -45,7 +47,20 @@ flowchart TB
 | フェーズ | 期間 | `shikomi-cli` の vault 接続 | `shikomi-gui` の vault 接続 | 理由 |
 |---------|------|-------------------------|-------------------------|------|
 | **Phase 1（現在）** | `shikomi-daemon` 未実装期間 | `shikomi-infra::SqliteVaultRepository` を**直接構築**（CLI 直結） | 同左（GUI 実装着手時に同様の扱いとする。本書で先行記載） | daemon が存在しないため IPC 経由が物理的に不可能。Clean Arch の縦串を先に通して後続 feature の骨格テンプレートを確立する |
-| **Phase 2（最終形態）** | `shikomi-daemon` 実装以降 | `shikomi-infra::IpcVaultRepository`（将来追加）で daemon へ IPC 委任 | 同左 | daemon が vault の真実源となり、ホットキー・クリップボード・セッションキーキャッシュを統合管理する |
+| **Phase 2（最終形態）** | `shikomi-daemon` 実装以降 | `shikomi-cli::io::IpcVaultRepository` で daemon へ IPC 委任 | 同左（`shikomi-gui` 側も IPC クライアントとして同等の層を持つ） | daemon が vault の真実源となり、ホットキー・クリップボード・セッションキーキャッシュを統合管理する |
+
+**`IpcVaultRepository` の配置先（Issue #26 確定）**:
+
+- **`shikomi-cli::io::IpcVaultRepository`**（CLI クライアント層）と **`shikomi-daemon` 内の IPC サーバハンドラ**（daemon サーバ層）の**2 実装**で同じ `VaultRepository` trait を満たす。
+- **`shikomi-infra` には IPC クライアントを置かない**。`shikomi-infra` は「OS 依存の永続化アダプタ」として `SqliteVaultRepository` + DACL/lock/audit に責務を限定し、IPC は daemon 境界・クライアント境界の通信責務として各 bin crate 側に閉じる（Clean Architecture の依存方向を保ち、`shikomi-infra` が `tokio` の UDS/Named Pipe まで抱え込むのを避ける）。
+- **`shikomi-core::ipc`** は IPC スキーマ（`IpcRequest` / `IpcResponse` / `IpcProtocolVersion`）の**型定義のみ**を持ち、I/O を持たない（§2.1 IPC シリアライズ行の単一真実源方針）。
+
+**Issue #26 における実体化スコープ**:
+
+- Phase 2 の**トランスポート層**（UDS / Named Pipe + length-delimited framed stream + MessagePack）を `shikomi-daemon` に実装。
+- **`IpcVaultRepository` を `shikomi-cli::io::` に追加**し、`--ipc` オプトインフラグ経由でのみ有効化。既定では Phase 1（SQLite 直結）を維持する。
+- **Phase 2 への全面切替**（`--ipc` を既定にする／フラグ廃止）は**本 Issue のスコープ外**。CLI 利用者が daemon の存在前提になるタイミングは、ホットキー feature / 暗号化モード feature が完成し「daemon 起動が MVP の通常動線」となる時点で別 Issue として扱う。
+- **初期サポート IPC 操作は `List` / `Add` / `Edit` / `Remove` の 4 本**（現行 CLI Phase 1 と 1:1 対応、YAGNI）。ホットキー登録 API・暗号化操作 API（`vault encrypt` 等）は後続 Issue で `IpcRequest` に variant 追加で拡張。
 
 **Phase 1 → Phase 2 の移行戦略**:
 
@@ -65,6 +80,8 @@ flowchart TB
 
 ### 4.2 プロセス間通信（IPC）設計
 
+> **実体化**: 本節は長らく「最終形態の規定」として存在してきたが、**Issue #26 で `shikomi-daemon` に実装される**。以降の節は本 Issue の受入基準と整合する。
+
 **経路**: OS 標準のユーザ権限ローカル通信。**TCP は使わない**（同ネットワーク上の他端末から攻撃されない保証が必要なため）。
 
 | OS | IPC トランスポート | アクセス制御 |
@@ -78,12 +95,31 @@ flowchart TB
 2. **セッショントークン**: daemon 起動時に 32 バイトの CSPRNG トークンを生成し、IPC 初回ハンドシェイクで検証（同ユーザ内の他プロセスに対する二重防御）。トークンはソケットと同一の `0700` 権限ファイルに保存、daemon 終了時に削除
 3. **暗号化は不要**: localhost UDS / Named Pipe は OS のプロセス境界で保護されるため TLS は過剰設計（ただし将来リモート実行をサポートするなら別途再設計）
 
-**通信プロトコル**: MessagePack over framed stream（長さプレフィックス 4 バイト LE + payload）。JSON は文字列 escape の差異でクロスプラットフォームバグを呼ぶため避ける。スキーマは `shikomi-core` crate の型定義で共有（`serde` + `rmp-serde`）。
+**通信プロトコル**: MessagePack over length-delimited framed stream（長さプレフィックス **4 バイト LE unsigned** + payload）。JSON は文字列 escape の差異でクロスプラットフォームバグを呼ぶため避ける。スキーマは `shikomi-core::ipc` の型定義で共有（`serde` + `rmp-serde`）。フレーミングは `tokio-util::codec::LengthDelimitedCodec` を採用し、**最大フレーム長 16 MiB を daemon 側で強制**（超過は切断、DoS 対策）。
+
+**プロトコルバージョニング**（Issue #26 で新設）:
+
+- `shikomi-core::ipc::IpcProtocolVersion` を `#[non_exhaustive] enum` として定義し、**破壊的変更時にバリアント追加**で明示。`VaultVersion`（§2.4 レコード永続化フォーマット）の前例に倣う。
+- ハンドシェイク: クライアントは接続直後に自身の `IpcProtocolVersion` を最初のフレームで送信し、daemon が**一致判定**。不一致時は daemon が `IpcResponse::ProtocolVersionMismatch { server, client }` を返して切断（Fail Fast）。クライアント側は本エラーを受けたら `--ipc` フラグ実行を終了コード非 0 で終わらせる（プロトコル互換のないバイナリが混在した運用を継続させない）。
+- **初期バージョン**: `V1`（`List` / `Add` / `Edit` / `Remove` の 4 操作のみ）。以降、ホットキー登録 API / 暗号化操作 API / リストフィルタ等を追加する際に `V2` を追加する想定。
+
+**対応 IPC 操作（Issue #26 の初期サポート）**:
+
+| リクエスト | レスポンス | 備考 |
+|-----------|-----------|------|
+| `IpcRequest::ListRecords` | `IpcResponse::Records(Vec<RecordSummary>)` | `shikomi-cli list` から呼ばれる。`RecordSummary` は `shikomi-core` に配置（機密値フィールドを含まない投影型） |
+| `IpcRequest::AddRecord { kind, label, secret, ... }` | `IpcResponse::Added { id }` | `SecretString` はシリアライズ経路上で `expose_secret()` を**呼ばない設計**（`shikomi-core` 側で `secrecy::SerializableSecret` 相当のマーカーを用意するか、IPC 境界で `SecretBytes` を送る専用 DTO を設ける——詳細は基本設計で決定） |
+| `IpcRequest::EditRecord { id, ... }` | `IpcResponse::Edited` | 既存レコードの部分更新（変更フィールドのみ送信） |
+| `IpcRequest::RemoveRecord { id }` | `IpcResponse::Removed` | id 不在時は `NotFound` エラー variant |
+| `IpcRequest::Handshake { client_version }` | `IpcResponse::Handshake { server_version }` / `ProtocolVersionMismatch` | 接続直後の必須 1 往復 |
 
 **Fail Fast**:
 - ピア資格情報検証失敗 → 即切断、`tracing::warn!` でログ
 - トークンミスマッチ → 3 回連続失敗でそのソケットを閉じ、再生成
 - ソケット／パイプのパーミッション異常検出 → daemon 起動拒否
+- プロトコルバージョン不一致 → `ProtocolVersionMismatch` 返送 → 切断
+- フレーム長上限超過 → 切断（部分読込で確保したバッファは即解放、`tracing::warn!` 記録）
+- MessagePack デコード失敗 → 該当コネクションのみ切断。**daemon プロセスはクラッシュさせない**（graceful degradation、`tracing::warn!` 記録、他クライアントへの影響ゼロ）
 
 ### 4.3 vault 保護モードと鍵キャッシュ戦略
 
