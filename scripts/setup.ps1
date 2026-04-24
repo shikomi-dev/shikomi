@@ -22,7 +22,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 
 # -------- ピン定数 (setup.sh と完全同期させること。audit-pin-sync.sh が CI で検証) -----
 $LEFTHOOK_VERSION                 = "2.1.6"
-$LEFTHOOK_SHA256_LINUX_X86_64     = "6704b01a72414affcc921740a7d6c621fe60c3082b291c9730900a2c6a352516"
+# upstream: https://github.com/evilmartians/lefthook/releases/download/v2.1.6/lefthook_checksums.txt
+$LEFTHOOK_SHA256_LINUX_X86_64     = "fab3d2715a922d9625c9024e6ffb6e1271edd613aa9b213c2049482cde8ae183"
 $LEFTHOOK_SHA256_LINUX_ARM64      = "3fd749629968beb7f7f68cd0fc7b1b5ab801a1ec2045892586005cce75944118"
 $LEFTHOOK_SHA256_MACOS_X86_64     = "93c6d51823f94a7f26a2bbb84f59504378b178f55d6c90744169693ed3e89013"
 $LEFTHOOK_SHA256_MACOS_ARM64      = "f07c97c32376749edb5b34179c16c6d87dd3e7ca0040aee911f38c821de0daab"

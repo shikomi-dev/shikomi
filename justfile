@@ -68,8 +68,10 @@ check-all: fmt-check clippy test audit audit-secrets audit-pin-sync
 # ------------------------------------------------------------------ commit-msg hook
 
 # commit-msg 用: Conventional Commits 1.0 準拠を convco で検証 (確定 E)
+# convco の commit-msg 統合は `check --from-stdin --strip`。
+# --strip で `#` コメント行を除去してから検証（git commit 時の COMMIT_EDITMSG 互換）。
 commit-msg-check FILE:
-    convco check-message {{FILE}}
+    convco check --from-stdin --strip < {{FILE}}
 
 # commit-msg 用: AI 生成フッター検出 (REQ-DW-018)
 # P1 絵文字 + Generated with + Claude

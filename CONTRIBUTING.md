@@ -261,12 +261,46 @@ just check-all   # 全チェックを順次実行
 
 ### 既に commit / push してしまった場合
 
-1. **直ちに対象 secret を無効化する**（AWS キーなら IAM で失効、API トークンなら発行元で rotate）
-2. リポジトリ管理者（`@kkm-horikawa`）に Issue **非公開**で連絡。SECURITY.md の手順に従う
-3. 履歴からの除去は [`git filter-repo`](https://github.com/newren/git-filter-repo) を使う。`git filter-branch` は使わない
-4. force push は管理者のみ。共同作業者全員に `git reset --hard origin/<branch>` の再同期を依頼
+手順は **(a) 無効化 → (b) 履歴除去 → (c) GitHub 側の残留対策** の順で進めます。**(a) より前に (b)(c) を先行してはいけません。**
 
-**重要**: `git push --force` で履歴を書き換えても、GitHub の push-back リフで既に外部にコピーされている可能性があります。secret の無効化 (1) を必ず最優先してください。
+#### (a) secret の無効化（最優先・不可逆）
+
+1. **直ちに対象 secret を無効化する**
+   - AWS / GCP / Azure 等のクラウド IAM キー → コンソールで失効・rotate
+   - GitHub PAT / npm token / Cargo registry token → 発行元で revoke
+   - 秘密鍵（RSA / SSH / PGP） → 鍵ペア再生成、依存先の公開鍵を入れ替え
+   - DB / API の application secret → rotate し、依存サービスへ再デプロイ
+2. リポジトリ管理者（`@kkm-horikawa`）に **Issue ではなく非公開経路**で連絡（[SECURITY.md](SECURITY.md) の手順に従う）
+
+#### (b) 履歴からの除去（feature ブランチ限定）
+
+- 除去ツールは [`git filter-repo`](https://github.com/newren/git-filter-repo) を使用。`git filter-branch` は非推奨のため使わない
+- **`main` / `develop` ブランチへの force-push は禁止**（GitHub ブランチ保護ルールで拒否される想定）。secret が `main` / `develop` に到達している場合、履歴除去ではなく**リポジトリ全体の再発行＋全員の鍵ローテーション**を管理者判断で行う
+- feature ブランチに限り、以下の手順で除去してよい:
+
+```bash
+# 1. クリーンなクローンを別ディレクトリに取得
+git clone --no-local https://github.com/shikomi-dev/shikomi.git shikomi-scrub
+cd shikomi-scrub
+
+# 2. 対象パスを履歴から完全除去（単一ファイルの例）
+git filter-repo --path path/to/leaked-file --invert-paths
+
+# 3. feature ブランチへ force-push（main / develop は禁止）
+git push --force-with-lease origin feature/<your-branch>
+```
+
+- **`--force-with-lease` を必ず使う**（`--force` 単体は他コラボレータの push を上書きする事故を起こす）
+- 除去後、共同作業者全員に `git fetch` → `git reset --hard origin/feature/<your-branch>` の再同期を依頼
+
+#### (c) GitHub 側の残留対策
+
+1. **Pull Request / Issue / Gist のコメント本文から目視除去**（履歴書き換えでは消えない）
+2. **GitHub Secret scanning のアラート解決**: Security タブ → Secret scanning alerts → 該当を `Resolved: Revoked` としてクローズし、無効化済み (a) を証跡として残す
+3. **キャッシュ purge の依頼**: `git filter-repo` 後も GitHub はイベント API / GraphQL / forks 経由で古い SHA を数日〜数週間キャッシュする。[GitHub Support](https://support.github.com/contact) に「sensitive data removal」として申請し、該当コミット SHA の残留キャッシュ消去を依頼する（[公式ガイド](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository#fully-removing-the-data-from-github)）
+4. **fork されている場合**は fork 側の履歴も汚染されている。管理者が fork 一覧を確認し、必要に応じて連絡
+
+**最重要**: `git push --force` で履歴を書き換えても、GitHub のイベント API・PR コメント・fork・CI ログ等に残存する可能性があります。**secret の無効化 (a) が成立していない限り、(b)(c) をいくら完璧にやっても漏洩リスクは消えません。**
 
 ---
 
