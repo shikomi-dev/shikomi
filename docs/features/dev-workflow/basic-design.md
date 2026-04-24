@@ -232,7 +232,7 @@ sequenceDiagram
 | コミット失敗時 | 失敗した検査名（fmt / clippy / convco）と **次に打つべきコマンド** が 1 行で表示される。長文の cargo 出力に埋もれない |
 | push 失敗時 | 失敗テスト名と `just test` コマンドが案内される |
 | `just` レシピ一覧 | `just` を引数なしで実行すると `just --list` が走り、全レシピが 1 行コメントつきで表示 |
-| Windows 開発者 | `pwsh` での setup を README で明示。PowerShell 5.1+（Win10 デフォルト）と 7+ 両方で動作 |
+| Windows 開発者 | **PowerShell 7+ 必須**。`setup.ps1` 冒頭で `$PSVersionTable.PSVersion.Major -lt 7` を検査し、未満なら即 Fail Fast（MSG-DW-011、`winget install Microsoft.PowerShell` を案内）。Windows PowerShell 5.1 は非対応と明示（REQ-DW-014 / 確定 A） |
 | `--no-verify` 使用 | CONTRIBUTING に「原則禁止。やむを得ない場合は PR 本文で理由を明記し、CI で代替検証」と記載 |
 
 **アクセシビリティ方針**: 本 feature は CLI のみ。色付け出力は `just` / `lefthook` / `cargo` のデフォルトに従い、色非対応端末でも `[FAIL]` / `[OK]` 等のテキストラベルで識別できる状態を維持する。
@@ -264,7 +264,7 @@ sequenceDiagram
 | A06 | Vulnerable Components | `cargo-deny` の `advisories` / `bans` / `licenses` / `sources` チェックを `just audit` として統合。CI の `audit.yml` で常時実行。lefthook / gitleaks はバイナリ固定 + SHA256 検証 |
 | A07 | Auth Failures | 該当なし — 理由: 本 feature は認証機構を持たない |
 | A08 | Data Integrity Failures | `cargo install --locked` で依存解決を固定。`lefthook` / `gitleaks` は SHA-256 検証つきで配置（T4 対策）。GitHub Actions の `Swatinem/rust-cache@v2` は公式 action を採用 |
-| A09 | Logging Failures | フック失敗メッセージは stderr に明示、**プレフィックス統一 `[FAIL] / [OK] / [SKIP] / [WARN]`** で視認性確保。CI ログは GitHub Actions 標準の保持ポリシーに従う。`fail_text` 動的展開禁止で PII 漏洩回避（T7 対策） |
+| A09 | Logging Failures | フック失敗メッセージは stderr に明示、**5 プレフィックス統一 `[FAIL] / [OK] / [SKIP] / [WARN] / [INFO]`**（詳細設計書 §プレフィックス統一）で視認性確保。CI ログは GitHub Actions 標準の保持ポリシーに従う。`fail_text` 動的展開禁止で PII 漏洩回避（T7 対策） |
 | A10 | SSRF | 該当なし — 理由: 本 feature は外部 URL へのリクエストを動的に発行しない。GitHub Releases URL は setup スクリプトにハードコードで固定 |
 
 ## ER図

@@ -12,7 +12,7 @@
 | 入力 | `lefthook install` コマンド実行、または setup スクリプト経由の呼び出し |
 | 処理 | `lefthook.yml` を読み、`.git/hooks/{pre-commit,pre-push,commit-msg}` を生成・上書き |
 | 出力 | `.git/hooks/` 以下に lefthook が管理するラッパスクリプトが配置され、以後の `git` 操作で自動発火 |
-| エラー時 | lefthook バイナリ未検出 → 「`cargo install --locked lefthook` を実行してください」のヒントつき exit 非 0 |
+| エラー時 | lefthook バイナリ未検出 → 「`bash scripts/setup.sh`（Unix）または `pwsh scripts/setup.ps1`（Windows）を実行して SHA256 検証つきで lefthook を導入してください」のヒントつき exit 非 0。**`cargo install lefthook` は lefthook が crates.io 非配布のため不可**（REQ-DW-015、§tech-stack §2.5 注釈） |
 
 ### REQ-DW-002: pre-commit フック
 
