@@ -158,6 +158,19 @@
 | 出力 | CONTRIBUTING.md §Secret 混入時の緊急対応 に手順が明文化された状態 |
 | エラー時 | 該当なし（運用手順の文書化のみ） |
 
+### REQ-DW-018: AI 生成フッターのコミットメッセージ混入禁止
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | commit-msg フックから渡されるコミットメッセージファイル（`.git/COMMIT_EDITMSG` 等） |
+| 処理 | `just commit-msg-no-ai-footer {1}` が case-insensitive な正規表現マッチで以下 3 パターンを順に検査（詳細設計書 §確定パターン）: (a) `🤖.*Generated with.*Claude` (b) `Co-Authored-By:.*@anthropic\.com` (c) `Co-Authored-By:.*\bClaude\b`。いずれか 1 つでもヒットすれば exit 非 0、非ヒットなら exit 0 |
+| 出力 | 非ヒット: コミット続行 / ヒット: コミット中止、MSG-DW-013 を stderr 表示 |
+| エラー時 | exit 非 0。lefthook `fail_text` で MSG-DW-013 を表示 |
+
+**並列実行の契約**: `commit-msg` フックでは既存の `convco` コマンドと本 `no-ai-footer` コマンドを lefthook `parallel: true` で並列実行する。双方とも短時間で完了する grep 相当の軽量検査のため、所要時間は 2 検査でも数百ミリ秒以内。
+
+**CI 側での再検知**: `--no-verify` バイパス対策として、push 後の PR において `pr-title-check` ワークフローは PR タイトルの Conventional Commits 準拠のみ検査しており、**各コミットの message 本文の trailer までは検査しない**。squash merge を採用している shikomi では PR タイトルがマージコミットのメッセージになるため、GitHub UI の squash dialog で自動挿入される Co-Authored-By 集約が問題となる可能性がある。本 feature のスコープとしては**ローカル commit-msg フックでの水際対応**を主とし、CI 側での PR body 検査は YAGNI として後続 Issue で扱う（実運用で漏れが発覚した時点で対応）。
+
 ## 画面・CLI仕様
 
 ### `just` レシピ一覧（初期定義）
@@ -176,6 +189,7 @@
 | `just audit-secrets` | `gitleaks protect --staged --no-banner` + `bash scripts/ci/audit-secret-paths.sh` | pre-commit 経由（REQ-DW-013） |
 | `just check-all` | `fmt-check` → `clippy` → `test` → `audit` → `audit-secrets` を順次実行（最終確認用） | 全ワークフロー相当 |
 | `just commit-msg-check FILE` | `convco check-message {{FILE}}` を実行。`convco` の commit-msg 向け公式サブコマンド（`convco check-message [FILES]...`、出典: https://github.com/convco/convco README § commit-msg 節）を直接呼ぶ | — |
+| `just commit-msg-no-ai-footer FILE` | case-insensitive `grep -iE` で 3 パターン（§REQ-DW-018）を検査し、ヒットしたら exit 1。POSIX 互換（Windows でも Git for Windows の `bash.exe` 経由で動作、§確定 D の方針と整合） | — |
 
 ### setup スクリプトの CLI
 
@@ -221,6 +235,7 @@
 | MSG-DW-010 | エラー | `[FAIL] secret の混入が検出されました（ファイル: {path}、行: {line}、検出器: {gitleaks\|audit-secret-paths}）。` / `次のコマンド: 該当行を除去後、git add → git commit を再実行。既に push 済みの場合は CONTRIBUTING.md §Secret 混入時の緊急対応 を参照。` | pre-commit の secret 検知で陽性 |
 | MSG-DW-011 | エラー | `[FAIL] PowerShell 7 以上が必要です（検出: {version}）。` / `次のコマンド: winget install Microsoft.PowerShell` | `setup.ps1` が PowerShell 5.1 以下で起動 |
 | MSG-DW-012 | エラー | `[FAIL] {tool} バイナリの SHA256 検証に失敗しました。サプライチェーン改ざんの可能性があります。` / `次のコマンド: 一時ファイルを削除後、ネットワーク状況を確認して再実行。繰り返し失敗する場合は Issue で報告。` | `setup.{sh,ps1}` の lefthook / gitleaks ダウンロード時、SHA256 不一致 |
+| MSG-DW-013 | エラー | `[FAIL] コミットメッセージに AI 生成フッターが含まれています（🤖 Generated with Claude Code / Co-Authored-By: Claude 等）。` / `次のコマンド: 該当行を削除して再コミット。許可されない trailer のポリシーは CONTRIBUTING.md §AI 生成フッターの禁止 を参照。` | commit-msg フックで `just commit-msg-no-ai-footer` がパターン検出 |
 
 ## 依存関係
 

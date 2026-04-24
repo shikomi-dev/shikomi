@@ -15,12 +15,12 @@
 
 | 機能ID | モジュール | ディレクトリ | 責務 |
 |--------|----------|------------|------|
-| REQ-DW-001, 002, 003, 004, 012, 013 | `lefthook.yml` | リポジトリルート | Git フック定義（pre-commit / pre-push / commit-msg）と静的 `fail_text`（2 行構造） |
-| REQ-DW-005 | `justfile` | リポジトリルート | タスクランナー定義。fmt / clippy / test / audit / audit-secrets / check-all / commit-msg-check レシピ集約 |
+| REQ-DW-001, 002, 003, 004, 012, 013, 018 | `lefthook.yml` | リポジトリルート | Git フック定義（pre-commit / pre-push / commit-msg）と静的 `fail_text`（2 行構造）。commit-msg は `convco` と `no-ai-footer` の 2 コマンド並列 |
+| REQ-DW-005, 018 | `justfile` | リポジトリルート | タスクランナー定義。fmt / clippy / test / audit / audit-secrets / check-all / commit-msg-check / **commit-msg-no-ai-footer** レシピ集約 |
 | REQ-DW-006 | `.github/workflows/*.yml`（既存 **5 本** を編集） | `.github/workflows/` | CI ワークフロー（`lint` / `unit-core` / `test-infra` / `audit` / `windows`）から `just <recipe>` を呼ぶ形に統一。`audit.yml` は `cargo-deny-action` を廃止し `just audit` 経由へ |
 | REQ-DW-007, 015 | `scripts/setup.sh` | `scripts/` | Unix 向けセットアップ。Rust toolchain 検知 → Rust 製ツール `cargo install --locked` → Go 製ツール GitHub Releases + SHA256 検証 → `lefthook install` |
 | REQ-DW-008, 014, 015 | `scripts/setup.ps1` | `scripts/` | Windows 向け。PowerShell 7+ 検査 → 以降は `setup.sh` と同等ロジック |
-| REQ-DW-010, 017 | `README.md`, `CONTRIBUTING.md` | リポジトリルート | setup 1 ステップ、`--no-verify` 禁止ポリシー、Secret 混入時の緊急対応手順を記載 |
+| REQ-DW-010, 017, 018 | `README.md`, `CONTRIBUTING.md` | リポジトリルート | setup 1 ステップ、`--no-verify` 禁止ポリシー、Secret 混入時の緊急対応手順、**AI 生成フッター禁止ポリシー**を記載 |
 | REQ-DW-011 | 既存 CI（`lint.yml` 他 5 本）| `.github/workflows/` | 同一 `just <recipe>` を CI 側でも再実行（バイパス検知） |
 | REQ-DW-013 | `scripts/ci/audit-secret-paths.sh`（既存、本 feature で改変禁止） | `scripts/ci/` | shikomi 独自の secret 経路契約（TC-CI-012〜015）の静的検証。本 feature は **引き回し専用**で、検知ロジックの追加・改変はスコープ外 |
 | REQ-DW-013 | `gitleaks` 設定（`.gitleaks.toml` は初期採用せずデフォルトルールのみ使用） | リポジトリルート | 汎用 secret パターン（API キー / AWS / GCP 等）の staged diff スキャン。除外ルールが必要になった時点で `.gitleaks.toml` を Sub-issue で追加（YAGNI） |
@@ -66,12 +66,15 @@ classDiagram
         +auditSecrets
         +checkAll
         +commitMsgCheck
+        +commitMsgNoAiFooter
     }
     class LefthookYml {
         +preCommit_fmtCheck
         +preCommit_clippy
+        +preCommit_auditSecrets
         +prePush_test
         +commitMsg_convco
+        +commitMsg_noAiFooter
     }
     class SetupSh {
         +detect rust toolchain
@@ -117,9 +120,9 @@ classDiagram
 
 1. 開発者が作業ツリーでファイルを変更
 2. `git add` → `git commit -m "feat(xxx): ..."`
-3. `commit-msg` フックが発火 → `just commit-msg-check {1}` 実行 → `convco check-message` が規約検証
-4. 規約違反: メッセージ修正を促して中止（MSG-DW-004）
-5. 規約 OK: 続いて `pre-commit` フックが発火 → **`just fmt-check` / `just clippy` / `just audit-secrets` を並列実行**（`parallel: true`）
+3. `commit-msg` フックが発火 → **`just commit-msg-check {1}`（convco 検証）と `just commit-msg-no-ai-footer {1}`（AI 生成フッター検出）を並列実行**
+4. convco 規約違反: MSG-DW-004 で中止 / AI フッター検出: MSG-DW-013 で中止（両方違反時は lefthook が両方の `fail_text` を表示）
+5. 両者 OK: 続いて `pre-commit` フックが発火 → **`just fmt-check` / `just clippy` / `just audit-secrets` を並列実行**（`parallel: true`）
 6. fmt 違反: 「`[FAIL] cargo fmt 違反を検出しました。` / `次のコマンド: just fmt`」で中止（MSG-DW-001）
 7. clippy 違反: MSG-DW-002 で中止
 8. secret 検出（gitleaks / audit-secret-paths.sh のいずれか）: MSG-DW-010 で中止。検出箇所は `file:line` 形式で stderr
@@ -164,12 +167,15 @@ sequenceDiagram
 
     Dev->>Git: git commit -m "feat(xxx): ..."
     Git->>LH: .git/hooks/commit-msg
-    LH->>Just: just commit-msg-check {1}
-    Just->>Convco: convco check-message FILE
-    Convco-->>Just: ok / ng
-    alt ng
-        Just-->>LH: exit 非0
-        LH-->>Git: fail_text (MSG-DW-004)
+    par convco
+        LH->>Just: just commit-msg-check {1}
+        Just->>Convco: convco check-message FILE
+    and no-ai-footer
+        LH->>Just: just commit-msg-no-ai-footer {1}
+        Note right of Just: grep -iE で 3 パターン検査<br/>(🤖 Claude Code / anthropic.com / Claude)
+    end
+    alt いずれか ng
+        LH-->>Git: fail_text (MSG-DW-004 or MSG-DW-013)
         Git-->>Dev: コミット中止
     end
     Git->>LH: .git/hooks/pre-commit
@@ -251,6 +257,7 @@ sequenceDiagram
 | **T6: Git 履歴情報漏洩（事後）** | `--no-verify` または secret 検知すり抜け後に push 済みとなった secret | 同 T2 | CONTRIBUTING.md §Secret 混入時の緊急対応に `git filter-repo` 手順と GitHub secret scanning 連携を記載（REQ-DW-017）。`main` / `develop` の force-push は引き続き禁止、feature ブランチ限定で実施 |
 | **T7: フック失敗メッセージでの情報漏洩** | `fail_text` に絶対パス・ユーザ名・環境変数値が含まれ、CI ログ（外部閲覧可能な場合あり）に露出 | ユーザプライバシー | `fail_text` は**静的文字列のみ**。`${variables}` や `{files}` による動的展開を禁止。検出ファイル名が必要な場合は gitleaks / audit 側の stdout に出し、`fail_text` は 2 行構造（要約 + 復旧コマンド）のみとする |
 | **T8: 設定ファイル改変後の検知スキップ** | `lefthook.yml` から `audit-secrets` コマンドを削除する PR が merge されれば、以降 pre-commit で secret 検知が作動しない | shikomi の secret 混入防止契約 | T5 の CODEOWNERS 保護に加え、**CI 側で独立に `just audit-secrets` を再実行**（`audit.yml` に組込み）。ローカル検知が無効化されても CI 側で再検知、二重防護 |
+| **T9: AI 生成フッターの混入** | コントリビュータ / エージェント（Claude Code 等）が `🤖 Generated with Claude Code` / `Co-Authored-By: Claude <noreply@anthropic.com>` 等の trailer を含むコミットを発行。コミット履歴に AI 生成の痕跡が残留 | コミット履歴の真実源性、オーナー方針（`@kkm-horikawa`）、将来的な企業利用でのコード所有権明確化要求 | **commit-msg フックで `just commit-msg-no-ai-footer` が 3 パターン（🤖 Generated with Claude / Co-Authored-By: @anthropic.com / Co-Authored-By: Claude）を case-insensitive 照合して reject**（REQ-DW-018）。CONTRIBUTING.md §AI 生成フッターの禁止に規約として明記。`--no-verify` バイパス時は人間のレビュワーと `@kkm-horikawa` が PR レビューで検知する（pre-receive hook 不在のため機械的遮断は不可能、Agent-C ペルソナ向けには CONTRIBUTING の明示で教示） |
 
 ### OWASP Top 10 対応
 
