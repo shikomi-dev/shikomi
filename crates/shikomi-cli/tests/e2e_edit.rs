@@ -199,15 +199,11 @@ fn reg_e2e_edit_secret_record_via_stdin_never_echoes_and_roundtrips_as_masked() 
     assert!(stdout.contains("updated: "));
 
     // ラウンドトリップ: list で Masked + 新旧どちらの secret 値も含まれない
-    shikomi(dir.path())
-        .arg("list")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("****")
-                .and(predicate::str::contains("OLD_SECRET_TEST_VALUE").not())
-                .and(predicate::str::contains("NEW_SECRET_TEST_VALUE").not()),
-        );
+    shikomi(dir.path()).arg("list").assert().success().stdout(
+        predicate::str::contains("****")
+            .and(predicate::str::contains("OLD_SECRET_TEST_VALUE").not())
+            .and(predicate::str::contains("NEW_SECRET_TEST_VALUE").not()),
+    );
 }
 
 /// 既存 kind が Secret のとき `--value` 直接指定すると shell 履歴警告が stderr に出る。
