@@ -37,6 +37,9 @@ tempfile      = { workspace = true }
 assert_cmd    = { workspace = true }
 predicates    = { workspace = true }
 serial_test   = { workspace = true }
+# 暗号化 vault フィクスチャ helper (tests/common/fixtures.rs) で SQLite を直接書き出すため。
+# CLI 本体は rusqlite を参照しない（`shikomi-infra` 経由）。本依存はテスト限定。
+rusqlite      = { workspace = true }
 
 [lints]
 workspace = true
