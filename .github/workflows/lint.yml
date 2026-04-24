@@ -21,10 +21,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+      - name: install just
+        run: cargo install --locked just
 
-      - name: cargo clippy
-        # workspace.lints.clippy で all="deny", pedantic="warn" が設定済み
-        # -D warnings は pedantic="warn" の意図的設定を override するため不使用
-        run: cargo clippy --all-targets --all-features
+      # justfile が CI / local / 手動の 3 経路で単一真実源 (DRY)。
+      # workspace.lints.clippy で all="deny", pedantic="warn" が設定済みのため -D warnings は付けない。
+      - name: just fmt-check
+        run: just fmt-check
+
+      - name: just clippy
+        run: just clippy

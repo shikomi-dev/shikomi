@@ -12,6 +12,10 @@ jobs:
   test-infra-windows:
     name: test-infra-windows
     runs-on: windows-latest
+    defaults:
+      run:
+        # windows-latest は PowerShell 7+ を既定搭載 (2023 以降)。justfile の windows-shell と整合。
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
@@ -19,5 +23,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test (shikomi-infra)
-        run: cargo test -p shikomi-infra
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-infra
+        run: just test-infra
