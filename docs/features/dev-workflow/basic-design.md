@@ -235,7 +235,7 @@ sequenceDiagram
 | シナリオ | 期待される挙動 |
 |---------|------------|
 | clone 直後に `git commit` | `scripts/setup.{sh,ps1}` が未実行なら、README 冒頭に「先に setup スクリプトを実行してください」の明示がある。setup 1 回で以後は自動 |
-| コミット失敗時 | 失敗した検査名（fmt / clippy / convco）と **次に打つべきコマンド** が 1 行で表示される。長文の cargo 出力に埋もれない |
+| コミット失敗時 | 失敗した検査名（**fmt / clippy / audit-secrets / convco / no-ai-footer** の 5 種）と **次に打つべきコマンド** が MSG-DW-001〜004, 010, 013 の **2 行構造**（`[FAIL] <要約>` / `次のコマンド: <復旧 1 行>`）で表示される。長文の cargo / gitleaks / grep 出力に埋もれない |
 | push 失敗時 | 失敗テスト名と `just test` コマンドが案内される |
 | `just` レシピ一覧 | `just` を引数なしで実行すると `just --list` が走り、全レシピが 1 行コメントつきで表示 |
 | Windows 開発者 | **PowerShell 7+ 必須**。`setup.ps1` 冒頭で `$PSVersionTable.PSVersion.Major -lt 7` を検査し、未満なら即 Fail Fast（MSG-DW-011、`winget install Microsoft.PowerShell` を案内）。Windows PowerShell 5.1 は非対応と明示（REQ-DW-014 / 確定 A） |
