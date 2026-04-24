@@ -11,7 +11,10 @@ use super::Locale;
 /// `CliError` を 2 行（English）または 4 行（JapaneseEn）形式で整形する。
 #[must_use]
 pub fn render_error(err: &CliError, locale: Locale) -> String {
-    let (error_en, hint_en, error_ja, hint_ja) = lines_for(err);
+    // `lines_for` の戻り値は `(error 英, error 日, hint 英, hint 日)` 順。
+    // 変数束縛もこの順に揃える（以前は `(error_en, hint_en, error_ja, hint_ja)` と
+    // 入れ替えてしまい、LANG=C 環境の hint 行に日本語が漏れていた — BUG-002）。
+    let (error_en, error_ja, hint_en, hint_ja) = lines_for(err);
     let mut out = format!("error: {error_en}\n");
     if matches!(locale, Locale::JapaneseEn) {
         out.push_str(&format!("error: {error_ja}\n"));
@@ -164,5 +167,20 @@ mod tests {
     fn test_render_error_non_interactive_remove_mentions_yes() {
         let out = render_error(&CliError::NonInteractiveRemove, Locale::English);
         assert!(out.contains("--yes"));
+    }
+
+    /// BUG-002 回帰: English モードの出力には日本語文字を一切含まないこと。
+    /// 以前は `lines_for` の戻り値と受取側変数の順序がずれており hint 行に
+    /// 日本語カタログが漏出していた。
+    #[test]
+    fn test_render_error_english_mode_never_contains_japanese() {
+        let err = CliError::InvalidLabel(DomainError::InvalidRecordLabel(
+            InvalidRecordLabelReason::Empty,
+        ));
+        let out = render_error(&err, Locale::English);
+        assert!(
+            out.is_ascii() || out.chars().all(|c| c.is_ascii() || c == '…'),
+            "English render_error should be ASCII-only, got: {out:?}"
+        );
     }
 }

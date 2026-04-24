@@ -58,7 +58,18 @@ pub enum CliError {
 
 impl From<PersistenceError> for CliError {
     fn from(e: PersistenceError) -> Self {
-        Self::Persistence(e)
+        // 暗号化 vault 検出は `PersistenceError::UnsupportedYet { feature: "encrypted vault persistence", .. }`
+        // の形で infra 層から返る（`shikomi-infra::persistence::repository.rs` の
+        // `load_inner` / `save_inner` が Encrypted モードで Fail Fast）。
+        // CLI 層はこれを専用の `EncryptionUnsupported` バリアントへ写像し、
+        // `ExitCode::EncryptionUnsupported (3)` に繋げる（REQ-CLI-009 / 受入基準 8）。
+        match e {
+            PersistenceError::UnsupportedYet {
+                feature: "encrypted vault persistence",
+                ..
+            } => Self::EncryptionUnsupported,
+            other => Self::Persistence(other),
+        }
     }
 }
 
@@ -146,5 +157,31 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("invalid label"));
         assert!(!msg.contains("SECRET_TEST_VALUE"));
+    }
+
+    /// BUG-001 回帰: `PersistenceError::UnsupportedYet { feature: "encrypted vault persistence", .. }`
+    /// は `CliError::EncryptionUnsupported`（exit 3）に写像されなければならない。
+    /// 以前は無条件に `CliError::Persistence(...)` に包まれ、exit 2 になっていた。
+    #[test]
+    fn test_from_persistence_encrypted_vault_maps_to_encryption_unsupported() {
+        let pe = PersistenceError::UnsupportedYet {
+            feature: "encrypted vault persistence",
+            tracking_issue: None,
+        };
+        let cli_err: CliError = pe.into();
+        assert!(matches!(cli_err, CliError::EncryptionUnsupported));
+        assert_eq!(ExitCode::from(&cli_err), ExitCode::EncryptionUnsupported);
+    }
+
+    /// 他の `UnsupportedYet`（将来の未実装機能）は `CliError::Persistence` に留める。
+    #[test]
+    fn test_from_persistence_other_unsupported_maps_to_persistence() {
+        let pe = PersistenceError::UnsupportedYet {
+            feature: "some other future feature",
+            tracking_issue: None,
+        };
+        let cli_err: CliError = pe.into();
+        assert!(matches!(cli_err, CliError::Persistence(_)));
+        assert_eq!(ExitCode::from(&cli_err), ExitCode::SystemError);
     }
 }
