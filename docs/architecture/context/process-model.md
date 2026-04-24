@@ -25,9 +25,14 @@ flowchart TB
 **設計ルール**:
 
 1. **単一 daemon が真実源**: ホットキー登録・vault 保持・セッションキーキャッシュ（暗号化モード時のみ）・クリップボード操作は全て `shikomi-daemon` の責務。`shikomi-cli` / `shikomi-gui` は**直接 vault を開かない**。IPC 経由でのみ daemon に依頼する
-2. **シングルインスタンス保証**: daemon は起動時に**IPC エンドポイントの先取り**（Unix: UDS `bind` の排他性 / Windows: Named Pipe `FILE_FLAG_FIRST_PIPE_INSTANCE` による排他作成）で**多重起動を拒否**。既に動いていたら新プロセスは fail fast で終了。
-   - **Issue #26 の実装範囲**: 本 Issue ではエンドポイント先取りのみで多重起動拒否を成立させる。UDS/Named Pipe の bind 失敗自体が「既に動いている」と同義で十分 Fail Fast（追加の PID ファイルは stale PID のエッジケース対応で、shikomi の単一ユーザ単一 daemon 前提では付加価値が限定的なため YAGNI）
-   - **後続で追加を検討**: 自動起動 feature（tauri-plugin-autostart 統合）や暗号化モード対応時に、起動診断用の PID ファイル（OS 標準位置、`dirs` crate で解決）＋ advisory ロック（Win: `LockFileEx`、Unix: `flock`）の追加が必要になった時点で検討する。これは `shikomi-infra::persistence::lock::VaultLock`（vault データ側のロック）とは**別層**で、プロセス存在の診断専用
+2. **シングルインスタンス保証**: daemon は起動時に**IPC エンドポイントの先取り**で**多重起動を拒否**する。エンドポイント確保の手順は OS ごとに以下で確定する（UDS の stale socket 非対称性問題に対応）:
+   - **Windows**: Named Pipe を `FILE_FLAG_FIRST_PIPE_INSTANCE` で排他作成。既存インスタンスがある場合 `CreateNamedPipe` が `ERROR_ACCESS_DENIED` 等で失敗し、daemon は exit 非 0 で Fail Fast。プロセス終了時はカーネルがパイプ実体を release するため stale 残留は発生しない
+   - **Unix（Linux / macOS）**: **`flock` advisory lock + unlink-before-bind の併用**で正しく stale socket を除去する。手順は以下の 3 段階（全てが Fail Fast 経路）:
+     1. **ロック獲得**: ソケットディレクトリ配下の **lock ファイル**（`daemon.lock`、`0600`）を `open` → `flock(LOCK_EX | LOCK_NB)` で非ブロック排他ロック。**他 daemon が稼働中なら `EWOULDBLOCK` で即 exit 非 0**（Fail Fast）。`flock` はプロセス終了時にカーネルが自動 release するため、SIGKILL された daemon が残した lock ファイルでも次の起動は必ず獲得できる
+     2. **stale socket の除去**: ロック獲得後にのみ、既存のソケットファイル（`daemon.sock`）を `unlink` で削除（存在しなければ skip、`ENOENT` は無視）。ロックを先に取ることで**他 daemon のソケットを誤って消さない**ことを保証する（race-safe）
+     3. **ソケット作成**: `UnixListener::bind` でソケットを新規作成（`0600`、親ディレクトリ `0700` を事前検証）。bind 成功 = シングルインスタンス確保完了
+   - **Issue #26 の実装範囲**: 上記 3 段階を `shikomi-daemon` に実装する。PID ファイルは作成しない（`flock` 自体が「プロセスが生きている間だけ保持」の排他性を OS カーネルが保証するため、stale PID のエッジケースは原理的に発生しない）
+   - **shikomi-infra との責務分離**: 本機構は `shikomi-infra::persistence::lock::VaultLock`（vault データ側の永続化ロック）とは**別層**。プロセス存在の排他専用で、lock ファイルは daemon ライフサイクルに閉じる
 3. **自動起動**: OS 標準機構を使う。Tauri プラグイン `tauri-plugin-autostart` を第一選択とし、使えない箇所は OS API を直接呼ぶ
    - **Windows**: タスクスケジューラにユーザ領域タスク登録（`schtasks /Create /SC ONLOGON /TN "shikomi-daemon" /TR ...`）。レジストリ Run キーは UAC プロンプトで不利なため避ける
    - **macOS**: `launchd` LaunchAgent（`~/Library/LaunchAgents/dev.shikomi.daemon.plist`）、`launchctl bootstrap gui/$(id -u) <plist>`
@@ -91,8 +96,8 @@ flowchart TB
 
 **認証（なりすまし対策）**:
 
-1. **ピア資格情報検証**: Unix は `SO_PEERCRED`（Linux）/ `LOCAL_PEERCRED`（macOS）で接続元 UID を取得し、daemon 所有者 UID と一致しない接続は即切断。Windows は `GetNamedPipeClientProcessId` → `OpenProcessToken` で接続元のユーザ SID を取得し検証
-2. **セッショントークン**: daemon 起動時に 32 バイトの CSPRNG トークンを生成し、IPC 初回ハンドシェイクで検証（同ユーザ内の他プロセスに対する二重防御）。トークンはソケットと同一の `0700` 権限ファイルに保存、daemon 終了時に削除
+1. **ピア資格情報検証（Issue #26 スコープ内、必須）**: Unix は `SO_PEERCRED`（Linux）/ `LOCAL_PEERCRED`（macOS）で接続元 UID を取得し、daemon 所有者 UID と一致しない接続は即切断。Windows は `GetNamedPipeClientProcessId` → `OpenProcessToken` で接続元のユーザ SID を取得し検証。**本機構は Issue #26 で `shikomi-daemon` に実装され、全 IPC 接続の初回必須検査となる**（ソケット/パイプの `0600`/ owner-only DACL と合わせて、他ユーザからの接続は OS レイヤで拒否されるが、ピア検証はバックアップとして必ず行う）
+2. **セッショントークン（Issue #26 スコープ外、後続 Issue で実装）**: 同ユーザ内の別プロセスに対する**二重防御**として、daemon 起動時に 32 バイト CSPRNG トークンを生成し IPC 初回ハンドシェイクで検証する機構を**将来追加**する。トークンはソケットと同一の `0700` 権限ファイルに保存、daemon 終了時に削除。**本 Issue ではピア資格情報検証のみで所有者プロセス性は保証され、同ユーザ内の悪性プロセス対策は後続 Issue で `IpcProtocolVersion` の `V2` バリアント追加と同時に導入する**（`Handshake { client_version, session_token }` への拡張は `#[non_exhaustive] enum` + フィールド追加で非破壊変更として扱える）。スコープ外理由: Issue #26 の受入基準は「CLI の `--ipc list` が SQLite 直結版と bit 同一の結果を返す」が中心で、同ユーザ内悪性プロセスモデリングは `threat-model.md` の S 脅威で独立に扱われており、本 Issue の実体化範囲を広げずに段階的に強化する
 3. **暗号化は不要**: localhost UDS / Named Pipe は OS のプロセス境界で保護されるため TLS は過剰設計（ただし将来リモート実行をサポートするなら別途再設計）
 
 **通信プロトコル**: MessagePack over length-delimited framed stream（長さプレフィックス **4 バイト LE unsigned** + payload）。JSON は文字列 escape の差異でクロスプラットフォームバグを呼ぶため避ける。スキーマは `shikomi-core::ipc` の型定義で共有（`serde` + `rmp-serde`）。フレーミングは `tokio-util::codec::LengthDelimitedCodec` を採用し、**最大フレーム長 16 MiB を daemon 側で強制**（超過は切断、DoS 対策）。
@@ -105,21 +110,25 @@ flowchart TB
 
 **対応 IPC 操作（Issue #26 の初期サポート）**:
 
-| リクエスト | レスポンス | 備考 |
-|-----------|-----------|------|
-| `IpcRequest::ListRecords` | `IpcResponse::Records(Vec<RecordSummary>)` | `shikomi-cli list` から呼ばれる。`RecordSummary` は `shikomi-core` に配置（機密値フィールドを含まない投影型） |
-| `IpcRequest::AddRecord { kind, label, secret, ... }` | `IpcResponse::Added { id }` | `SecretString` はシリアライズ経路上で `expose_secret()` を**呼ばない設計**（`shikomi-core` 側で `secrecy::SerializableSecret` 相当のマーカーを用意するか、IPC 境界で `SecretBytes` を送る専用 DTO を設ける——詳細は基本設計で決定） |
-| `IpcRequest::EditRecord { id, ... }` | `IpcResponse::Edited` | 既存レコードの部分更新（変更フィールドのみ送信） |
-| `IpcRequest::RemoveRecord { id }` | `IpcResponse::Removed` | id 不在時は `NotFound` エラー variant |
-| `IpcRequest::Handshake { client_version }` | `IpcResponse::Handshake { server_version }` / `ProtocolVersionMismatch` | 接続直後の必須 1 往復 |
+初期サポートは **vault 操作 4 本**（`List` / `Add` / `Edit` / `Remove`）+ **プロトコル制御 1 本**（`Handshake`）の計 5 バリアント。`Handshake` は接続確立時の 1 往復のみで vault 操作ではない（前者が「初期 4 操作」として数える対象、後者は `IpcProtocolVersion` 整合確認の制御フレーム）。
+
+| 区分 | リクエスト | レスポンス | 備考 |
+|------|-----------|-----------|------|
+| プロトコル制御 | `IpcRequest::Handshake { client_version }` | `IpcResponse::Handshake { server_version }` / `ProtocolVersionMismatch` | 接続直後の必須 1 往復。**session token は Issue #26 スコープ外**（認証§参照）。将来 `V2` で `session_token` フィールドを追加する際は `IpcProtocolVersion` バリアント追加と同時に行う非破壊変更 |
+| vault 操作 (1/4) | `IpcRequest::ListRecords` | `IpcResponse::Records(Vec<RecordSummary>)` | `shikomi-cli list` から呼ばれる。`RecordSummary` は `shikomi-core` に配置（機密値フィールドを含まない投影型） |
+| vault 操作 (2/4) | `IpcRequest::AddRecord { kind, label, secret, ... }` | `IpcResponse::Added { id }` | `SecretString` はシリアライズ経路上で `expose_secret()` を**呼ばない設計**（`shikomi-core` 側で `secrecy::SerializableSecret` 相当のマーカーを用意するか、IPC 境界で `SecretBytes` を送る専用 DTO を設ける——詳細は基本設計で決定） |
+| vault 操作 (3/4) | `IpcRequest::EditRecord { id, ... }` | `IpcResponse::Edited` | 既存レコードの部分更新（変更フィールドのみ送信） |
+| vault 操作 (4/4) | `IpcRequest::RemoveRecord { id }` | `IpcResponse::Removed` | id 不在時は `NotFound` エラー variant |
 
 **Fail Fast**:
 - ピア資格情報検証失敗 → 即切断、`tracing::warn!` でログ
-- トークンミスマッチ → 3 回連続失敗でそのソケットを閉じ、再生成
 - ソケット／パイプのパーミッション異常検出 → daemon 起動拒否
+- シングルインスタンス先取り失敗（flock 獲得不能 / bind 失敗 / Named Pipe 作成失敗） → exit 非 0
 - プロトコルバージョン不一致 → `ProtocolVersionMismatch` 返送 → 切断
 - フレーム長上限超過 → 切断（部分読込で確保したバッファは即解放、`tracing::warn!` 記録）
 - MessagePack デコード失敗 → 該当コネクションのみ切断。**daemon プロセスはクラッシュさせない**（graceful degradation、`tracing::warn!` 記録、他クライアントへの影響ゼロ）
+
+> **注記**: 旧ドラフトに存在した「トークンミスマッチ 3 回連続失敗」記述は、session token が Issue #26 スコープ外となったため削除した。session token 導入時（後続 Issue）に Fail Fast 条件として再追加する。
 
 ### 4.3 vault 保護モードと鍵キャッシュ戦略
 
