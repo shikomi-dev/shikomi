@@ -176,6 +176,34 @@ flowchart LR
 - RFC 5869 "HKDF: HMAC-based Extract-and-Expand Key Derivation Function": https://www.rfc-editor.org/rfc/rfc5869
 - OWASP Authentication Cheat Sheet（リカバリコード方針）: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
 
+### 2.5 開発ワークフロー（Git フック / タスクランナー）
+
+**適用範囲**: 本節は **開発者ローカル環境と GitHub Actions ランナー**でのみ使用するツールの選定を扱う。配布バイナリ（`shikomi-cli` / `shikomi-daemon` / `shikomi-gui` / `shikomi-core` / `shikomi-infra`）には一切同梱されない。`[workspace.dependencies]` / `dev-dependencies` への追加もしない（§4.5 / §4.6 のリストに登場しない）。
+
+**選定方針の出発点**（`docs/features/dev-workflow/requirements-analysis.md` §背景・目的）:
+
+- **CI を最後の砦に置く**: ローカルで fmt / clippy / test / audit を強制し、CI は `--no-verify` バイパス検知の再実行役として機能させる
+- **clone 直後から最短手順で有効化**: `git clone` 後に `scripts/setup.{sh,ps1}` を 1 回実行するのみで、以後の `git commit` / `git push` は自動検証
+- **ローカル / CI で単一実行経路**: フック定義・CI ワークフロー・開発者手動実行が**同一 `just <recipe>`** を参照し DRY を成立させる
+
+| 要素 | 候補 | 採用 | 根拠 |
+|-----|------|------|------|
+| Git フックマネージャ | `cargo-husky` / `pre-commit` framework (Python) / `lefthook` / `core.hooksPath` + 生シェル / `rusty-hook` / `build.rs` 方式 | **`lefthook`** | `cargo-husky` と `rusty-hook` は「`cargo test` 初回実行で `.git/hooks/` に書き込む」設計で clone 直後要件に不適合。`pre-commit` は Python ランタイム依存で Windows 開発者のノイズ増。`core.hooksPath` + 生シェルは CRLF / 実行ビット / POSIX 互換シェル依存の罠が多く、並列化を自前実装するコストが生じる。`build.rs` 方式は `cargo check`/IDE/CI が暗黙に叩くたびに git config を書換える副作用で Fail Fast 原則違反。`lefthook` は Go 製単一バイナリで Windows ネイティブ対応、YAML 設定、pre-commit / pre-push / commit-msg を一元管理、**`parallel: true`** で fmt-check / clippy / audit-secrets を同時実行可能<br/>**注意**: `lefthook` は **crates.io 非配布** のため `cargo install --locked lefthook` は実行不能。GitHub Releases の公式バイナリを取得し SHA256 を setup スクリプトのピン定数と照合して配置する（`docs/features/dev-workflow/detailed-design.md` §lefthook / gitleaks の配布経路と SHA256 検証）<br/>出典: https://lefthook.dev/ / https://github.com/evilmartians/lefthook / https://github.com/evilmartians/lefthook/releases |
+| タスクランナー | `just`（`justfile`）/ `Makefile` / `cargo xtask` / `npm scripts` | **`just`** | `Makefile` は Windows ネイティブで動かない（GNU Make 別途必要）。`cargo xtask` は別 crate 追加のメンテコスト + 起動時に Rust コンパイルが走り setup / フック / CI の呼び出しごとに秒単位の遅延。`npm scripts` は Node.js 依存を開発必須化し、shikomi のコア技術スタック（Rust）外。`just` は Rust 製単一バイナリ、Windows ネイティブ、**`cargo install --locked just`** で統一導入可能、`just --list` で全レシピを 1 行説明つきで自動列挙<br/>出典: https://just.systems/ / https://github.com/casey/just |
+| コミットメッセージ検査 | `commitlint` (Node.js) / 生正規表現シェル / `convco` | **`convco`** | `commitlint` は Node.js 依存で上記同様スタック外。生正規表現は BREAKING CHANGE footer や Conventional Commits 1.0 の表記ゆれ（`feat!:` / `BREAKING CHANGE:` footer など）を網羅しにくい。`convco` は Rust 製で **`cargo install --locked convco`** により統一導入可、Conventional Commits 1.0 に準拠。commit-msg フックからは `convco check-message <file>` を呼ぶ<br/>出典: https://github.com/convco/convco / https://www.conventionalcommits.org/ja/v1.0.0/ |
+| Secret 検知ツール | `gitleaks` / `trufflehog` / 正規表現自前 / 無対策 | **`gitleaks` + shikomi 独自 `audit-secret-paths.sh` の 2 本立て** | `gitleaks` は業界標準の汎用 secret スキャナで Go 製、`protect --staged` サブコマンドで pre-commit から staged 差分のみを高速検査可能。`trufflehog` は機能競合だが CI 統合の多様性と Go バイナリ導入の重さで差が小さく、先行採用の大きいほう（gitleaks）を選択。shikomi 独自契約（TC-CI-012〜015: `expose_secret` / panic hook / `SqliteVaultRepository` 参照）は `scripts/ci/audit-secret-paths.sh` で静的検証し、こちらは本 feature で改変禁止（引き回し専用）<br/>**配布**: gitleaks も crates.io 非配布のため、lefthook と同じく GitHub Releases + SHA256 検証経路で setup<br/>出典: https://github.com/gitleaks/gitleaks / https://github.com/gitleaks/gitleaks/releases |
+| セットアップ自動化方式 | `build.rs` / `cargo xtask setup` / `scripts/setup.{sh,ps1}` / Git template directory | **`scripts/setup.{sh,ps1}` の 2 本** | `build.rs` は上記の副作用問題、`cargo xtask setup` は別 crate overhead と初回コンパイル時間、Git template directory（`init.templateDir`）は clone 前に事前設定が必要で「新規参画者 / エージェントが即使える」要件に逆行。`scripts/setup.sh`（bash）+ `scripts/setup.ps1`（**PowerShell 7+ 必須**）は Rust toolchain 前提環境で `cargo install --locked`（just / convco）+ GitHub Releases バイナリ取得 & SHA256 検証（lefthook / gitleaks）+ `lefthook install` を冪等に実行するのみで KISS。Windows 5.1 は `setup.ps1` 冒頭で Fail Fast し `winget install Microsoft.PowerShell` を案内 |
+| インストール指定 | `cargo install --locked`（Rust 製）/ GitHub Releases + SHA256 検証（Go 製）/ 各 OS パッケージマネージャ（brew / scoop / apt） | **Rust 製は `cargo install --locked`、Go 製は GitHub Releases + SHA256 ピン検証（setup 内統一）** | `--locked` で配布 crate 側の `Cargo.lock` を使い依存解決を固定し再現性を担保（`--locked` なしは最新依存へ解決し直し毎回異なるバイナリになりうる）。Go 製は crates.io 非配布のため `curl -sSfL` + `sha256sum` / `Get-FileHash` による改ざん検知（A02 / A08 / T4 脅威対策）。OS パッケージマネージャ併用は 3 OS × 4 ツールで 12 経路になり README が肥大化。Rust toolchain 前提環境では Rust 製は `cargo install`、Go 製はリリースバイナリ直配置で一本化<br/>出典: https://doc.rust-lang.org/cargo/commands/cargo-install.html |
+| CI ワークフロー呼び出し | 直接 `cargo ...` を `run:` に列挙 / `just <recipe>` 経由 | **`just <recipe>` 経由（`cargo-deny-action` も廃止し `just audit` に統一）** | DRY: ローカルフック / 手動 / CI の 3 経路が完全一致。`justfile` 1 ファイル変更で 3 経路へ同時反映。`audit.yml` の `EmbarkStudios/cargo-deny-action@v2` は **廃止確定**、`cargo install --locked cargo-deny` → `just audit` に統一（`docs/features/dev-workflow/detailed-design.md` §確定 B） |
+| `--no-verify` バイパス対策 | サーバ側フック（GitHub で未提供）/ CI 再実行 / pre-receive hook 有料プラン | **CI 再実行による最終検知 + 履歴書換え運用（`git filter-repo`）** | GitHub 無料プランは pre-receive hook を提供しない。**CI が同一 `just <recipe>` を再実行**することで `--no-verify` でバイパスしたコミットも必ず落ちる。secret が push 済みになった場合は `git filter-repo` による履歴書換えと即 revoke を CONTRIBUTING.md §Secret 混入時の緊急対応に明記<br/>出典: https://github.com/newren/git-filter-repo |
+| 開発ワークフロー設定の保護 | `.github/CODEOWNERS` / branch protection のみ / 無対策 | **CODEOWNERS で 5 パス保護** | `/lefthook.yml` / `/justfile` / `/scripts/setup.sh` / `/scripts/setup.ps1` / `/scripts/ci/` を CODEOWNERS に登録し、検知スキップ目的の改変 PR を機械的に遮断（T5 / T8 脅威対策） |
+
+**セキュリティ境界（サプライチェーン）**:
+
+- `just` / `convco` は Rust 製で `cargo install --locked` 経路、`lefthook` / `gitleaks` は Go 製で GitHub Releases + SHA256 検証経路。いずれも**開発者ローカル環境と CI ランナーのみ**で動く。配布バイナリには混入しない。よって §4.3.2 「暗号クリティカル crate ignore 禁止リスト」とは独立な領域
+- ただし `cargo install --locked` での crates.io 配布物のサプライチェーン監査は、将来 `cargo-deny` のポリシーを `deny.toml` で別途定義するか、`cargo vet` の導入を Sub-issue A 完了後に検討する（現時点では YAGNI）
+- GitHub Releases からのバイナリ配置は setup スクリプト内にピンされた SHA256 定数で完全性検証。バージョン更新は PR 差分で明示され CODEOWNERS レビュー必須
+
 ## 3. プラットフォーム差分の扱い（アーキテクチャ方針）
 
 - `shikomi-core` は `no_std` 志向ではないが **I/O を持たない純粋ドメイン**とする
