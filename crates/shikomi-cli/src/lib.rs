@@ -271,22 +271,48 @@ fn run_edit(
         None => None,
     };
 
-    // value の取得。`--value` と `--stdin` の相互排他も `resolve_*` 側でチェック。
-    // edit では kind 非指定のため、非エコー入力（secret 用）は選ばない（通常 readline）。
-    let value = if args.value.is_some() || args.stdin {
+    // 既存 kind を事前 load で取得（value 入力時の非エコー判定 + shell 履歴警告に使う）。
+    // 設計書 composition-root.md §run_edit L59-62: 「値取得は run_add と同様（kind に応じて
+    // `read_password` / `read_line`）」「警告判定は load 後の既存 kind と照合するかは実装時判断」
+    // ここでは load 2 回を許容して既存 kind を参照する（run_remove と同方針、ペテルギウス指摘
+    // ①への対応）。load 失敗は Fail Fast（`?` でユーザに伝搬）。
+    let needs_value_input = args.value.is_some() || args.stdin;
+    let existing_kind = if needs_value_input {
+        if !repo.exists()? {
+            return Err(CliError::VaultNotInitialized(vault_dir.to_path_buf()));
+        }
+        let vault = repo.load()?;
+        if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
+            return Err(CliError::EncryptionUnsupported);
+        }
+        Some(
+            vault
+                .find_record(&id)
+                .map(shikomi_core::Record::kind)
+                .ok_or_else(|| CliError::RecordNotFound(id.clone()))?,
+        )
+    } else {
+        None
+    };
+
+    let value = if needs_value_input {
+        // 既存が Secret ならエコーしない、Text なら通常 readline。
+        // `--value` と `--stdin` の相互排他は resolve_secret_value 側で検出。
+        let kind_for_input = existing_kind.unwrap_or(RecordKind::Text);
         Some(resolve_secret_value(
             args.value.as_deref(),
             args.stdin,
-            // edit では既存 kind が不明なので Text 扱い（非エコーしない）で統一
-            RecordKind::Text,
+            kind_for_input,
         )?)
     } else {
         None
     };
 
-    // shell 履歴警告は add と同条件（`--value` かつ Secret kind）で判定できないため、edit では警告しない
-    // （既存 kind を load する副作用を避ける方針、composition-root.md §run_edit）
-    let _ = locale; // 将来警告追加時に利用
+    // shell 履歴警告: 既存 kind が Secret で `--value` 直接指定（= shell 履歴残留リスク）なら警告
+    if matches!(existing_kind, Some(RecordKind::Secret)) && args.value.is_some() {
+        let warning = presenter::warning::render_shell_history_warning(locale);
+        eprint_stderr(&warning);
+    }
 
     let input = EditInput {
         id: id.clone(),
@@ -316,12 +342,19 @@ fn run_remove(
     let confirmed = if args.yes {
         true
     } else if io::terminal::is_stdin_tty() {
-        // プロンプト表示用の label を取得するために load して find_record
-        let label = repo
-            .load()
-            .map_err(CliError::from)
-            .ok()
-            .and_then(|v| v.find_record(&id).map(|r| r.label().as_str().to_owned()));
+        // プロンプト表示用の label を取得するために load して find_record。
+        // load 失敗は Fail Fast で return（`.ok()` で握り潰さない — ペテルギウス指摘②）。
+        // これによりユーザは「load に失敗したのに y を押してしまう」欺き構造を踏まない。
+        if !repo.exists()? {
+            return Err(CliError::VaultNotInitialized(vault_dir.to_path_buf()));
+        }
+        let vault = repo.load()?;
+        if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
+            return Err(CliError::EncryptionUnsupported);
+        }
+        let label = vault
+            .find_record(&id)
+            .map(|r| r.label().as_str().to_owned());
         let prompt = presenter::prompt::render_remove_prompt(&id, label.as_deref(), locale);
         match io::terminal::read_line(&prompt) {
             Ok(line) => matches!(line.trim(), "y" | "Y"),
