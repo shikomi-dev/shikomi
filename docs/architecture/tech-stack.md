@@ -176,6 +176,31 @@ flowchart LR
 - RFC 5869 "HKDF: HMAC-based Extract-and-Expand Key Derivation Function": https://www.rfc-editor.org/rfc/rfc5869
 - OWASP Authentication Cheat Sheet（リカバリコード方針）: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
 
+### 2.5 開発ワークフロー（Git フック / タスクランナー）
+
+**適用範囲**: 本節は **開発者ローカル環境と GitHub Actions ランナー**でのみ使用するツールの選定を扱う。配布バイナリ（`shikomi-cli` / `shikomi-daemon` / `shikomi-gui` / `shikomi-core` / `shikomi-infra`）には一切同梱されない。`[workspace.dependencies]` / `dev-dependencies` への追加もしない（§4.5 / §4.6 のリストに登場しない）。
+
+**選定方針の出発点**（`docs/features/dev-workflow/requirements-analysis.md` §背景・目的）:
+
+- **CI を最後の砦に置く**: ローカルで fmt / clippy / test / audit を強制し、CI は `--no-verify` バイパス検知の再実行役として機能させる
+- **clone 直後から最短手順で有効化**: `git clone` 後に `scripts/setup.{sh,ps1}` を 1 回実行するのみで、以後の `git commit` / `git push` は自動検証
+- **ローカル / CI で単一実行経路**: フック定義・CI ワークフロー・開発者手動実行が**同一 `just <recipe>`** を参照し DRY を成立させる
+
+| 要素 | 候補 | 採用 | 根拠 |
+|-----|------|------|------|
+| Git フックマネージャ | `cargo-husky` / `pre-commit` framework (Python) / `lefthook` / `core.hooksPath` + 生シェル / `rusty-hook` / `build.rs` 方式 | **`lefthook`** | `cargo-husky` と `rusty-hook` は「`cargo test` 初回実行で `.git/hooks/` に書き込む」設計で clone 直後要件に不適合。`pre-commit` は Python ランタイム依存で Windows 開発者のノイズ増。`core.hooksPath` + 生シェルは CRLF / 実行ビット / POSIX 互換シェル依存の罠が多く、並列化を自前実装するコストが生じる。`build.rs` 方式は `cargo check`/IDE/CI が暗黙に叩くたびに git config を書換える副作用で Fail Fast 原則違反。`lefthook` は Go 製単一バイナリで Windows ネイティブ対応、YAML 設定、pre-commit / pre-push / commit-msg を一元管理、**`parallel: true`** で fmt-check と clippy を同時実行可能<br/>出典: https://lefthook.dev/ / https://github.com/evilmartians/lefthook |
+| タスクランナー | `just`（`justfile`）/ `Makefile` / `cargo xtask` / `npm scripts` | **`just`** | `Makefile` は Windows ネイティブで動かない（GNU Make 別途必要）。`cargo xtask` は別 crate 追加のメンテコスト + 起動時に Rust コンパイルが走り setup / フック / CI の呼び出しごとに秒単位の遅延。`npm scripts` は Node.js 依存を開発必須化し、shikomi のコア技術スタック（Rust）外。`just` は Rust 製単一バイナリ、Windows ネイティブ、`cargo install --locked just` で統一導入可能、`just --list` で全レシピを 1 行説明つきで自動列挙<br/>出典: https://just.systems/ / https://github.com/casey/just |
+| コミットメッセージ検査 | `commitlint` (Node.js) / 生正規表現シェル / `convco` | **`convco`** | `commitlint` は Node.js 依存で上記同様スタック外。生正規表現は BREAKING CHANGE footer や Conventional Commits 1.0 の表記ゆれ（`feat!:` / `BREAKING CHANGE:` footer など）を網羅しにくい。`convco` は Rust 製で `cargo install --locked convco` により統一導入可、Conventional Commits 1.0 に準拠<br/>出典: https://github.com/convco/convco / https://www.conventionalcommits.org/ja/v1.0.0/ |
+| セットアップ自動化方式 | `build.rs` / `cargo xtask setup` / `scripts/setup.{sh,ps1}` / Git template directory | **`scripts/setup.{sh,ps1}` の 2 本** | `build.rs` は上記の副作用問題、`cargo xtask setup` は別 crate overhead と初回コンパイル時間、Git template directory（`init.templateDir`）は clone 前に事前設定が必要で「新規参画者 / エージェントが即使える」要件に逆行。`scripts/setup.sh`（bash）+ `scripts/setup.ps1`（PowerShell 5.1+/7+）は Rust toolchain 前提環境で `cargo install --locked` + `lefthook install` を冪等に実行するのみで KISS |
+| インストール指定 | `cargo install` / `cargo install --locked` / 各 OS パッケージマネージャ（brew / scoop / apt） | **`cargo install --locked`（setup 内統一）** | `--locked` で配布 crate 側の `Cargo.lock` を使い、依存解決を固定して再現性を担保（`--locked` なしは最新依存へ解決し直し毎回異なるバイナリになりうる）。OS パッケージマネージャ併用は 3 OS × 3 ツールで 9 経路になり README が肥大化。Rust toolchain 前提環境では `cargo install` 一本化が最短。セットアップ途中のキャンセル耐性は `set -euo pipefail` / `$ErrorActionPreference = 'Stop'` で Fail Fast<br/>出典: https://doc.rust-lang.org/cargo/commands/cargo-install.html |
+| CI ワークフロー呼び出し | 直接 `cargo ...` を `run:` に列挙 / `just <recipe>` 経由 | **`just <recipe>` 経由** | DRY: ローカルフック / 手動 / CI の 3 経路が完全一致。`justfile` 1 ファイル変更で 3 経路へ同時反映。`audit.yml` の `EmbarkStudios/cargo-deny-action@v2` は Sub-issue A の実装時に `just audit`（`cargo deny check ...` を直接呼ぶ）へ統一するか action 継続かを比較判定する（Sub-issue A の PR で根拠記録） |
+| `--no-verify` バイパス対策 | サーバ側フック（GitHub で未提供）/ CI 再実行 / pre-receive hook 有料プラン | **CI 再実行による最終検知** | GitHub 無料プランは pre-receive hook を提供しない。**CI が同一 `just <recipe>` を再実行**することで `--no-verify` でバイパスしたコミットも必ず落ちる。併せて CONTRIBUTING.md で「原則禁止、PR 本文に理由明記」と規約化 |
+
+**セキュリティ境界（サプライチェーン）**:
+
+- `just` / `lefthook` / `convco` は **開発者ローカル環境と CI ランナーのみ**で動く。配布バイナリには混入しない。よって §4.3.2 「暗号クリティカル crate ignore 禁止リスト」とは独立な領域
+- ただし `cargo install --locked` での crates.io 配布物のサプライチェーン監査は、将来 `cargo-deny` のポリシーを `deny.toml` で別途定義するか、`cargo vet` の導入を Sub-issue A 完了後に検討する（現時点では YAGNI）
+
 ## 3. プラットフォーム差分の扱い（アーキテクチャ方針）
 
 - `shikomi-core` は `no_std` 志向ではないが **I/O を持たない純粋ドメイン**とする
