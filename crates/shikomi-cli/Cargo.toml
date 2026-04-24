@@ -6,9 +6,40 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# lib + bin の 2 ターゲット構成
+# - lib: UseCase / Presenter 等の内部公開 Rust API を提供。結合テスト（tests/）から直接呼び出す目的
+# - bin: `shikomi_cli::run()` を呼ぶ 3 行ラッパ。コンポジションルートは lib 側
+# 設計根拠: docs/features/cli-vault-commands/detailed-design/public-api.md §前提: crate 構成
+[lib]
+name = "shikomi_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shikomi"
 path = "src/main.rs"
+
+[dependencies]
+shikomi-core  = { workspace = true }
+shikomi-infra = { workspace = true }
+clap          = { workspace = true }
+anyhow        = { workspace = true }
+is-terminal   = { workspace = true }
+rpassword     = { workspace = true }
+time          = { workspace = true }
+uuid          = { workspace = true }
+tracing       = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror     = { workspace = true }
+dirs          = { workspace = true }
+
+[dev-dependencies]
+tempfile      = { workspace = true }
+assert_cmd    = { workspace = true }
+predicates    = { workspace = true }
+serial_test   = { workspace = true }
+# 暗号化 vault フィクスチャ helper (tests/common/fixtures.rs) で SQLite を直接書き出すため。
+# CLI 本体は rusqlite を参照しない（`shikomi-infra` 経由）。本依存はテスト限定。
+rusqlite      = { workspace = true }
 
 [lints]
 workspace = true

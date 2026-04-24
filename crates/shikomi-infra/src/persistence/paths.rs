@@ -7,6 +7,31 @@ use std::path::{Component, Path, PathBuf};
 use super::error::{PersistenceError, VaultDirReason};
 
 // -------------------------------------------------------------------
+// vault dir 解決ヘルパ（crate 内部のみ）
+// -------------------------------------------------------------------
+
+/// `SHIKOMI_VAULT_DIR` 環境変数 → OS データディレクトリ直下の `shikomi/` の順で
+/// vault ディレクトリパスを解決する。
+///
+/// `SqliteVaultRepository::new()` の後方互換ラッパ用。新規の CLI / GUI コードは
+/// 本関数ではなく `SqliteVaultRepository::from_directory(&Path)` を直接使うこと
+/// （env 解決の真実源は clap attribute 側に寄せる、
+/// `docs/features/cli-vault-commands/detailed-design/infra-changes.md §変更 2`）。
+///
+/// # Errors
+/// `dirs::data_dir()` が `None` かつ `SHIKOMI_VAULT_DIR` 未設定の場合
+/// `PersistenceError::CannotResolveVaultDir` を返す。
+pub(crate) fn resolve_os_default_or_env() -> Result<PathBuf, PersistenceError> {
+    if let Ok(val) = std::env::var(ENV_VAR_VAULT_DIR) {
+        Ok(PathBuf::from(val))
+    } else {
+        dirs::data_dir()
+            .ok_or(PersistenceError::CannotResolveVaultDir)
+            .map(|base| base.join(APP_SUBDIR_NAME))
+    }
+}
+
+// -------------------------------------------------------------------
 // 定数
 // -------------------------------------------------------------------
 

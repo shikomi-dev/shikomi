@@ -245,3 +245,82 @@ fn test_record_rehydrate_truncates_subsecond_to_microseconds() {
         "切り捨て後も updated_at >= created_at を保持すべき"
     );
 }
+
+// --- text_preview の挙動検証（cli-vault-commands feature 用アクセサ） ---
+
+#[test]
+fn test_text_preview_text_kind_returns_prefix() {
+    let record = Record::new(
+        make_id(),
+        RecordKind::Text,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Plaintext(SecretString::from_string("hello world".to_string())),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(5), Some("hello".to_string()));
+}
+
+#[test]
+fn test_text_preview_max_chars_zero_returns_empty_string() {
+    let record = Record::new(
+        make_id(),
+        RecordKind::Text,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(0), Some(String::new()));
+}
+
+#[test]
+fn test_text_preview_max_chars_exceeds_length_returns_whole_string() {
+    let record = Record::new(
+        make_id(),
+        RecordKind::Text,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Plaintext(SecretString::from_string("abc".to_string())),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(100), Some("abc".to_string()));
+}
+
+#[test]
+fn test_text_preview_multibyte_char_unit_truncation() {
+    // 先頭 3 char を取る。grapheme ではなく char 単位なので "あいう" が返る。
+    let record = Record::new(
+        make_id(),
+        RecordKind::Text,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Plaintext(SecretString::from_string("あいうえお".to_string())),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(3), Some("あいう".to_string()));
+}
+
+#[test]
+fn test_text_preview_secret_kind_returns_none() {
+    let record = Record::new(
+        make_id(),
+        RecordKind::Secret,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Plaintext(SecretString::from_string("super-secret".to_string())),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(10), None);
+}
+
+#[test]
+fn test_text_preview_encrypted_variant_returns_none() {
+    let nonce = NonceBytes::try_new(&[0u8; 12]).unwrap();
+    let ciphertext = CipherText::try_new(vec![0u8; 32].into_boxed_slice()).unwrap();
+    let aad = make_aad();
+    let enc = RecordPayloadEncrypted::new(nonce, ciphertext, aad).unwrap();
+    let record = Record::new(
+        make_id(),
+        RecordKind::Text,
+        RecordLabel::try_new("l".to_string()).unwrap(),
+        RecordPayload::Encrypted(enc),
+        OffsetDateTime::UNIX_EPOCH,
+    );
+    assert_eq!(record.text_preview(10), None);
+}

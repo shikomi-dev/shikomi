@@ -305,3 +305,19 @@ flowchart LR
 - `std::time::SystemTime`（タイムゾーン非対応）
 - `anyhow` / `eyre`（動的エラー型、呼び出し側がエラー種別で分岐できない）
 - `async_trait` / `tokio` 等の非同期ランタイム（`shikomi-core` は同期のみ、async は境界層で委譲）
+
+### 4.6 `shikomi-cli` 層で追加する crate（feature `cli-vault-commands` で導入）
+
+Phase 1 CLI（`list` / `add` / `edit` / `remove`）の実装に伴い `[workspace.dependencies]` へ以下を追加する。`shikomi-core` とは独立した上位層の依存であり、ドメイン層へは波及させない。
+
+| 用途 | 採用 crate | バージョン方針 | 根拠 |
+|-----|---------|-------------|------|
+| CLI パーサ | `clap`（feature `derive` / `env` / `wrap_help`） | major ピン（v4） | §2.1 CLI パーサ行の既定採用。`env` feature で `SHIKOMI_VAULT_DIR` の吸収を clap に一任し、アプリ層で `std::env::var` を重ねて呼ばない（真実源の二重化防止） |
+| アプリ層エラー包み | `anyhow` | major ピン（v1） | `shikomi-core` ドメインエラーは `thiserror` で厳密な型表現を維持しつつ、CLI / 将来のアプリ層で扱う上位の総合エラーは `anyhow` でラップする。`shikomi-core` では採用禁止（§4.5）、CLI 層限定 |
+| TTY 判定 | `is-terminal`（feature なし、v0.4 系） | minor ピン | stdin/stdout の TTY 判定に使用。MSRV 1.80 では `std::io::IsTerminal` が利用可能だが、テスト差し替え容易性のため crate 経由を採用 |
+| 非エコー stdin 入力 | `rpassword` | major ピン（v7） | secret 値入力時の非エコー読取。Unix `termios` / Windows `SetConsoleMode` を薄くラップする業界標準 |
+| tracing init | `tracing-subscriber`（feature `fmt` / `env-filter`） | minor ピン | CLI 起動時に `tracing` subscriber を初期化するため（ログ出力の標準化、RUST_LOG 連携）。`shikomi-core` / `shikomi-infra` 側は `tracing` マクロのみ使用し subscriber 選定は bin 側に任せる |
+| E2E プロセス起動 | `assert_cmd`（dev-dep） | major ピン（v2） | `crates/shikomi-cli/tests/e2e_*.rs` でサブプロセス起動 + stdout / stderr / exit code 検証 |
+| `assert_cmd` 補助 | `predicates`（dev-dep） | major ピン（v3） | `assert_cmd` の assertion 記述で併用する業界標準 |
+
+**CI との連携**: 本 feature の契約（`SecretString::expose_secret()` を `shikomi-cli/src/` 内で呼ばない / panic hook で `tracing::*` を呼ばず payload を参照しない）は `scripts/ci/audit-secret-paths.sh` で静的検証する（`TC-CI-012〜015`）。audit ワークフロー（`.github/workflows/audit.yml`）に組込み済み。

@@ -60,6 +60,12 @@ skip = [
     # getrandom 0.2.x は uuid 1.x の依存。0.4.x は wit-bindgen 経由の新規依存。
     # Issue #7/#10 で導入。バージョン更新時に再評価すること。
     { name = "getrandom", version = "0.2" },
+    # rustix / linux-raw-sys は `fs4` 0.9（shikomi-infra）が旧系（rustix 0.38 / linux-raw-sys 0.4）、
+    # `tempfile` 3.x / `clap` 4.x などの新しい依存が新系（rustix 1.x / linux-raw-sys 0.12）を
+    # 引くため共存する。Issue #20（cli-vault-commands 実装）で顕在化。
+    # `fs4` が rustix 1.x に追従次第、両エントリとも削除して重複解消する。
+    { name = "rustix", version = "0.38" },
+    { name = "linux-raw-sys", version = "0.4" },
 ]
 skip-tree = []
 

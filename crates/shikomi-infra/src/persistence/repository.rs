@@ -1,6 +1,6 @@
 //! `SqliteVaultRepository` — `VaultRepository` の SQLite 実装。
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags};
@@ -33,14 +33,22 @@ impl SqliteVaultRepository {
     /// - vault ディレクトリの解決失敗: `PersistenceError::CannotResolveVaultDir`
     /// - ディレクトリ検証失敗: `PersistenceError::InvalidVaultDir`
     pub fn new() -> Result<Self, PersistenceError> {
-        let dir = if let Ok(val) = std::env::var(paths::ENV_VAR_VAULT_DIR) {
-            PathBuf::from(val)
-        } else {
-            dirs::data_dir()
-                .ok_or(PersistenceError::CannotResolveVaultDir)?
-                .join(paths::APP_SUBDIR_NAME)
-        };
-        let paths = VaultPaths::new(dir)?;
+        let dir = paths::resolve_os_default_or_env()?;
+        Self::from_directory(&dir)
+    }
+
+    /// 明示的な vault ディレクトリ path を受け取って `SqliteVaultRepository` を構築する。
+    ///
+    /// 呼び出し側（CLI / GUI）で `--vault-dir` フラグ等を thread-safe に渡すためのエントリポイント。
+    /// `std::env` を一切参照しない。
+    ///
+    /// # Errors
+    ///
+    /// - ディレクトリ検証失敗（絶対パス / path traversal / symlink / 保護領域 / 非ディレクトリ等）:
+    ///   `PersistenceError::InvalidVaultDir`
+    /// - `fs::canonicalize` 失敗: `PersistenceError::InvalidVaultDir { reason: Canonicalize }`
+    pub fn from_directory(path: &Path) -> Result<Self, PersistenceError> {
+        let paths = VaultPaths::new(path.to_path_buf())?;
         Ok(Self { paths })
     }
 
