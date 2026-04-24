@@ -174,4 +174,25 @@ impl Record {
         self.updated_at = ts;
         Ok(self)
     }
+
+    /// Text レコードの平文プレビュー（先頭 `max_chars` char）を返す。
+    ///
+    /// - `RecordKind::Text` かつ `RecordPayload::Plaintext(SecretString)` のとき `Some(先頭 N char)`
+    /// - それ以外（`Secret` kind / `Encrypted` variant）は `None`
+    ///
+    /// `SecretString::expose_secret()` は本関数内で完結する（`shikomi-cli` から呼ばせないための
+    /// 集約側 read-only アクセサ。`docs/features/cli-vault-commands/basic-design/security.md
+    /// §expose_secret 経路監査` 参照）。grapheme 境界は考慮せず char 単位で切る（CLI プレビュー用途）。
+    ///
+    /// 境界: `max_chars == 0` は `Some("".to_owned())` を返す。`max_chars` が文字列長を超える
+    /// 場合は全文を返す。
+    #[must_use]
+    pub fn text_preview(&self, max_chars: usize) -> Option<String> {
+        match (self.kind, &self.payload) {
+            (RecordKind::Text, RecordPayload::Plaintext(secret)) => {
+                Some(secret.expose_secret().chars().take(max_chars).collect())
+            }
+            _ => None,
+        }
+    }
 }

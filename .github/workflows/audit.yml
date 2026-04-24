@@ -21,3 +21,6 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories licenses bans sources
+
+      - name: Secret path audit (TC-CI-012/013/014/015)
+        run: bash scripts/ci/audit-secret-paths.sh
