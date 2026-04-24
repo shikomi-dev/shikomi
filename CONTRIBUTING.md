@@ -5,10 +5,13 @@
 1. [はじめに](#はじめに)
 2. [ブランチ戦略（GitFlow）](#ブランチ戦略gitflow)
 3. [コミット規約（Conventional Commits）](#コミット規約conventional-commits)
-4. [マージ戦略](#マージ戦略)
-5. [PR 規約](#pr-規約)
-6. [開発環境セットアップ](#開発環境セットアップ)
-7. [コーディング規約](#コーディング規約)
+4. [AI 生成フッターの禁止](#ai-生成フッターの禁止)
+5. [マージ戦略](#マージ戦略)
+6. [PR 規約](#pr-規約)
+7. [開発環境セットアップ](#開発環境セットアップ)
+8. [ローカル品質ゲート（lefthook / just）](#ローカル品質ゲートlefthook--just)
+9. [Secret 混入時の緊急対応](#secret-混入時の緊急対応)
+10. [コーディング規約](#コーディング規約)
 
 ---
 
@@ -119,6 +122,32 @@ BREAKING CHANGE: vault format v1 is no longer supported
 
 ---
 
+## AI 生成フッターの禁止
+
+コミットメッセージには、AI コーディングアシスタント（Claude Code / ChatGPT / Copilot 等）が挿入する**自動署名 trailer / 広告フッターを一切含めない**。`commit-msg` フック（`just commit-msg-no-ai-footer`）が以下 3 パターンを検出し、該当時はコミットを中止します。
+
+| # | 検出パターン（case-insensitive ERE） | 例 |
+|---|----------------------------------|-----|
+| P1 | `🤖.*Generated with.*Claude` | `🤖 Generated with [Claude Code](https://claude.com/claude-code)` |
+| P2 | `Co-Authored-By:.*@anthropic\.com` | `Co-Authored-By: Claude <noreply@anthropic.com>` |
+| P3 | `Co-Authored-By:.*\bClaude\b` | `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>` |
+
+### なぜ禁止するか
+
+- 履歴純度: `main` / `develop` の履歴を人間の意図のみで追えるようにする
+- コントリビュータ帰属の正確性: AI ツールは Contributor 契約（CLA / DCO）の対象外
+- 将来の監査経路: `git log` 解析で共作者を抽出する際に AI が混ざると集計がブレる
+
+### Agent への明示的教示
+
+Claude Code / Cursor / その他のエージェントをローカル環境で使う場合、**AI 生成フッターの自動挿入を抑止する設定で起動**してください。抑止方法はツール提供元のドキュメントに従います。
+
+### `--no-verify` での回避は禁止
+
+`git commit --no-verify` で commit-msg フックをバイパスする行為は本規約で原則禁止です（下記 [ローカル品質ゲート](#ローカル品質ゲートlefthook--just) の注意書き参照）。やむを得ずバイパスした PR は、レビュワーが `git log` 目視で trailer 混入を検出し、差し戻します。
+
+---
+
 ## マージ戦略
 
 | PR 種別 | マージ方法 | 理由 |
@@ -175,19 +204,103 @@ sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
 git clone https://github.com/shikomi-dev/shikomi.git
 cd shikomi
 
-# 全ワークスペースビルド
-cargo build --workspace
+# ローカル品質ゲートの導入（Rust toolchain 済み前提。冪等）
+bash scripts/setup.sh          # POSIX (Linux / macOS)
+pwsh scripts/setup.ps1         # Windows (PowerShell 7+)
 
-# CLI のみ
-cargo build -p shikomi-cli
-
-# テスト
-cargo nextest run --workspace
-
-# lint / format
-cargo fmt --check
-cargo clippy -- -D warnings
+# 以降は just 経由で統一
+just fmt-check   # cargo fmt --all -- --check
+just clippy      # cargo clippy --all-targets --all-features
+just test        # cargo test --workspace
+just audit       # cargo deny + 静的 secret 経路監査
+just check-all   # 全チェックを順次実行
 ```
+
+**Windows 要件**: PowerShell 7+ が必須です（5.1 は非サポート）。未導入なら `winget install Microsoft.PowerShell` で導入してください。setup.ps1 は冒頭でバージョン検査し、未満なら MSG-DW-011 を出力して中止します。
+
+---
+
+## ローカル品質ゲート（lefthook / just）
+
+`scripts/setup.sh` / `setup.ps1` 実行後、以下のフックが `.git/hooks/` に配線されます（`lefthook install` が担当）。
+
+| hook | 実行コマンド | 失敗時の挙動 |
+|------|------------|-----------|
+| `pre-commit` | `just fmt-check` / `just clippy` / `just audit-secrets`（parallel） | 該当失敗の MSG を stderr に出してコミット中止 |
+| `commit-msg` | `just commit-msg-check <file>` / `just commit-msg-no-ai-footer <file>`（parallel） | Conventional Commits 非準拠 / AI 生成フッター検出でコミット中止 |
+| `pre-push` | `just test` | テスト失敗で push 中止 |
+
+失敗メッセージは常に以下の 2 行構造です:
+
+```
+[FAIL] <何が失敗したか 1 文で要約>
+次のコマンド: <実行すべき復旧コマンド 1 つ>
+```
+
+### `--no-verify` バイパスの扱い
+
+`git commit --no-verify` / `git push --no-verify` によるフックバイパスは**本規約で原則禁止**です。
+
+> `[WARN] --no-verify の使用は規約で原則禁止です。`
+> `PR 本文に理由を明記してください。CI が同一チェックを再実行します。`
+
+やむを得ずバイパスした場合、PR 本文に理由を明記してください。CI 側で同一チェックを独立に再実行するため、バイパスしても PR は統合ゲートで同じ判定を受けます（DRY: `justfile` が単一真実源）。
+
+---
+
+## Secret 混入時の緊急対応
+
+`gitleaks` / `audit-secret-paths.sh` が secret（AWS キー / API トークン / 秘密鍵 / `.env` 混入等）を検出した場合:
+
+### ローカルで pre-commit が弾いた場合
+
+1. 指摘された行を該当ファイルから除去、または対象ファイルを `.gitignore` に追加
+2. `git reset HEAD <file>` でステージ解除 → 修正 → `git add -p` で差分単位に再確認
+3. `just audit-secrets` で単独再検証
+4. 再コミット
+
+### 既に commit / push してしまった場合
+
+手順は **(a) 無効化 → (b) 履歴除去 → (c) GitHub 側の残留対策** の順で進めます。**(a) より前に (b)(c) を先行してはいけません。**
+
+#### (a) secret の無効化（最優先・不可逆）
+
+1. **直ちに対象 secret を無効化する**
+   - AWS / GCP / Azure 等のクラウド IAM キー → コンソールで失効・rotate
+   - GitHub PAT / npm token / Cargo registry token → 発行元で revoke
+   - 秘密鍵（RSA / SSH / PGP） → 鍵ペア再生成、依存先の公開鍵を入れ替え
+   - DB / API の application secret → rotate し、依存サービスへ再デプロイ
+2. リポジトリ管理者（`@kkm-horikawa`）に **Issue ではなく非公開経路**で連絡（[SECURITY.md](SECURITY.md) の手順に従う）
+
+#### (b) 履歴からの除去（feature ブランチ限定）
+
+- 除去ツールは [`git filter-repo`](https://github.com/newren/git-filter-repo) を使用。`git filter-branch` は非推奨のため使わない
+- **`main` / `develop` ブランチへの force-push は禁止**（GitHub ブランチ保護ルールで拒否される想定）。secret が `main` / `develop` に到達している場合、履歴除去ではなく**リポジトリ全体の再発行＋全員の鍵ローテーション**を管理者判断で行う
+- feature ブランチに限り、以下の手順で除去してよい:
+
+```bash
+# 1. クリーンなクローンを別ディレクトリに取得
+git clone --no-local https://github.com/shikomi-dev/shikomi.git shikomi-scrub
+cd shikomi-scrub
+
+# 2. 対象パスを履歴から完全除去（単一ファイルの例）
+git filter-repo --path path/to/leaked-file --invert-paths
+
+# 3. feature ブランチへ force-push（main / develop は禁止）
+git push --force-with-lease origin feature/<your-branch>
+```
+
+- **`--force-with-lease` を必ず使う**（`--force` 単体は他コラボレータの push を上書きする事故を起こす）
+- 除去後、共同作業者全員に `git fetch` → `git reset --hard origin/feature/<your-branch>` の再同期を依頼
+
+#### (c) GitHub 側の残留対策
+
+1. **Pull Request / Issue / Gist のコメント本文から目視除去**（履歴書き換えでは消えない）
+2. **GitHub Secret scanning のアラート解決**: Security タブ → Secret scanning alerts → 該当を `Resolved: Revoked` としてクローズし、無効化済み (a) を証跡として残す
+3. **キャッシュ purge の依頼**: `git filter-repo` 後も GitHub はイベント API / GraphQL / forks 経由で古い SHA を数日〜数週間キャッシュする。[GitHub Support](https://support.github.com/contact) に「sensitive data removal」として申請し、該当コミット SHA の残留キャッシュ消去を依頼する（[公式ガイド](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository#fully-removing-the-data-from-github)）
+4. **fork されている場合**は fork 側の履歴も汚染されている。管理者が fork 一覧を確認し、必要に応じて連絡
+
+**最重要**: `git push --force` で履歴を書き換えても、GitHub のイベント API・PR コメント・fork・CI ログ等に残存する可能性があります。**secret の無効化 (a) が成立していない限り、(b)(c) をいくら完璧にやっても漏洩リスクは消えません。**
 
 ---
 

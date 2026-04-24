@@ -19,5 +19,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test (shikomi-core)
-        run: cargo test -p shikomi-core
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-core
+        run: just test-core

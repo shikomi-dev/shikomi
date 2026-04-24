@@ -13,6 +13,17 @@
 /CONTRIBUTING.md                @kkm-horikawa
 /SECURITY.md                    @kkm-horikawa
 
+# dev-workflow 改変の強制レビュー（REQ-DW-016 / T5・T8 脅威対応）
+# - lefthook.yml: フック定義の改変で検知スキップ・任意コマンド実行を仕込める
+# - justfile: レシピ改変で CI とローカルの乖離を作れる
+# - scripts/setup.*: ダウンロード URL / SHA256 ピン改変でサプライチェーン攻撃経路を作れる
+# - scripts/ci/: secret 検知契約 (TC-CI-012〜015 / audit-pin-sync) の改変で水際検知を無効化できる
+/lefthook.yml                   @kkm-horikawa
+/justfile                       @kkm-horikawa
+/scripts/setup.sh               @kkm-horikawa
+/scripts/setup.ps1              @kkm-horikawa
+/scripts/ci/                    @kkm-horikawa
+
 # GitHub 設定・CI ワークフロー（全体オーナー）
 /.github/                       @kkm-horikawa
 

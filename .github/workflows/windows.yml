@@ -12,6 +12,10 @@ jobs:
   test-infra-windows:
     name: test-infra-windows
     runs-on: windows-latest
+    defaults:
+      run:
+        # windows-latest は PowerShell 7+ を既定搭載 (2023 以降)。justfile の windows-shell と整合。
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
@@ -19,5 +23,68 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test (shikomi-infra)
-        run: cargo test -p shikomi-infra
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-infra
+        run: just test-infra
+
+  # Windows 側 commit-msg 経路の回帰テスト。
+  # justfile の commit-msg-check / commit-msg-no-ai-footer が shebang bash レシピで
+  # 動作することを windows-latest + pwsh + Git for Windows の組み合わせで検証する。
+  # Linux だけで通っていても PowerShell の < 非対応で Windows 全コミット不能になる
+  # 事故 (前回 PR #24 レビュー指摘) の再発防止。
+  commit-msg-windows:
+    name: commit-msg-windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just / convco
+        run: cargo install --locked just convco
+
+      # 正常系: Conventional Commits 1.0 準拠 → exit 0
+      - name: commit-msg-check accepts conventional commit
+        run: |
+          "feat(dev-workflow): windows commit-msg regression good" | Out-File -FilePath good.msg -Encoding utf8
+          just commit-msg-check good.msg
+
+      # 異常系: 非準拠メッセージ → exit 非 0 (失敗で ok、成功なら回帰発生でジョブ fail)
+      - name: commit-msg-check rejects non-conventional commit
+        run: |
+          "random nonsense message" | Out-File -FilePath bad.msg -Encoding utf8
+          $global:LASTEXITCODE = 0
+          just commit-msg-check bad.msg
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "commit-msg-check は非準拠メッセージを通してしまいました (回帰)"
+            exit 1
+          }
+          Write-Host "[OK] commit-msg-check rejected non-conventional message as expected"
+
+      # AI フッター検出 (REQ-DW-018) の Windows 側通過確認
+      - name: commit-msg-no-ai-footer passes clean message
+        run: |
+          "feat: clean" | Out-File -FilePath clean.msg -Encoding utf8
+          just commit-msg-no-ai-footer clean.msg
+
+      - name: commit-msg-no-ai-footer rejects AI trailer
+        run: |
+          @"
+          feat: add foo
+
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          "@ | Out-File -FilePath ai.msg -Encoding utf8
+          $global:LASTEXITCODE = 0
+          just commit-msg-no-ai-footer ai.msg
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "commit-msg-no-ai-footer は AI trailer を通してしまいました (REQ-DW-018 回帰)"
+            exit 1
+          }
+          Write-Host "[OK] commit-msg-no-ai-footer rejected AI trailer as expected"
