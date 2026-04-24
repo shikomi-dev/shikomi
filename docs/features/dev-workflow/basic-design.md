@@ -15,32 +15,37 @@
 
 | 機能ID | モジュール | ディレクトリ | 責務 |
 |--------|----------|------------|------|
-| REQ-DW-001, 002, 003, 004, 012 | `lefthook.yml` | リポジトリルート | Git フック定義（pre-commit / pre-push / commit-msg）と失敗時メッセージ |
-| REQ-DW-005 | `justfile` | リポジトリルート | タスクランナー定義。fmt / clippy / test / audit / check-all 等のレシピ集約 |
-| REQ-DW-006 | `.github/workflows/*.yml`（既存 5 本を編集） | `.github/workflows/` | CI ワークフローから `just <recipe>` を呼ぶ形に置換 |
-| REQ-DW-007 | `scripts/setup.sh` | `scripts/` | Unix 向けセットアップ。Rust toolchain 検知 → `cargo install --locked` → `lefthook install` |
-| REQ-DW-008 | `scripts/setup.ps1` | `scripts/` | Windows 向けセットアップ。同等ロジックを PowerShell で表現 |
-| REQ-DW-010 | `README.md`, `CONTRIBUTING.md` | リポジトリルート | setup 1 ステップと `--no-verify` 禁止ポリシーを記載 |
-| REQ-DW-011 | 既存 CI（`lint.yml` 他）| `.github/workflows/` | 同一 `just <recipe>` を CI 側でも再実行（バイパス検知） |
+| REQ-DW-001, 002, 003, 004, 012, 013 | `lefthook.yml` | リポジトリルート | Git フック定義（pre-commit / pre-push / commit-msg）と静的 `fail_text`（2 行構造） |
+| REQ-DW-005 | `justfile` | リポジトリルート | タスクランナー定義。fmt / clippy / test / audit / audit-secrets / check-all / commit-msg-check レシピ集約 |
+| REQ-DW-006 | `.github/workflows/*.yml`（既存 **5 本** を編集） | `.github/workflows/` | CI ワークフロー（`lint` / `unit-core` / `test-infra` / `audit` / `windows`）から `just <recipe>` を呼ぶ形に統一。`audit.yml` は `cargo-deny-action` を廃止し `just audit` 経由へ |
+| REQ-DW-007, 015 | `scripts/setup.sh` | `scripts/` | Unix 向けセットアップ。Rust toolchain 検知 → Rust 製ツール `cargo install --locked` → Go 製ツール GitHub Releases + SHA256 検証 → `lefthook install` |
+| REQ-DW-008, 014, 015 | `scripts/setup.ps1` | `scripts/` | Windows 向け。PowerShell 7+ 検査 → 以降は `setup.sh` と同等ロジック |
+| REQ-DW-010, 017 | `README.md`, `CONTRIBUTING.md` | リポジトリルート | setup 1 ステップ、`--no-verify` 禁止ポリシー、Secret 混入時の緊急対応手順を記載 |
+| REQ-DW-011 | 既存 CI（`lint.yml` 他 5 本）| `.github/workflows/` | 同一 `just <recipe>` を CI 側でも再実行（バイパス検知） |
+| REQ-DW-013 | `scripts/ci/audit-secret-paths.sh`（既存、本 feature で改変禁止） | `scripts/ci/` | shikomi 独自の secret 経路契約（TC-CI-012〜015）の静的検証。本 feature は **引き回し専用**で、検知ロジックの追加・改変はスコープ外 |
+| REQ-DW-013 | `gitleaks` 設定（`.gitleaks.toml` は初期採用せずデフォルトルールのみ使用） | リポジトリルート | 汎用 secret パターン（API キー / AWS / GCP 等）の staged diff スキャン。除外ルールが必要になった時点で `.gitleaks.toml` を Sub-issue で追加（YAGNI） |
+| REQ-DW-016 | `.github/CODEOWNERS` | `.github/` | `/lefthook.yml`、`/justfile`、`/scripts/setup.sh`、`/scripts/setup.ps1`、`/scripts/ci/` を保護対象に追記 |
 
 ```
 ディレクトリ構造（本 feature で追加・変更されるファイル）:
 .
-├── lefthook.yml                         [新規]
-├── justfile                             [新規]
+├── lefthook.yml                         [新規, CODEOWNERS保護]
+├── justfile                             [新規, CODEOWNERS保護]
 ├── scripts/
-│   ├── setup.sh                         [新規]
-│   ├── setup.ps1                        [新規]
-│   └── ci/                              [既存・変更なし]
-│       └── audit-secret-paths.sh
-├── .github/workflows/
-│   ├── lint.yml                         [編集: just 呼出しへ]
-│   ├── unit-core.yml                    [編集]
-│   ├── test-infra.yml                   [編集]
-│   ├── audit.yml                        [編集]
-│   └── windows.yml                      [編集: windows-shell を pwsh にした just 呼出しへ]
-├── README.md                            [編集: setup 1 ステップ追記]
-└── CONTRIBUTING.md                      [編集: --no-verify 禁止、just レシピ一覧]
+│   ├── setup.sh                         [新規, CODEOWNERS保護]
+│   ├── setup.ps1                        [新規, CODEOWNERS保護]
+│   └── ci/                              [既存, CODEOWNERS保護]
+│       └── audit-secret-paths.sh        [既存: 引き回し専用・本featureで改変禁止]
+├── .github/
+│   ├── CODEOWNERS                       [編集: dev-workflow関連5パスを追加]
+│   └── workflows/
+│       ├── lint.yml                     [編集: just fmt-check / just clippy]
+│       ├── unit-core.yml                [編集: just test-core]
+│       ├── test-infra.yml               [編集: just test-infra]
+│       ├── audit.yml                    [編集: cargo-deny-action廃止→just audit]
+│       └── windows.yml                  [編集: shell: pwsh → just test-infra]
+├── README.md                            [編集: setup 1ステップ / PowerShell 7+必須]
+└── CONTRIBUTING.md                      [編集: --no-verify禁止 / Secret混入時の緊急対応 / just レシピ一覧]
 ```
 
 ## クラス設計（概要）
@@ -50,16 +55,17 @@
 ```mermaid
 classDiagram
     class Justfile {
-        +fmt-check
+        +fmtCheck
         +fmt
         +clippy
         +test
-        +test-core
-        +test-infra
-        +test-cli
+        +testCore
+        +testInfra
+        +testCli
         +audit
-        +check-all
-        +commit-msg-check
+        +auditSecrets
+        +checkAll
+        +commitMsgCheck
     }
     class LefthookYml {
         +preCommit_fmtCheck
@@ -107,30 +113,33 @@ classDiagram
 
 ## 処理フロー
 
-### REQ-DW-001〜004, 012: 開発者の通常フロー（コミットから push まで）
+### REQ-DW-001〜004, 012, 013: 開発者の通常フロー（コミットから push まで）
 
 1. 開発者が作業ツリーでファイルを変更
 2. `git add` → `git commit -m "feat(xxx): ..."`
-3. `commit-msg` フックが発火 → `just commit-msg-check <msg file>` 実行 → `convco check` が規約検証
+3. `commit-msg` フックが発火 → `just commit-msg-check {1}` 実行 → `convco check-message` が規約検証
 4. 規約違反: メッセージ修正を促して中止（MSG-DW-004）
-5. 規約 OK: 続いて `pre-commit` フックが発火 → `just fmt-check` と `just clippy` を並列実行
-6. fmt 違反: 「`just fmt` で自動修正」ヒントを表示して中止（MSG-DW-001）
-7. clippy 違反: 「`just clippy` の出力に従って修正」ヒントを表示して中止（MSG-DW-002）
-8. 全成功: コミット完了
-9. `git push` → `pre-push` フック発火 → `just test` 実行
-10. テスト失敗: 「`just test` でローカル再現後に push」ヒントを表示して中止（MSG-DW-003）
-11. テスト成功: push 実行 → GitHub Actions が同一 `just <recipe>` を再実行（セーフティネット）
+5. 規約 OK: 続いて `pre-commit` フックが発火 → **`just fmt-check` / `just clippy` / `just audit-secrets` を並列実行**（`parallel: true`）
+6. fmt 違反: 「`[FAIL] cargo fmt 違反を検出しました。` / `次のコマンド: just fmt`」で中止（MSG-DW-001）
+7. clippy 違反: MSG-DW-002 で中止
+8. secret 検出（gitleaks / audit-secret-paths.sh のいずれか）: MSG-DW-010 で中止。検出箇所は `file:line` 形式で stderr
+9. 全成功: コミット完了
+10. `git push` → `pre-push` フック発火 → `just test` 実行
+11. テスト失敗: MSG-DW-003 で中止
+12. テスト成功: push 実行 → GitHub Actions が同一 `just <recipe>` を再実行（`--no-verify` バイパス時の最終検知）
 
-### REQ-DW-007, 008, 009: 新規参画者のセットアップフロー
+### REQ-DW-007〜009, 014, 015: 新規参画者のセットアップフロー
 
 1. `git clone git@github.com:shikomi-dev/shikomi.git`
 2. `cd shikomi`
-3. Unix: `bash scripts/setup.sh` / Windows: `pwsh scripts/setup.ps1` を実行
-4. スクリプトは `rustc --version` / `cargo --version` の成功可否を確認 → 失敗時は rustup 導入案内（MSG-DW-008）
-5. `just` / `lefthook` / `convco` のバイナリ存在を `command -v` で確認
-6. 未インストールのものだけ `cargo install --locked <tool>` を順次実行
-7. `lefthook install` を実行し、`.git/hooks/` へラッパを配置
-8. 「Setup complete.」（MSG-DW-005）を表示して exit 0
+3. Unix: `bash scripts/setup.sh` / **Windows: `pwsh scripts/setup.ps1`**（PowerShell 7+ 必須）を実行
+4. **Windows のみ**: `setup.ps1` 冒頭で `$PSVersionTable.PSVersion.Major -lt 7` 検査 → 不一致なら MSG-DW-011 で Fail Fast、`winget install Microsoft.PowerShell` を案内
+5. `.git/` 存在確認 → 無ければ MSG-DW-009 で Fail Fast
+6. `rustc --version` / `cargo --version` 検査 → 失敗時は MSG-DW-008（rustup 導入案内）
+7. **Rust 製ツール**（`just` / `convco`）を `cargo install --locked <tool>` で導入。既存は `--version` で存在確認のみ（MSG-DW-006 表示）
+8. **Go 製ツール**（`lefthook` / `gitleaks`）を GitHub Releases からダウンロード（URL は `{VERSION}` と `{PLATFORM}` を setup スクリプトのピン定数から合成）→ `sha256sum` / `Get-FileHash` で実測値を取得 → setup スクリプトのピン値と照合 → 不一致なら MSG-DW-012 で Fail Fast、一致なら `~/.cargo/bin/`（Windows は `$env:USERPROFILE\.cargo\bin\`）へ配置
+9. `lefthook install` 実行（`.git/hooks/` へラッパを配置）
+10. MSG-DW-005 を表示して exit 0
 
 ### REQ-DW-006, 011: CI 側の実行フロー
 
@@ -149,16 +158,18 @@ sequenceDiagram
     participant Just as just
     participant Cargo as cargo
     participant Convco as convco
+    participant Leaks as gitleaks
+    participant Audit as audit-secret-paths.sh
     participant GH as GitHub Actions
 
     Dev->>Git: git commit -m "feat(xxx): ..."
     Git->>LH: .git/hooks/commit-msg
-    LH->>Just: just commit-msg-check COMMIT_MSG
-    Just->>Convco: convco check
+    LH->>Just: just commit-msg-check {1}
+    Just->>Convco: convco check-message FILE
     Convco-->>Just: ok / ng
     alt ng
         Just-->>LH: exit 非0
-        LH-->>Git: fail_text 表示
+        LH-->>Git: fail_text (MSG-DW-004)
         Git-->>Dev: コミット中止
     end
     Git->>LH: .git/hooks/pre-commit
@@ -168,9 +179,13 @@ sequenceDiagram
     and clippy
         LH->>Just: just clippy
         Just->>Cargo: cargo clippy --all-targets --all-features
+    and audit-secrets
+        LH->>Just: just audit-secrets
+        Just->>Leaks: gitleaks protect --staged --no-banner
+        Just->>Audit: bash scripts/ci/audit-secret-paths.sh
     end
     alt いずれか fail
-        LH-->>Git: fail_text 表示
+        LH-->>Git: fail_text (MSG-DW-001/002/010)
         Git-->>Dev: コミット中止
     end
 
@@ -179,12 +194,12 @@ sequenceDiagram
     LH->>Just: just test
     Just->>Cargo: cargo test --workspace
     alt fail
-        LH-->>Git: fail_text 表示
+        LH-->>Git: fail_text (MSG-DW-003)
         Git-->>Dev: push 中止
     end
     Git->>GH: push 成功
     GH->>Just: just fmt-check / just clippy / just test / just audit
-    Note over GH: --no-verify バイパスもここで最終検知
+    Note over GH: --no-verify バイパス / secret 事後混入もここで最終検知
 ```
 
 ## アーキテクチャへの影響
@@ -228,25 +243,29 @@ sequenceDiagram
 
 | 想定攻撃者 | 攻撃経路 | 保護資産 | 対策 |
 |-----------|---------|---------|------|
-| 悪意のある PR 作者 | `--no-verify` でローカルフックをバイパスし、fmt 違反・脆弱依存追加・秘密経路追加を push | shikomi のコード品質・秘密経路監査契約（TC-CI-012〜015）| 全 CI ワークフローが同一 `just <recipe>` を再実行。`audit.yml` は `cargo deny` + `audit-secret-paths.sh` を常時実行 |
-| サプライチェーン攻撃者 | `just` / `lefthook` / `convco` の悪意あるバージョンを crates.io に混入 | 開発者ローカル環境（配布バイナリは無関係） | `cargo install --locked` で Cargo.lock 相当の固定解決を強制。将来、setup スクリプトでバージョンピンを検討（YAGNI、実被害が出たら対応） |
-| 悪意のあるフック定義 | 他開発者が PR で `lefthook.yml` を改変し、任意コマンド実行を仕込む | 他の開発者のローカル環境 | `lefthook.yml` 変更を含む PR は CODEOWNERS レビュー必須。pre-commit が未知のコマンドを実行することを PR diff で目視検知 |
-| フック失敗メッセージでの情報漏洩 | `fail_text` にソースパス・ユーザ名が含まれ、CI ログに露出 | ユーザプライバシー | `fail_text` は静的文字列のみ。`${variables}` による動的展開を禁止 |
+| **T1: 悪意のある PR 作者（内部バイパス）** | `--no-verify` でローカルフックをバイパスし、fmt 違反・脆弱依存追加・秘密経路追加（TC-CI-012〜015 契約違反）を push | shikomi のコード品質・秘密経路監査契約 | 全 CI ワークフロー（`lint` / `unit-core` / `test-infra` / `audit` / `windows`）が同一 `just <recipe>` を再実行。`just audit` は `cargo deny` + `audit-secret-paths.sh` を常時実行、`just audit-secrets` は pre-commit で追加実行 |
+| **T2: 悪意ある secret コミッタ（水際突破）** | API キー / AWS 認証情報 / `.env` / 秘密鍵 を誤ってコミット。push 後は git history に残留し GitHub CDN にキャッシュされ得る | 開発者秘密情報、取引先・ユーザー情報、shikomi インフラ資源 | **pre-commit で gitleaks + audit-secret-paths.sh を並列実行（REQ-DW-013）**。CI 側でも同一チェックを再実行。push 後判明時は REQ-DW-017 の緊急対応手順（即 revoke → `git filter-repo` → secret scanning resolve）|
+| **T3: サプライチェーン攻撃者（crates.io 経路）** | `just` / `convco` の悪意あるバージョンを crates.io に混入 | 開発者ローカル環境（配布バイナリは無関係） | `cargo install --locked` で配布 crate 側の Cargo.lock を使い依存解決を固定。`deny.toml` の `advisories` / `sources` チェックでレジストリ監査 |
+| **T4: サプライチェーン攻撃者（GitHub Releases 経路）** | `lefthook` / `gitleaks` のリリースアーティファクトを改ざん | 同上 | **setup スクリプト内の SHA256 ピン定数で完全性検証（REQ-DW-015）**。バージョン更新時は PR で SHA256 差分を明示し、CODEOWNERS レビュー必須 |
+| **T5: 悪意あるフック / レシピ定義（内部改変）** | 他開発者が PR で `lefthook.yml` / `justfile` / `scripts/setup.{sh,ps1}` / `scripts/ci/audit-secret-paths.sh` を改変し、任意コマンド実行・検知回避を仕込む | 他の開発者のローカル環境、secret 検知契約 | **`.github/CODEOWNERS` で上記 5 パスを保護対象に登録（REQ-DW-016）**。該当 PR は `@kkm-horikawa` のレビュー必須。3 人レビューチーム（ペテルギウス / ペガサス / 服部平次）も脅威観点でレビュー |
+| **T6: Git 履歴情報漏洩（事後）** | `--no-verify` または secret 検知すり抜け後に push 済みとなった secret | 同 T2 | CONTRIBUTING.md §Secret 混入時の緊急対応に `git filter-repo` 手順と GitHub secret scanning 連携を記載（REQ-DW-017）。`main` / `develop` の force-push は引き続き禁止、feature ブランチ限定で実施 |
+| **T7: フック失敗メッセージでの情報漏洩** | `fail_text` に絶対パス・ユーザ名・環境変数値が含まれ、CI ログ（外部閲覧可能な場合あり）に露出 | ユーザプライバシー | `fail_text` は**静的文字列のみ**。`${variables}` や `{files}` による動的展開を禁止。検出ファイル名が必要な場合は gitleaks / audit 側の stdout に出し、`fail_text` は 2 行構造（要約 + 復旧コマンド）のみとする |
+| **T8: 設定ファイル改変後の検知スキップ** | `lefthook.yml` から `audit-secrets` コマンドを削除する PR が merge されれば、以降 pre-commit で secret 検知が作動しない | shikomi の secret 混入防止契約 | T5 の CODEOWNERS 保護に加え、**CI 側で独立に `just audit-secrets` を再実行**（`audit.yml` に組込み）。ローカル検知が無効化されても CI 側で再検知、二重防護 |
 
 ### OWASP Top 10 対応
 
 | # | カテゴリ | 対応状況 |
 |---|---------|---------|
-| A01 | Broken Access Control | 該当なし — 理由: 本 feature はユーザ認可を扱わず、開発者ローカル環境のみに影響 |
-| A02 | Cryptographic Failures | 該当なし — 理由: 暗号処理を扱わない |
-| A03 | Injection | 低リスク。`justfile` レシピは静的コマンド列、ユーザ入力の埋め込みなし。`commit-msg-check` は引数にファイルパスを受けるが `convco` が安全に処理 |
-| A04 | Insecure Design | Fail Fast / DRY / Tell-Don't-Ask を基本原則として設計。`build.rs` による暗黙副作用方式を明示却下（§要求分析 §議論結果） |
-| A05 | Security Misconfiguration | `lefthook install` は `.git/hooks/` の既定パスに書き、`core.hooksPath` の変更を伴わない。他リポジトリへの影響なし |
-| A06 | Vulnerable Components | `cargo-deny` の `advisories` / `bans` / `licenses` / `sources` チェックを `just audit` として統合。CI の `audit.yml` で常時実行 |
-| A07 | Auth Failures | 該当なし |
-| A08 | Data Integrity Failures | `cargo install --locked` で依存解決を固定。GitHub Actions の `Swatinem/rust-cache@v2` は公式 action を採用 |
-| A09 | Logging Failures | フック失敗メッセージは stderr に明示。CI ログは GitHub Actions 標準の保持ポリシーに従う |
-| A10 | SSRF | 該当なし |
+| A01 | Broken Access Control | **CODEOWNERS でワークフロー設定 5 パスを保護（REQ-DW-016、T5 対策）**。GitHub 側で feature ブランチ保護と合わせ、未承認変更を遮断 |
+| A02 | Cryptographic Failures | **lefthook / gitleaks バイナリを SHA-256 で完全性検証（REQ-DW-015、T4 対策）**。暗号処理そのものは扱わないが、サプライチェーン完全性に暗号ハッシュを使用 |
+| A03 | Injection | `justfile` レシピは静的コマンド列、ユーザ入力の埋め込みなし。`commit-msg-check` は `convco check-message` に**ファイルパスのみ**を渡し、メッセージ本文はツール側で安全に処理。`fail_text` は静的文字列のみ（T7 対策） |
+| A04 | Insecure Design | Fail Fast / DRY / Tell-Don't-Ask を基本原則として設計。`build.rs` による暗黙副作用方式を明示却下（§要求分析 §議論結果）。secret 検知は **pre-commit + CI の二重防護**（T2・T8 対策） |
+| A05 | Security Misconfiguration | `lefthook install` は `.git/hooks/` の既定パスに書き、`core.hooksPath` の変更を伴わない。他リポジトリへの影響なし。setup スクリプトは `set -euo pipefail` / `$ErrorActionPreference = 'Stop'` で Fail Fast |
+| A06 | Vulnerable Components | `cargo-deny` の `advisories` / `bans` / `licenses` / `sources` チェックを `just audit` として統合。CI の `audit.yml` で常時実行。lefthook / gitleaks はバイナリ固定 + SHA256 検証 |
+| A07 | Auth Failures | 該当なし — 理由: 本 feature は認証機構を持たない |
+| A08 | Data Integrity Failures | `cargo install --locked` で依存解決を固定。`lefthook` / `gitleaks` は SHA-256 検証つきで配置（T4 対策）。GitHub Actions の `Swatinem/rust-cache@v2` は公式 action を採用 |
+| A09 | Logging Failures | フック失敗メッセージは stderr に明示、**プレフィックス統一 `[FAIL] / [OK] / [SKIP] / [WARN]`** で視認性確保。CI ログは GitHub Actions 標準の保持ポリシーに従う。`fail_text` 動的展開禁止で PII 漏洩回避（T7 対策） |
+| A10 | SSRF | 該当なし — 理由: 本 feature は外部 URL へのリクエストを動的に発行しない。GitHub Releases URL は setup スクリプトにハードコードで固定 |
 
 ## ER図
 
