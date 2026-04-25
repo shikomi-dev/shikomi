@@ -257,7 +257,7 @@ PR #29 の方針を維持し、Issue #30 でも変更なし:
 | `Domain { reason }` | `Domain { reason }`（既存または新規追加） |
 | `Internal { reason }` | `Internal { reason }`（**Issue #30 で `PersistenceError` に新規追加**） |
 
-**注記**: PR #29 段階では list 操作で `EncryptionUnsupported` / `Persistence` / `Internal` のみが発生し得たため写像が部分的だった。Issue #30 で add/edit/remove が加わることにより `NotFound` / `InvalidLabel` / `Domain` の写像が**実用上必要**になる。
+**注記**: PR #29 段階では list 操作で `EncryptionUnsupported` / `Persistence` のみが**実用上発生**し、`Internal` は未到達のため `PersistenceError::IpcDecode` への寄せ集め写像で十分だった。Issue #30 で add/edit/remove が加わることにより `NotFound` / `InvalidLabel` / `Domain` / `Internal` の 4 バリアント写像が**実用上必要**になる。同時に `shikomi-infra::persistence::error::PersistenceError` 側に **`RecordNotFound(RecordId)` / `Internal { reason: String }` の 2 バリアントを Issue #30 で新規追加**する（`InvalidLabel` / `Domain` / `Persistence` は既存バリアントを再利用）。test-design `test-design/unit.md §3.9` および basic-design `../basic-design/error.md §IpcErrorCode バリアント詳細` の記述と整合済み。
 
 ### `PersistenceError → CliError`（既存に追加）
 

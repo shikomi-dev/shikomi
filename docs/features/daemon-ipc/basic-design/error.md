@@ -40,9 +40,13 @@
 | `InvalidLabel { reason: String }` | ハードコード固定文言 `"invalid label"` / `"invalid record id"` | ハンドラで防御的に再検証（クライアント側で検証済みのはずだが念のため） | クライアント側で `MSG-CLI-101` / `102` に写像 | **Issue #30 で写像追加** |
 | `Persistence { reason: String }` | ハードコード固定文言 `"persistence error"` / `"vault corrupted"` / `"vault directory not resolvable"` | `repo.save` 等失敗 | クライアント側で `MSG-CLI-107` / `108` に写像 | PR #29 で写像済み |
 | `Domain { reason: String }` | ハードコード固定文言 `"domain error"` / `"duplicate record id"` | `vault.add_record` 等の集約整合性エラー | クライアント側で `MSG-CLI-109` に写像 | **Issue #30 で写像追加** |
-| `Internal { reason: String }` | ハードコード固定文言 `"unexpected error"` | ハンドラで予期せぬ状態を検出 | クライアント側で `MSG-CLI-109` に写像 | PR #29 で写像済み |
+| `Internal { reason: String }` | ハードコード固定文言 `"unexpected error"` | ハンドラで予期せぬ状態を検出 | クライアント側で `MSG-CLI-109` に写像 | **Issue #30 で写像追加**（PR #29 では `PersistenceError::IpcDecode` 等の既存バリアントに集約していたが、Issue #30 で `PersistenceError::Internal` バリアントを新規追加して正規化） |
 
-**Issue #30 での `From<IpcErrorCode> for PersistenceError` 写像追加**: PR #29 段階では list 操作で `EncryptionUnsupported` / `Persistence` / `Internal` のみが発生し得たため写像が部分的だった。Issue #30 で add/edit/remove が加わることにより、`NotFound` / `InvalidLabel` / `Domain` の 3 バリアント写像が**実用上必要**になる。詳細は `../detailed-design/ipc-vault-repository.md §エラー写像` を単一真実源とする。
+**Issue #30 での `From<IpcErrorCode> for PersistenceError` 写像追加 / `PersistenceError` バリアント追加**:
+- PR #29 段階では list 操作で `EncryptionUnsupported` / `Persistence` のみが**実用上発生**し、`Internal` は未到達のため `PersistenceError::IpcDecode` への寄せ集め写像で十分だった
+- Issue #30 で add/edit/remove が加わることにより、`NotFound` / `InvalidLabel` / `Domain` / `Internal` の 4 バリアント写像が**実用上必要**になる
+- 同時に `shikomi-infra::persistence::error::PersistenceError` 側に **`RecordNotFound(RecordId)` / `Internal { reason: String }` の 2 バリアントを Issue #30 で新規追加**する（`InvalidLabel` / `Domain` / `Persistence` は既存バリアントを再利用）
+- 詳細は `../detailed-design/ipc-vault-repository.md §エラー写像` を単一真実源とする
 
 **`reason` フィールドの設計規約（絶対規則、服部平次指摘への対応）**:
 

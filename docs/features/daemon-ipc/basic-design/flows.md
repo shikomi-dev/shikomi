@@ -179,16 +179,22 @@
 1〜4 は同様（`Subcommand::Remove(a)` 分岐）
 5. `run_remove` 関数の内部:
    1. `RecordId::try_from_str(&args.id)?`
-   2. プロンプト用に label を取得:
+   2. **id 存在確認 + プロンプト用 label 取得（`--yes` でも常に実行、Fail Fast 経路の統一）**:
       - `match handle`:
         - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` → `find_record(&id)` で label 取得
         - `RepositoryHandle::Ipc(ipc)` → `ipc.list_summaries()?` → `iter().find(|s| s.id == id)` で `RecordSummary.label` 取得
-      - id 非存在なら `CliError::RecordNotFound(id)` で early return（プロンプト前 Fail Fast）
-   3. 確認判定（`args.yes` / TTY プロンプト y/Y / 非 TTY）— `ConfirmedRemoveInput::new(id)` 構築 or early return
+      - id 非存在なら `CliError::RecordNotFound(id)` で early return（プロンプト前 Fail Fast、**`RemoveRecord` リクエストを発行しない**）
+      - **設計理由**: `--yes` 経路でも label 取得を行うことで、id 非存在時の Fail Fast 経路が `--yes` / 非 `--yes` で**完全一致**する。「`--yes` だから daemon に投げてから NotFound 受信する」という余計な往復を回避し、TC-IT-093 の意図（`--yes` でも `RemoveRecord` 未発行）を満たす
+   3. **確認判定**:
+      - `args.yes == true` → プロンプトをスキップ、`ConfirmedRemoveInput::new(id)` 直接構築（ステップ 2 で label を取得済みだが**画面表示しない**、id 存在確認のために取得しているのみ）
+      - `args.yes == false` かつ `is_stdin_tty() == true` → ステップ 2 で取得した label をプロンプトに表示 → y/Y で `ConfirmedRemoveInput::new(id)` 構築、それ以外は `render_cancelled` で early return
+      - `args.yes == false` かつ `is_stdin_tty() == false` → `CliError::NonInteractiveRemove`
    4. `match handle`:
       - `RepositoryHandle::Sqlite(repo)` → 既存経路
       - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.remove_record(input.id().clone())?;`
    5. `println!("{}", render_removed(&id, locale))`
+
+**`list_summaries` 全件取得の境界（YAGNI 注記）**: `run_remove` の IPC 経路はプロンプト前段で `ipc.list_summaries()` を 1 往復発行し全レコード summary を取得する。`MAX_FRAME_LENGTH = 16 MiB` 上限を超えない範囲で動作する想定（vault 100k レコード × 平均 200 byte = 約 20 MB のため、約 80k レコードで境界に達する）。境界突破時は **`IpcRequest::FindRecord { id }` 等のピンポイント取得バリアントを後続 Issue で追加**する余地を残す（YAGNI、Phase 1.5 では full-list 戦略で十分）。フレーム長超過時は `LengthDelimitedCodec` がエラーを返し、CLI 側は `PersistenceError::IpcIo` 経由で fail fast（vault 破損・データロスは発生しない、`./security.md §フレーム超過時の挙動`）。
 6. `IpcVaultRepository::remove_record` 内部:
    1. `IpcRequest::RemoveRecord { id }` 構築
    2. `IpcClient::round_trip(&request)` 発行
@@ -387,8 +393,10 @@ sequenceDiagram
 
     User->>Cli: shikomi --ipc remove --id <id> --yes
     Cli->>Cli: clap parse, RecordId::try_from_str
-    Cli->>IpcRepo: ipc.list_summaries() (label preview for prompt - skipped because --yes)
-    Note over Cli: --yes path: skip prompt, directly build ConfirmedRemoveInput
+    Cli->>IpcRepo: ipc.list_summaries() (id existence check + label preview)
+    IpcRepo-->>Cli: Vec RecordSummary
+    Note over Cli: id found in summaries, label retrieved (not displayed because --yes)
+    Note over Cli: --yes path: skip prompt only, build ConfirmedRemoveInput
     Cli->>IpcRepo: ipc.remove_record(id)
     IpcRepo->>Server: Framed::send(IpcRequest::RemoveRecord { id })
     Server->>VaultMutex: lock

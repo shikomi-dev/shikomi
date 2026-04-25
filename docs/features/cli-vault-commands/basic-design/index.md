@@ -338,11 +338,16 @@ ID                                    KIND    LABEL                             
 
 ### ペルソナごとの UX 考慮
 
-| ペルソナ | 焦点 | 本 feature での実装 |
-|---------|------|------------------|
-| 山田（FE エンジニア） | CLI で設定同期したい | `--vault-dir` フラグでの vault dir 切替、`assert_cmd` で E2E 記述可能 |
-| 田中（営業職） | GUI 未実装中の暫定 CLI | エラーメッセージ日本語併記、`--help` 充実 |
-| 佐々木（総務） | 本 feature の対象外（GUI ユーザ） | 対応なし。GUI feature で扱う |
+| ペルソナ | 焦点 | 本 feature での実装（Phase 1） | `--ipc add/edit/remove` 利用シナリオ（Phase 1.5、Issue #30） |
+|---------|------|-----------------------------|---------------------------------------------------------|
+| 山田（FE エンジニア） | CLI で設定同期したい | `--vault-dir` フラグでの vault dir 切替、`assert_cmd` で E2E 記述可能 | **長時間稼働の `shikomi-daemon` を一度起動しておけば、複数ターミナルから `shikomi --ipc add/edit/remove` で SQLite ロック競合を意識せず操作できる**。CI でホットキー / クリップボード連携を併用する将来 feature への布石、`--ipc` をシェル alias 化（`alias sk='shikomi --ipc'`）して daily 操作の主経路にする想定 |
+| 田中（営業職） | GUI 未実装中の暫定 CLI | エラーメッセージ日本語併記、`--help` 充実 | **複数の手元ツール（CLI 端末 + 別ウィンドウのメモアプリ）で同じ vault を読み書きしたい時、`shikomi-daemon` 経由なら lock 競合エラーが出ない**。`MSG-CLI-110` の 3 OS 並記 hint で「daemon を起動してください」が母国語で見えるため、暫定 CLI として技術的詰まりが少ない（GUI 完成までのつなぎ） |
+| 佐々木（総務） | 本 feature の対象外（GUI ユーザ） | 対応なし。GUI feature で扱う | **未対応**（変わらず）。後続 `shikomi-gui` feature が `IpcVaultRepository` 相当のクライアントを内部利用する経路を踏むため、本 Phase 1.5 で確定した IPC スキーマ・専用メソッド契約が GUI feature の前提になる |
+
+**Phase 1.5 全体の動機（ペルソナ横断）**:
+- 「同一 vault を複数プロセスから操作する」需要に応える（CLI 直結では `VaultLock` 競合が頻発）
+- 後続 feature（ホットキー / クリップボード / 暗号化 / GUI）が**1 経路 + 1 ハンドラ追加で積める**プロトコル基盤を Phase 1 / 1.5 で完成させる
+- Phase 2（`--ipc` 既定化）への移行は daemon 自動起動が前提のため後続 Issue へ送る（YAGNI）
 
 ## ER図
 

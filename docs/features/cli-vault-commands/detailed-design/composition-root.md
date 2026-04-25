@@ -140,17 +140,32 @@
 5. `println!("{}", render_removed(&id, locale))`
 6. `Ok(())`
 
-## 確認プロンプトの label 表示（`run_remove` 補足、Issue #30 で経路追加）
+## 確認プロンプトの label 表示と id 存在確認（`run_remove` 補足、Issue #30 で経路追加）
 
-Sqlite 経路では `repo.load()` を呼んで `find_record(&id)` で label を取得し、プロンプトに含める（`"Delete record {id} ({label})? [y/N]: "`）。
-
-IPC 経路でも同等の UX を提供するため、`run_remove` の確認プロンプト前段で:
+`run_remove` は確認プロンプト前段で **`--yes` の有無に関わらず常に label 取得を実行する**。これにより id 非存在時の Fail Fast 経路が `--yes` / 非 `--yes` で**完全一致**する。
 
 - `match handle`:
-  - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` 経由で `find_record` → label 取得
-  - `RepositoryHandle::Ipc(ipc)` → `ipc.list_summaries()?` で全 summary を取得 → `iter().find(|s| s.id == id)` で当該 label 取得（`RecordSummary.label` を表示）
+  - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` 経由で `find_record(&id)` → label 取得
+  - `RepositoryHandle::Ipc(ipc)` → `ipc.list_summaries()?` で全 summary を取得 → `iter().find(|s| s.id == id)` で `RecordSummary.label` 取得
 
-両経路で label 取得失敗（id 非存在）時は、確認前に `CliError::RecordNotFound(id)` で early return（プロンプト表示前に Fail Fast）。これにより「存在しない id を確認プロンプトで聞いてから NotFound を返す」という冗長なフローを避ける。
+両経路で label 取得失敗（id 非存在）時は、確認前に `CliError::RecordNotFound(id)` で early return（プロンプト表示前に Fail Fast、**IPC 経路では `RemoveRecord` リクエストを発行しない**）。
+
+`--yes` 経路の挙動:
+- ステップ 1（label 取得）: **実行する**（id 存在確認のため）
+- ステップ 2（プロンプト y/N 表示）: **スキップする**（`--yes` 確認済み扱い）
+- ステップ 3（`ConfirmedRemoveInput::new(id)` 構築）: 取得した label は**画面に出さない**（`--yes` で UX 簡略化）
+
+`--yes` でない経路の挙動:
+- ステップ 1（label 取得）: 実行する
+- ステップ 2（プロンプト y/N 表示）: 取得した label を `"Delete record {id} ({label})? [y/N]: "` で**表示する**
+- ステップ 3: y/Y なら構築、それ以外は `render_cancelled` で early return（`ExitCode::Success`）
+
+**設計理由**: 「`--yes` 時は label 取得を省略する」最適化を**しない**。理由:
+- `--yes` で daemon に直接 `RemoveRecord` を投げて NotFound を受信するのは余計な往復。Fail Fast を CLI 側 1 段で完結させる方がレイテンシ・ユーザ視認性ともに良い
+- TC-IT-093（`--yes` でも id 非存在時に `RemoveRecord` 未発行）の意図を満たす
+- Sqlite 経路と IPC 経路で挙動を揃え、テスト・実装の重複ロジックを避ける（DRY）
+
+**16 MiB フレーム上限との関係**: IPC 経路で `list_summaries` 全件取得が`MAX_FRAME_LENGTH = 16 MiB` を超える可能性は、約 80k レコード（vault 100k × 平均 200 byte = 約 20 MB の手前）が現実的境界。Phase 1.5 では full-list 戦略で十分（YAGNI、`docs/features/daemon-ipc/basic-design/flows.md §list_summaries 全件取得の境界`）。
 
 **プロンプトに表示する label**: プロンプトは削除対象の label も表示する（`"Delete record {id} ({label})? [y/N]: "`）。label を取得するため、プロンプト表示前に `repo.load()` を一度呼んで `find_record` する必要がある。この load は後続の UseCase 内でも再度呼ばれるが、パフォーマンス上は無視できる（vault 全体を毎回 load する既存 infra の粒度）。実装簡素化のため、プロンプト表示用の label 取得は `run_remove` 内で独自に load するのを許容する。
 
