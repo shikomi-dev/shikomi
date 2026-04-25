@@ -135,7 +135,7 @@ impl Drop for OwnerOnlySecurityAttributes {
 #[cfg(windows)]
 pub fn create_first_pipe_instance_owner_only(
     pipe_name: &str,
-    max_instances: u32,
+    max_instances: usize,
 ) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
     use tokio::net::windows::named_pipe::ServerOptions;
 

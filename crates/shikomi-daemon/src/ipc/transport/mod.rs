@@ -8,6 +8,8 @@ pub mod unix;
 #[cfg(windows)]
 pub mod windows;
 
+// Unix variant のみが `PathBuf` を使う。Windows ビルドで unused 警告にならないよう cfg gate。
+#[cfg(unix)]
 use std::path::PathBuf;
 
 // -------------------------------------------------------------------
