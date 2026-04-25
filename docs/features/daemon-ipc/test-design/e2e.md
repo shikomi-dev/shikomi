@@ -133,6 +133,36 @@
 | 根拠 | PR #29 段階では `crates/shikomi-cli/src/lib.rs:119-` 周辺の if 分岐で `--ipc add/edit/remove` を runtime reject していた。Issue #30 でこの分岐を削除し、`RepositoryHandle::Ipc` 経路の `match` でコンパイル時網羅性検査に置換した。本 TC はその撤去契約が**実機で観測できる**ことを確認する。**ペア CI grep**: `ci.md` TC-CI-028（src/ 配下に「currently supports only the list subcommand」文字列が grep 0 件） |
 | 補完 TC | `--ipc edit` / `--ipc remove` も同様の構造で reject 撤去確認を行うが、本 TC では `add` のみで代表検証（edit/remove の透過動作は TC-E2E-013 / 014 が担保） |
 
+### TC-E2E-017: [Phase 1.5 / Issue #33 新設] `--ipc edit --stdin` TTY 入力が画面エコーされない（fail-secure 観測）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | 17（secret マスキング）+ Phase 1.5 方針 B |
+| 対応 REQ | REQ-DAEMON-009 + REQ-DAEMON-020（secret 経路）+ `composition-root.md §run_edit IPC 経路の方針 B` |
+| 種別 | セキュリティ（fail-secure 振る舞い検証） |
+| 前提条件 | daemon 起動済、空 vault に Text 1 件を事前 add（label `tc017-existing-text`、value `original-text`）。**意図**: 既存 Text レコードに対して `--ipc edit --stdin` を打っても、fail-secure 経路で kind 不明 → Secret 強制 → `read_password` 非エコー、画面に入力文字が出ない。これにより「IPC 経路で kind 取得を省く」設計トレードオフが**安全側に倒れる**ことを実観測する |
+| 操作 | pty crate 経由で `shikomi --ipc edit --id <id> --stdin` を**疑似 TTY 上で**起動し、stdin に `marker-typed-by-user` を 1 行送信 → pty の master 側 read 出力（端末に何が表示されたか）を捕捉 → exit code 待機 |
+| 期待結果 | (1) **pty master 出力に `marker-typed-by-user` 文字列が出現しない**（非エコー、ユーザーが打った文字が画面に出ない）/ (2) edit 自体は exit 0（daemon 経由で正常完了）/ (3) 続いて `--ipc list` で当該 id の値が `marker-typed-by-user` に更新されている（ラウンドトリップ検証、daemon が値を受信していることの間接観測）|
+| 検証アサート | `pty_master_output.contains("marker-typed-by-user") == false` + `child_exit_code == 0` + `list_output.contains(<id>) == true` |
+| 根拠 | `lib.rs::run_edit` IPC アームで `existing_kind = None`（事前 load 省略）→ `decide_kind_for_input(None, Ipc) → Secret` → `resolve_secret_value(_, stdin=true, Secret)` → `read_value_from_stdin(Secret)` → `is_stdin_tty() == true && Secret` → `read_password`（非エコー）経路。本 TC は**この決定論的経路**が pty 上で観測可能であることを担保する |
+| ツール選択 | **`expectrl` crate（推奨、第一候補）** または `rexpect`（第二候補）。両者ともクロスプラットフォーム pty を提供。**`expectrl` 採用根拠**: (a) async 対応 + より新しめのメンテ（最終リリース 2024 以降）、(b) `Session::expect` API が文字列マッチに必要十分、(c) `MIT OR Apache-2.0` ライセンスで `cargo deny` 規約と整合、(d) 依存 crate 数 < 10 で重量級でない。`rexpect` は同等機能だが Linux/macOS 限定で Windows サポートが弱い。**dev-deps に追加要請**（Cargo.toml の `[dev-dependencies]`）、`#[cfg(unix)]` ガード（Windows は `ConsoleScreenBuffer` 経路で別観測手段が必要、本 TC は Unix 限定 + `#[ignore]` で Windows skip） |
+| 配置 | `crates/shikomi-daemon/tests/e2e_daemon_phase15_pty.rs`（**新規ファイル**、`#![cfg(unix)]`）|
+| 注意点 | (1) pty 上で daemon を spawn する必要は**ない**——daemon は通常の `DaemonGuard` で別プロセス起動、CLI のみ pty 配下で起動 / (2) `read_password` の rpassword 実装は `/dev/tty` を直接 open する経路と stdin fd を使う経路がある。テストハーネスは前者を確実に観測するため `expectrl::Session::spawn_*` で full pty allocation を要求 / (3) **エコー判定の境界値**: `marker-typed-by-user` 後の改行（`\r\n`）は pty のローカルエコー設定に依存——アサートは「`marker-typed-by-user` 部分文字列の不在」を見るのみで十分（改行コードまで詳細追跡しない）/ (4) **タイムアウト**: pty 通信は 2 秒程度、CI のリソース変動を考慮し全体タイムアウト 10 秒を設定（`expectrl::Session::set_expect_timeout` で個別 expect は 3 秒）|
+
+### TC-E2E-018: [Phase 1.5 / Issue #33 新設] `--ipc edit --stdin` 非 TTY（パイプ入力）でも値が反映され secret 漏洩なし
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | 17 + Phase 1.5 方針 B（非 TTY 経路の補完） |
+| 対応 REQ | REQ-DAEMON-009 + REQ-DAEMON-020 |
+| 種別 | 正常系（fail-secure の補完経路、副作用なし確認） |
+| 前提条件 | daemon 起動済、空 vault に Text 1 件 add（label `tc018-existing`、value `original`） |
+| 操作 | `echo "piped-new-value-marker" \| shikomi --ipc edit --id <id> --stdin`（**`std::process::Command` で stdin パイプ**、pty なし）|
+| 期待結果 | (1) exit 0 / (2) stderr に shell 履歴警告 `MSG-CLI-050` が**出現しない**（非 TTY → `--value` 直接指定でないため）/ (3) `--ipc list` で当該 id の value が `piped-new-value-marker` に更新されている / (4) CLI stdout / stderr / daemon stderr のいずれにも `piped-new-value-marker` が**出現しない**（パイプ経由の secret 値も漏洩経路に出ない、横串） |
+| 検証アサート | `.code(0)` + `cli_stdout.contains("piped-new-value-marker") == false` + `cli_stderr.contains("piped-new-value-marker") == false` + `daemon_stderr.contains("piped-new-value-marker") == false` + 後続 `--ipc list` の stdout に当該 id が含まれる |
+| 根拠 | `is_stdin_tty() == false` 経路で `read_value_from_stdin` は `read_line` を使う。kind が Secret に強制されていても、非 TTY では `read_line` が呼ばれるため `read_password` の非エコー処理は経由しない。それでも secret 値が stdout / stderr / daemon ログに出ないことを横串アサートで確認する。TC-E2E-012（`--ipc add` の `SECRET_TEST_VALUE` 横串）と同型の安全網を edit 経路にも張る |
+| 配置 | `crates/shikomi-daemon/tests/e2e_daemon_phase15.rs`（**既存ファイルに追記**、pty 不要のため通常の `std::process::Command` パターン、TC-E2E-011〜016 と同じヘルパ流用） |
+
 ---
 
 ## 5. シングルインスタンス / stale socket
@@ -348,6 +378,10 @@ crates/shikomi-daemon/tests/
   e2e_encrypted.rs                  # TC-E2E-070, 071
   e2e_permissions.rs                # TC-E2E-050, 051
   e2e_peer_credential_linux.rs      # TC-E2E-060（#[ignore]）
+  e2e_daemon_phase15.rs             # TC-E2E-011〜016（Phase 1.5 add/edit/remove + reject 撤去回帰）
+                                    # [Issue #33 追記] TC-E2E-018（非 TTY パイプ edit、横串横展開）
+  e2e_daemon_phase15_pty.rs         # [Issue #33 新設] TC-E2E-017（pty 経由 fail-secure 観測）
+                                    # #![cfg(unix)] / dev-deps に expectrl 追加要請
 
 crates/shikomi-cli/tests/
   e2e_ipc_crud.rs                   # TC-E2E-010〜015、TC-E2E-016（Phase 1.5 reject 撤去回帰）
@@ -389,6 +423,12 @@ cargo test -p shikomi-daemon --test e2e_peer_credential_linux -- --ignored
 
 # bit 同一比較の精査（TC-E2E-010）
 cargo test -p shikomi-cli --test e2e_ipc_crud bit_identical
+
+# [Phase 1.5 / Issue #33] pty 経由 fail-secure 観測（TC-E2E-017、Unix 限定）
+cargo test -p shikomi-daemon --test e2e_daemon_phase15_pty
+
+# [Phase 1.5 / Issue #33] 非 TTY パイプ edit + 横串 secret 不在（TC-E2E-018）
+cargo test -p shikomi-daemon --test e2e_daemon_phase15 -- tc_e2e_018
 ```
 
 ---
