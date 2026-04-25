@@ -125,16 +125,14 @@ pub fn run() -> ExitCode {
             return emit_error_and_exit(
                 &CliError::UsageError(
                     "--ipc currently supports only the `list` subcommand; \
-                     for add/edit/remove, omit --ipc to use direct SQLite access (Phase 1)"
+                     for add/edit/remove, omit --ipc to use direct vault file access"
                         .to_owned(),
                 ),
                 locale,
             );
         }
         if !quiet {
-            eprintln!(
-                "warning: --ipc is opt-in for Phase 2 migration; default path remains direct SQLite (Phase 1)"
-            );
+            eprintln!("warning: --ipc is an opt-in preview; only `list` is currently supported");
         }
         run_list_via_ipc(locale, quiet)
     } else {
