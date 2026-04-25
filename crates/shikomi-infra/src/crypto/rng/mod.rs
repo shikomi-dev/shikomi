@@ -100,10 +100,13 @@ mod tests {
     use super::*;
 
     /// 構築コストゼロ (Default で取得可能、テスト容易性の根拠)。
+    /// `Rng` は unit struct のため `Rng::default()` を直接呼ぶと
+    /// clippy::default_constructed_unit_structs に拒否される。
+    /// `<Rng as Default>::default()` 経由で Default trait の実装存在を担保する。
     #[test]
     fn rng_default_constructs_without_panic() {
         let _ = Rng;
-        let _ = Rng::default();
+        let _ = <Rng as Default>::default();
     }
 
     /// `KdfSalt` 16B を返す (型レベル検証のため、内部値の確率的検証は KAT で実施しない)。
