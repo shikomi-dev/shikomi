@@ -273,6 +273,7 @@ ra_section = ra_section_match.group(0) if ra_section_match else ''
 
 # Build correspondence rules between data model entity names and asset inventory anchors
 expected_anchors = {
+    # Sub-0 凍結エンティティ
     'VaultEncryptedHeader': ['ヘッダ', 'wrapped_VEK', 'kdf_params', 'kdf_salt'],
     'WrappedVek': ['wrapped_VEK_by_pw', 'wrapped_VEK_by_recovery'],
     'KdfSalt': ['kdf_salt'],
@@ -282,6 +283,16 @@ expected_anchors = {
     'MasterPassword': ['マスターパスワード'],
     'RecoveryMnemonic': ['リカバリ', 'BIP-39'],
     'Vek': ['VEK'],
+    # Sub-A 詳細化エンティティ（Sub-0 の Tier-1〜3 資産から派生する型）
+    'NonceBytes': ['nonce'],            # per-record nonce 12B の値オブジェクト
+    'AuthTag': ['AEAD', 'tag'],         # AES-256-GCM 認証タグ
+    'Kek<KekKindPw>': ['KEK_pw'],       # phantom-typed KEK
+    'Kek<KekKindRecovery>': ['KEK_recovery'],
+    'HeaderAeadKey': ['ヘッダ', 'wrapped_VEK', 'kdf_params'],  # ヘッダ独立 AEAD タグの鍵
+    'Plaintext': ['平文レコード'],
+    'Verified<T>': ['平文レコード', 'AEAD'],  # 検証済み平文の newtype
+    'WeakPasswordFeedback': ['マスターパスワード'],  # zxcvbn 入口ゲート Feedback
+    'CryptoOutcome<T>': ['AEAD'],       # 暗号操作の結果列挙
 }
 
 errs = []

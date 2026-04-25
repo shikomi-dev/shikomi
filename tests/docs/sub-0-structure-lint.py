@@ -379,13 +379,19 @@ def check_self_integrity(report: Report, td_text: str) -> None:
     EXPECTED_I = 8
     EXPECTED_E = 8
 
-    # META-01: §1 overview "TC 総数" cell declares EXPECTED_TOTAL
-    m1 = re.search(r"TC 総数.*?\|\s*\*\*?(\d+)\s*件", td_text)
+    # META-01: §1 overview "TC 総数" cell declares Sub-0 portion = EXPECTED_TOTAL.
+    # When Sub-A onward extend §1 with their own sub-counts, the cell holds
+    # composite text like "Sub-0: 26 件 + Sub-A: 22 件 = 合計 48 件". We pin
+    # to the Sub-0 sub-count so this meta is robust to downstream additions.
+    m1 = re.search(r"TC 総数.*?Sub-0:\s*\*?\*?(\d+)\s*件", td_text)
+    if not m1:
+        # Fallback for the original single-Sub form ("**26 件**" only).
+        m1 = re.search(r"TC 総数.*?\|\s*\*\*?(\d+)\s*件", td_text)
     meta1_ok = bool(m1 and m1.group(1) == str(EXPECTED_TOTAL))
     report.add(
         "META-01",
         meta1_ok,
-        f"§1 overview table declares TC 総数 = {EXPECTED_TOTAL}",
+        f"§1 overview table declares Sub-0 TC 総数 = {EXPECTED_TOTAL}",
         f"found: {m1.group(0) if m1 else 'no match'}" if not meta1_ok else "",
     )
 
