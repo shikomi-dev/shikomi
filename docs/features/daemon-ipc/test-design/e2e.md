@@ -52,6 +52,8 @@
 
 ## 4. `--ipc` 経路での CRUD
 
+**Phase 1.5（Issue #30）の活性化**: 旧 PR #29 では TC-E2E-011〜015 は **runtime reject**（`MSG: --ipc currently supports only the list subcommand; ...` で exit 1）に阻まれ実機検証不能だった。Issue #30 で reject 撤去 + `RepositoryHandle::Ipc` + 専用メソッド 3 種が確定したため、**TC-E2E-011〜015 は Phase 1.5 で初めて実機 E2E が成立する**。各 TC の前提に「daemon 起動済 + Phase 1.5 透過化済」と読み替える。さらに `TC-E2E-016` で reject 撤去自体の回帰検証を追加する（新設）。
+
 ### TC-E2E-010: `shikomi --ipc list` vs `shikomi list` bit 同一比較
 
 | 項目 | 内容 |
@@ -116,6 +118,20 @@
 | 種別 | 異常系 |
 | 操作 | `--ipc edit --id 00000000-0000-0000-0000-000000000000 --label X` |
 | 期待結果 | daemon が `IpcResponse::Error(NotFound)` → CLI が `MSG-CLI-106` または相当 + exit 1 |
+
+### TC-E2E-016: [Phase 1.5 新設] PR #29 runtime reject 撤去の回帰検証
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | Phase 1.5-α / **REQ-DAEMON-027** |
+| 対応 REQ | REQ-DAEMON-027（PR #29 reject 撤去）+ REQ-DAEMON-008/009/010 |
+| 種別 | 回帰（regression）/ 設計契約 |
+| 前提条件 | Phase 1.5 実装後、daemon 起動済、空 vault |
+| 操作 | (1) `shikomi --ipc --vault-dir <tmp> add --kind text --label L --value V` を実行 / (2) stdout / stderr / exit code を捕捉 |
+| 期待結果 | **exit 0**、stdout に `added: <uuid>`、stderr に `--ipc currently supports only the.*list.*subcommand` 文字列が**出現しない**（旧 reject メッセージの不在検証）、daemon が AddRecord を受信しレコードが追加されている（後続の `--ipc list` で確認） |
+| 検証アサート | `.code(0)` + `.stdout(contains("added: "))` + `.stderr(contains("currently supports only").not())` + `.stderr(contains("currently supports only the `list`").not())` |
+| 根拠 | PR #29 段階では `crates/shikomi-cli/src/lib.rs:119-` 周辺の if 分岐で `--ipc add/edit/remove` を runtime reject していた。Issue #30 でこの分岐を削除し、`RepositoryHandle::Ipc` 経路の `match` でコンパイル時網羅性検査に置換した。本 TC はその撤去契約が**実機で観測できる**ことを確認する。**ペア CI grep**: `ci.md` TC-CI-028（src/ 配下に「currently supports only the list subcommand」文字列が grep 0 件） |
+| 補完 TC | `--ipc edit` / `--ipc remove` も同様の構造で reject 撤去確認を行うが、本 TC では `add` のみで代表検証（edit/remove の透過動作は TC-E2E-013 / 014 が担保） |
 
 ---
 
@@ -334,7 +350,7 @@ crates/shikomi-daemon/tests/
   e2e_peer_credential_linux.rs      # TC-E2E-060（#[ignore]）
 
 crates/shikomi-cli/tests/
-  e2e_ipc_crud.rs                   # TC-E2E-010〜015
+  e2e_ipc_crud.rs                   # TC-E2E-010〜015、TC-E2E-016（Phase 1.5 reject 撤去回帰）
   e2e_ipc_composition.rs            # TC-E2E-080
   e2e_ipc_scenarios.rs              # TC-E2E-110〜112
 ```

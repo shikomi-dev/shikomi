@@ -1,7 +1,7 @@
 # 基本設計書 — flows（処理フロー / シーケンス図）
 
 <!-- 詳細設計書とは別ファイル。統合禁止 -->
-<!-- feature: daemon-ipc / Issue #26 -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
 <!-- 配置先: docs/features/daemon-ipc/basic-design/flows.md -->
 <!-- 兄弟: ./index.md, ./security.md, ./error.md, ./ipc-protocol.md -->
 
@@ -116,16 +116,90 @@
 5. 構築した `Box<dyn VaultRepository>` を `usecase::list::list_records(&*repo)` に渡す（`UseCase` は trait 越しのアクセスのみで、IPC か SQLite かを意識しない = Clean Arch 原則の体現）
 6. `presenter::list::render_list(&views, locale)` で整形 → stdout 出力 → `ExitCode::Success`
 
-### CLI 側: `shikomi --ipc list` 内部の IPC 往復
+### CLI 側: `shikomi --ipc list` 内部の IPC 往復（Issue #30 で経路確定）
 
-1. `IpcVaultRepository::load()` 呼出（trait method）
+1. `IpcVaultRepository::list_summaries()` 呼出（**専用メソッド**、`VaultRepository::load` ではない）
 2. 内部で `IpcRequest::ListRecords` を MessagePack シリアライズ → `framed.send(...).await?`
 3. `framed.next().await?` で `IpcResponse::Records(summaries)` 受信 → デコード
-4. `RecordSummary` → `Vault` 集約相当の値（`Record` 列）に変換して返却
-   - **注記**: `IpcVaultRepository::load()` は本来 `Vault` を返すが、IPC 経路では完全な `Vault` 集約を取得しない（投影された `RecordSummary` の Vec のみ）。`VaultRepository::load` の戻り型を IPC 経路でも満たすには 2 案:
-     - **案 A**: `RecordSummary` から `Record` を再構築するが、Secret 値を持たない `Vault` を返す（list 用途のみで `add` / `edit` には別 IPC 操作経由）
-     - **案 B**: `IpcVaultRepository` が `VaultRepository` trait を**部分的にしか実装しない**（`load` は List を内部で呼び `RecordSummary` を `Vec<Record>` に詰める、`save` は no-op で `add` / `edit` / `remove` は別 trait 経由）
-   - 詳細設計 `../detailed-design/ipc-vault-repository.md` で **案 A** を採用予定（理由: trait 境界を変えずに Phase 2 移行契約 1 行差し替えを実現するため、Secret 値が要求されない `list` UseCase で初期実装。`add` / `edit` / `remove` UseCase は IPC 経由で daemon に直接送る別経路を `IpcVaultRepository` 内に実装）
+4. `Vec<RecordSummary>` を CLI 側 `run_list` に返却
+5. `run_list` は `RecordSummary` を `RecordView::from_summary` で射影し、`presenter::list::render_list` に渡して整形
+
+**設計方針の確定（Issue #30）**: `IpcVaultRepository` は **`VaultRepository` trait を実装しない**。旧設計の案 A（`load` で投影 `Vault` 再構築）/ 案 B（trait 分割）/ 案 C（シャドウ差分 + 偽実装注入）はいずれも構造的破綻が判明したため**全て廃案**。新設計では:
+
+- `IpcVaultRepository` の公開メソッド: `list_summaries` / `add_record` / `edit_record` / `remove_record` の 4 専用メソッド
+- CLI 側 Composition Root が `enum RepositoryHandle { Sqlite(SqliteVaultRepository), Ipc(IpcVaultRepository) }` で経路保持し、各サブコマンドハンドラが `match handle` で 2 アーム分岐
+- 詳細は `../detailed-design/ipc-vault-repository.md §設計方針の確定` を単一真実源とする
+
+### CLI 側: `shikomi --ipc add` フロー（**Issue #30 で新設**）
+
+1. `shikomi-cli` の `main()` → `shikomi_cli::run()` を呼ぶ
+2. `run()` で panic hook 登録 → Locale 決定 → tracing 初期化 → clap パース
+3. `args.ipc == true` → `IpcVaultRepository::connect(default_socket_path()?)?` で daemon 接続 + ハンドシェイク（PR #29 既存）→ `RepositoryHandle::Ipc(ipc)` で保持
+4. clap パース結果 `Subcommand::Add(a)` → `run_add(&handle, a, locale, args.quiet)`
+5. `run_add` 関数の内部:
+   1. `--value` / `--stdin` 衝突検出（既存）
+   2. shell 履歴警告（既存）
+   3. `RecordLabel::try_new(args.label.clone())?`
+   4. `value` 取得（`--value` または `--stdin`、`SecretString` でラップ）
+   5. `let input = AddInput { kind, label, value };`
+   6. `let now = OffsetDateTime::now_utc();`
+   7. `match handle`:
+      - `RepositoryHandle::Sqlite(repo)` → 既存経路（変更なし）
+      - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.add_record(input.kind, input.label, input.value, now)?;`
+   8. `println!("{}", render_added(&id, locale))`
+6. `IpcVaultRepository::add_record` 内部:
+   1. `SerializableSecretBytes::from_secret_string(value)` で secret ラップ（`expose_secret` 不使用経路）
+   2. `IpcRequest::AddRecord { kind, label, value, now }` 構築 → `IpcClient::round_trip(&request)` 発行
+   3. `IpcResponse::Added { id }` 受信 → `Ok(id)`
+   4. `IpcResponse::Error(IpcErrorCode::Persistence { reason })` → `PersistenceError` 写像 → CLI 側で `MSG-CLI-107` 経路（vault 未作成 / lock 競合等）
+
+### CLI 側: `shikomi --ipc edit` フロー（**Issue #30 で新設**）
+
+1〜4 は `--ipc add` と同様（接続確立後、`Subcommand::Edit(a)` 分岐）
+5. `run_edit` 関数の内部:
+   1. `--value` / `--stdin` 衝突検出（既存）
+   2. 「最低 1 つの更新フラグ必須」検証（既存）
+   3. `RecordId::try_from_str(&args.id)?` → `CliError::InvalidId`
+   4. `RecordLabel::try_new(...)?`（`Option`）
+   5. `value` 取得（`Option<SecretString>`）
+   6. `let input = EditInput { id, label, value };`
+   7. `let now = OffsetDateTime::now_utc();`
+   8. `match handle`:
+      - `RepositoryHandle::Sqlite(repo)` → 既存経路
+      - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.edit_record(input.id, input.label, input.value, now)?;`
+   9. `println!("{}", render_updated(&id, locale))`
+6. `IpcVaultRepository::edit_record` 内部:
+   1. `IpcRequest::EditRecord { id, label, value: value_opt_bytes, now }` 構築
+   2. `IpcClient::round_trip(&request)` 発行
+   3. `IpcResponse::Edited { id }` → `Ok(id)`
+   4. `IpcResponse::Error(IpcErrorCode::NotFound { id })` → `PersistenceError::RecordNotFound(id)` → CLI 側で `MSG-CLI-106` 経路
+
+### CLI 側: `shikomi --ipc remove` フロー（**Issue #30 で新設**）
+
+1〜4 は同様（`Subcommand::Remove(a)` 分岐）
+5. `run_remove` 関数の内部:
+   1. `RecordId::try_from_str(&args.id)?`
+   2. **id 存在確認 + プロンプト用 label 取得（`--yes` でも常に実行、Fail Fast 経路の統一）**:
+      - `match handle`:
+        - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` → `find_record(&id)` で label 取得
+        - `RepositoryHandle::Ipc(ipc)` → `ipc.list_summaries()?` → `iter().find(|s| s.id == id)` で `RecordSummary.label` 取得
+      - id 非存在なら `CliError::RecordNotFound(id)` で early return（プロンプト前 Fail Fast、**`RemoveRecord` リクエストを発行しない**）
+      - **設計理由**: `--yes` 経路でも label 取得を行うことで、id 非存在時の Fail Fast 経路が `--yes` / 非 `--yes` で**完全一致**する。「`--yes` だから daemon に投げてから NotFound 受信する」という余計な往復を回避し、TC-IT-093 の意図（`--yes` でも `RemoveRecord` 未発行）を満たす
+   3. **確認判定**:
+      - `args.yes == true` → プロンプトをスキップ、`ConfirmedRemoveInput::new(id)` 直接構築（ステップ 2 で label を取得済みだが**画面表示しない**、id 存在確認のために取得しているのみ）
+      - `args.yes == false` かつ `is_stdin_tty() == true` → ステップ 2 で取得した label をプロンプトに表示 → y/Y で `ConfirmedRemoveInput::new(id)` 構築、それ以外は `render_cancelled` で early return
+      - `args.yes == false` かつ `is_stdin_tty() == false` → `CliError::NonInteractiveRemove`
+   4. `match handle`:
+      - `RepositoryHandle::Sqlite(repo)` → 既存経路
+      - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.remove_record(input.id().clone())?;`
+   5. `println!("{}", render_removed(&id, locale))`
+
+**`list_summaries` 全件取得の境界（YAGNI 注記）**: `run_remove` の IPC 経路はプロンプト前段で `ipc.list_summaries()` を 1 往復発行し全レコード summary を取得する。`MAX_FRAME_LENGTH = 16 MiB` 上限を超えない範囲で動作する想定（vault 100k レコード × 平均 200 byte = 約 20 MB のため、約 80k レコードで境界に達する）。境界突破時は **`IpcRequest::FindRecord { id }` 等のピンポイント取得バリアントを後続 Issue で追加**する余地を残す（YAGNI、Phase 1.5 では full-list 戦略で十分）。フレーム長超過時は `LengthDelimitedCodec` がエラーを返し、CLI 側は `PersistenceError::IpcIo` 経由で fail fast（vault 破損・データロスは発生しない、`./security.md §フレーム超過時の挙動`）。
+6. `IpcVaultRepository::remove_record` 内部:
+   1. `IpcRequest::RemoveRecord { id }` 構築
+   2. `IpcClient::round_trip(&request)` 発行
+   3. `IpcResponse::Removed { id }` → `Ok(id)`
+   4. `IpcResponse::Error(IpcErrorCode::NotFound { id })` → `PersistenceError::RecordNotFound(id)`（前段で label 取得時に検出済みのため通常到達しないが、TOCTOU 競合で別接続が同時 remove した時の防御的経路）
 
 ## シーケンス図
 
@@ -225,7 +299,126 @@ sequenceDiagram
     Cli->>User: stderr + exit code 1
 ```
 
-**Phase 2 完了後**: `--ipc` を既定経路にする際は別 Issue で扱う。本 feature は `--ipc` オプトインのみ。
+**Phase 2 完了後**: `--ipc` を既定経路にする際は別 Issue で扱う。本 feature は `--ipc` オプトインのみ。Phase 1.5（Issue #30）完了時点では、**4 サブコマンド全て**（`list` / `add` / `edit` / `remove`）が `--ipc` 経路で透過動作する。
+
+### 代表シーケンス: `shikomi --ipc add`（正常系、Issue #30 新規）
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Cli as shikomi-cli (run_add)
+    participant Handle as RepositoryHandle::Ipc
+    participant IpcRepo as IpcVaultRepository
+    participant Stream as UDS / Named Pipe
+    participant Server as shikomi-daemon (IpcServer)
+    participant Handler as ipc::handler::add
+    participant VaultMutex as Mutex Vault
+    participant Repo as SqliteVaultRepository (atomic save)
+
+    User->>Cli: shikomi --ipc add --kind text --label L --value V
+    Cli->>Cli: clap parse, build AddInput
+    Cli->>Handle: match Ipc(ipc) - dispatch
+    Handle->>IpcRepo: ipc.add_record(kind, label, value, now)
+    IpcRepo->>IpcRepo: SerializableSecretBytes::from_secret_string
+    IpcRepo->>Stream: Framed::send(IpcRequest::AddRecord)
+    Stream->>Server: frame received
+    Server->>VaultMutex: lock
+    Server->>Handler: handle_add(&repo, &mut vault, kind, label, value, now)
+    Handler->>Handler: Uuid::now_v7 -> RecordId, build Record
+    Handler->>VaultMutex: vault.add_record(record)
+    Handler->>Repo: repo.save(&vault) - atomic write
+    Repo-->>Handler: Ok
+    Handler-->>Server: IpcResponse::Added { id }
+    Server->>VaultMutex: unlock
+    Server->>Stream: Framed::send(Added { id })
+    Stream-->>IpcRepo: Added frame received
+    IpcRepo-->>Handle: Ok(id)
+    Handle-->>Cli: id
+    Cli->>Cli: render_added(id, locale)
+    Cli->>User: stdout: added: {id} + exit code 0
+    Note over Cli,IpcRepo: id is daemon-generated, NOT cli-generated (no double-issuance)
+```
+
+### 代表シーケンス: `shikomi --ipc edit --id <id> --label NEW`（正常系、Issue #30 新規）
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Cli as shikomi-cli (run_edit)
+    participant IpcRepo as IpcVaultRepository
+    participant Stream as UDS
+    participant Server as shikomi-daemon
+    participant Handler as ipc::handler::edit
+    participant VaultMutex as Mutex Vault
+    participant Repo as SqliteVaultRepository
+
+    User->>Cli: shikomi --ipc edit --id <id> --label NEW
+    Cli->>Cli: clap parse, build EditInput { id, label: Some(NEW), value: None }
+    Cli->>IpcRepo: ipc.edit_record(id, Some(label), None, now)
+    IpcRepo->>Stream: Framed::send(IpcRequest::EditRecord)
+    Stream->>Server: frame
+    Server->>VaultMutex: lock
+    Server->>Handler: handle_edit(&repo, &mut vault, id, Some(label), None, now)
+    Handler->>VaultMutex: vault.find_record(&id)
+    alt id found
+        Handler->>VaultMutex: vault.update_record(id, |old| old.with_updated_label(label, now))
+        Handler->>Repo: repo.save(&vault)
+        Handler-->>Server: IpcResponse::Edited { id }
+    else id not found
+        Handler-->>Server: IpcResponse::Error(IpcErrorCode::NotFound { id })
+    end
+    Server->>VaultMutex: unlock
+    Server->>Stream: Framed::send(response)
+    Stream-->>IpcRepo: response frame
+    alt Edited
+        IpcRepo-->>Cli: Ok(id)
+        Cli->>User: stdout: updated: {id} + exit code 0
+    else Error(NotFound)
+        IpcRepo-->>Cli: Err(PersistenceError::RecordNotFound(id))
+        Cli->>User: stderr: MSG-CLI-106 + exit code 1
+    end
+```
+
+### 代表シーケンス: `shikomi --ipc remove --id <id> --yes`（正常系、Issue #30 新規）
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Cli as shikomi-cli (run_remove)
+    participant IpcRepo as IpcVaultRepository
+    participant Server as shikomi-daemon
+    participant Handler as ipc::handler::remove
+    participant VaultMutex as Mutex Vault
+    participant Repo as SqliteVaultRepository
+
+    User->>Cli: shikomi --ipc remove --id <id> --yes
+    Cli->>Cli: clap parse, RecordId::try_from_str
+    Cli->>IpcRepo: ipc.list_summaries() (id existence check + label preview)
+    IpcRepo-->>Cli: Vec RecordSummary
+    Note over Cli: id found in summaries, label retrieved (not displayed because --yes)
+    Note over Cli: --yes path: skip prompt only, build ConfirmedRemoveInput
+    Cli->>IpcRepo: ipc.remove_record(id)
+    IpcRepo->>Server: Framed::send(IpcRequest::RemoveRecord { id })
+    Server->>VaultMutex: lock
+    Server->>Handler: handle_remove(&repo, &mut vault, id)
+    Handler->>VaultMutex: vault.find_record(&id) - check existence
+    alt id found
+        Handler->>VaultMutex: vault.remove_record(&id)
+        Handler->>Repo: repo.save(&vault)
+        Handler-->>Server: IpcResponse::Removed { id }
+    else id not found
+        Handler-->>Server: IpcResponse::Error(IpcErrorCode::NotFound { id })
+    end
+    Server->>VaultMutex: unlock
+    Server-->>IpcRepo: response
+    alt Removed
+        IpcRepo-->>Cli: Ok(id)
+        Cli->>User: stdout: removed: {id} + exit code 0
+    else Error(NotFound)
+        IpcRepo-->>Cli: Err(PersistenceError::RecordNotFound(id))
+        Cli->>User: stderr: MSG-CLI-106 + exit code 1
+    end
+```
 
 ### 代表シーケンス: graceful shutdown
 

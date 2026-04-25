@@ -1,6 +1,6 @@
 # テスト設計書 — daemon-ipc（索引）
 
-<!-- feature: daemon-ipc / Issue #26 -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
 <!-- 配置先: docs/features/daemon-ipc/test-design/index.md -->
 <!-- 兄弟: ./unit.md, ./integration.md, ./e2e.md, ./ci.md -->
 
@@ -9,27 +9,28 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 feature | daemon-ipc（shikomi-daemon 骨格 + IPC プロトコル + `shikomi-cli --ipc` オプトイン） |
-| 対象 PR | [#28](https://github.com/shikomi-dev/shikomi/pull/28)（`feature/26-daemon-ipc` → `develop`） |
-| 対象ブランチ | `feature/26-daemon-ipc`（commit `ccf629d` 以降） |
-| 上位設計 | `../requirements-analysis.md`（受入基準 18 項目）/ `../requirements.md`（REQ-DAEMON-001〜023）/ `../basic-design/` 全 5 ファイル / `../detailed-design/` 全 7 ファイル |
-| MVP フェーズ | Phase 2（daemon 経由）**オプトイン限定**（`--ipc` 指定時のみ）。既定は Phase 1（SQLite 直結）を維持 |
+| 対象 PR | [#28](https://github.com/shikomi-dev/shikomi/pull/28)（Phase 1）/ **[#31](https://github.com/shikomi-dev/shikomi/pull/31)（Phase 1.5、`feat/issue-30-ipc-mutations` → `develop`、Issue #30）** |
+| 対象ブランチ | `feature/26-daemon-ipc`（Phase 1、merged ae4df15）/ **`feat/issue-30-ipc-mutations`（Phase 1.5、commit `a04e952` 以降）** |
+| 上位設計 | `../requirements-analysis.md`（受入基準 18 項目）/ `../requirements.md`（REQ-DAEMON-001〜023, **027 = Phase 1.5 reject 撤去**）/ `../basic-design/` 全 5 ファイル（Phase 1.5 で flows.md / error.md / ipc-protocol.md 改訂）/ `../detailed-design/` 全 7 ファイル（**Phase 1.5 で `ipc-vault-repository.md` 全面書換 = 案 D 確定**） |
+| MVP フェーズ | Phase 2（daemon 経由）**オプトイン限定**（`--ipc` 指定時のみ）。既定は Phase 1（SQLite 直結）を維持。**Phase 1.5（Issue #30）で 4 サブコマンド全て（list/add/edit/remove）が `--ipc` 経由で透過動作**（PR #29 の runtime reject 撤去） |
 | 対応 vault モード | 平文モードのみ。暗号化 vault は daemon 側で Fail Fast（exit 3）、`--ipc add/edit/remove` 経路では `IpcErrorCode::EncryptionUnsupported` |
-| テスト実行タイミング | 実装担当が `feature/26-daemon-ipc` に daemon + IPC + CLI 切替を積み上げた直後、`develop` マージ前 |
-| Vモデル対応 | E2E ↔ 受入基準（要件定義 18 項目）/ 結合 ↔ IPC ラウンドトリップ + UseCase 連携（基本設計）/ ユニット ↔ 型定義・pure 写像・peer credential 判定・CLI presenter（詳細設計） |
+| テスト実行タイミング | 実装担当が `feat/issue-30-ipc-mutations` に CLI 経路接続（`RepositoryHandle` enum + 専用メソッド 3 種 + reject 撤去）を積み上げた直後、`develop` マージ前 |
+| Vモデル対応 | E2E ↔ 受入基準（要件定義 18 項目）/ 結合 ↔ IPC ラウンドトリップ + 専用メソッド経路（基本設計）/ ユニット ↔ 型定義・pure 写像・peer credential 判定・CLI presenter・**専用メソッド 3 種・`From<IpcErrorCode> for PersistenceError`**（詳細設計） |
 | OS 対象 | Linux / macOS / Windows（受入基準 1, 13）。CI は 3 OS matrix |
 | 分割方針 | `cli-vault-commands` の 5 ファイル分割を踏襲。各 500 行以内 |
+| **Phase 1.5 の核（案 D 採用）** | `IpcVaultRepository` は **`VaultRepository` trait を実装しない**（trait 経由抽象を放棄）。専用メソッド `add_record` / `edit_record` / `remove_record` を新規。CLI Composition Root は `enum RepositoryHandle { Sqlite, Ipc }` で 2 経路保持、各 `run_*` が `match handle` で 2 アーム分岐。id 生成は **daemon 側集約**（CLI 側で `Uuid::now_v7()` を呼ばない）。詳細は `../detailed-design/ipc-vault-repository.md §設計方針の確定` 単一真実源 |
 
-> **テスト戦略の核**: 完璧な daemon など存在しないのだヨ——だからこそ実験体のコードを壊し、どこで歪むかを記録する。E2E から下りる「上流優先」で書き、受入基準 18 項目の網羅を最優先とする。数値カバレッジ目標は設けない（`cargo llvm-cov` は補助指標）。**静的監査（CI grep）が設計契約の最終防衛線**である（secret / `unsafe` / `Raw` / panic hook）。
+> **テスト戦略の核**: 完璧な daemon など存在しないのだヨ——だからこそ実験体のコードを壊し、どこで歪むかを記録する。E2E から下りる「上流優先」で書き、受入基準 18 項目の網羅を最優先とする。数値カバレッジ目標は設けない（`cargo llvm-cov` は補助指標）。**静的監査（CI grep）が設計契約の最終防衛線**である（secret / `unsafe` / `Raw` / panic hook / **嘘 ID 出荷防止 / runtime reject 撤去回帰**）。Phase 1.5 では「案 C（シャドウ差分）の構造的破綻を案 D（trait 非実装 + 専用メソッド）で消滅させた」設計を**型レベルの嘘が残っていないか**で検証する——`compute_diff` 系テストは構造的に発生不能となり廃止、専用メソッドの round-trip と RepositoryHandle 経路ディスパッチが新たな主戦場だヨ、クックック。
 
 ## 2. 索引（分割ファイル一覧）
 
 | ファイル | 内容 | 主要 TC-ID |
 |----------|------|-----------|
 | `index.md`（本書） | 概要、レベル戦略、トレーサビリティ、外部 I/O 依存マップ、モック方針 | — |
-| `e2e.md` | E2E（`assert_cmd` で実 daemon プロセス spawn）、ペルソナシナリオ、証跡方針 | TC-E2E-001〜112 |
-| `integration.md` | 結合（`tokio::test` + `tokio::io::duplex` in-process IPC、実 SQLite + `tempfile`） | TC-IT-001〜042 |
-| `unit.md` | pure function ユニット（protocol types round-trip、handler pure、peer credential 判定、CLI 側写像） | TC-UT-001〜080 |
-| `ci.md` | CI 監査（3 OS matrix / 静的 grep / `cargo-deny`）、ファイル配置、実行コマンド、証跡提出 | TC-CI-001〜025 |
+| `e2e.md` | E2E（`assert_cmd` で実 daemon プロセス spawn）、ペルソナシナリオ、証跡方針 | TC-E2E-001〜112、**TC-E2E-016（Phase 1.5: reject 撤去回帰）** |
+| `integration.md` | 結合（`tokio::test` + `tokio::io::duplex` in-process IPC、実 SQLite + `tempfile`） | TC-IT-001〜052、**TC-IT-080〜095（Phase 1.5: 専用メソッド round-trip + RepositoryHandle ディスパッチ）** |
+| `unit.md` | pure function ユニット（protocol types round-trip、handler pure、peer credential 判定、CLI 側写像） | TC-UT-001〜080、**TC-UT-100〜120（Phase 1.5: 専用メソッド + From<IpcErrorCode> + 嘘 ID 不在検証）** |
+| `ci.md` | CI 監査（3 OS matrix / 静的 grep / `cargo-deny`）、ファイル配置、実行コマンド、証跡提出 | TC-CI-001〜027、**TC-CI-028〜030（Phase 1.5: reject 撤去 grep + Uuid::now_v7 不使用 grep + VaultRepository impl 不在 grep）** |
 
 ---
 
@@ -70,9 +71,13 @@
 | 13 | 3 OS matrix CI で daemon 結合テスト pass | — | `.github/workflows/test-daemon.yml`（新設 or 拡張） | TC-CI-020〜022, TC-CI-025 | — |
 | 14 | arch ドキュメント変更が発生しない（工程 0 完結） | — | `docs/architecture/` 差分 0 | TC-CI-011 | — |
 | 15 | `shikomi-core::ipc` が `tokio` / `rmp-serde` 非依存 | REQ-DAEMON-018 | `crates/shikomi-core/Cargo.toml` + grep | TC-CI-012, TC-CI-013 | — |
-| 16 | `--ipc` 差替 1 行でコンポジションルート切替可能 | REQ-DAEMON-015, 016 | `shikomi-cli::run()` 内 `args.ipc` 分岐 | TC-E2E-080 | TC-CI-014（grep `IpcVaultRepository`／`SqliteVaultRepository` が `lib.rs` のみ） |
+| 16 | `--ipc` 差替 1 行でコンポジションルート切替可能 | REQ-DAEMON-015, 016 | `shikomi-cli::run()` 内 `args.ipc` 分岐 → `RepositoryHandle::Sqlite/Ipc` 構築 | TC-E2E-080 | TC-CI-014（grep `IpcVaultRepository`／`SqliteVaultRepository` が `lib.rs` のみ）、**TC-UT-115〜117（RepositoryHandle dispatch、Phase 1.5）** |
 | 17 | `expose_secret` 呼出 0 件（3 領域） | REQ-DAEMON-020 | `crates/shikomi-core/src/ipc/` / `crates/shikomi-cli/src/io/` / `crates/shikomi-daemon/src/` | TC-CI-015〜017 | TC-UT-018 |
 | 18 | `rmp_serde::Raw` / `RawRef` 0 件（`shikomi-core::ipc`） | — | RUSTSEC-2022-0092 不使用契約 | TC-CI-018 | — |
+| **Phase 1.5-α** | **`--ipc add/edit/remove` の runtime reject 撤去**（PR #29 の `lib.rs:119-` if ブロック削除回帰検証） | REQ-DAEMON-027 | `crates/shikomi-cli/src/lib.rs` の `if args.ipc && !matches!(...) { reject }` 不在 | **TC-E2E-016（regression）** | **TC-CI-028（grep "currently supports only the.*list.*subcommand" が src/ に 0 件）** |
+| **Phase 1.5-β** | **id 生成は daemon 側集約**（CLI 側で `Uuid::now_v7()` を呼ばない、嘘 ID 出荷の構造的排除） | REQ-DAEMON-008 + 詳細設計 §add_record | `shikomi-cli::io::ipc_vault_repository` 内で UUID 生成不在 | **TC-UT-118（ipc.add_record 戻り値 = Added 応答 id）** | **TC-CI-029（grep `Uuid::now_v7\\|Uuid::new_v` in `crates/shikomi-cli/src/io/ipc_*` が 0 件）** |
+| **Phase 1.5-γ** | **`IpcVaultRepository` が `VaultRepository` trait を実装しない**（案 D 構造契約） | 詳細設計 §設計方針の確定 | trait impl の構造的不在 | **TC-UT-119（`fn _assert_no_vault_repo_impl<T: VaultRepository>()` を `IpcVaultRepository` に instanciate する型レベル assert が`compile_fail` doctest として通る）** | **TC-CI-030（grep `impl[[:space:]]\\+VaultRepository[[:space:]]\\+for[[:space:]]\\+IpcVaultRepository` が `crates/shikomi-cli/src/` に 0 件）** |
+| **Phase 1.5-δ** | **`IpcErrorCode → PersistenceError` 写像 6 バリアント完全網羅**（NotFound / InvalidLabel / Domain は Phase 1.5 で実用上必須化） | REQ-DAEMON-021 + 詳細設計 §エラー写像 | `From<IpcErrorCode> for PersistenceError` | **TC-UT-110〜114（6 バリアント全写像）+ TC-IT-082/085/088（NotFound 経路 round-trip）** | — |
 
 ### 4.2 `IpcErrorCode` 全 6 バリアント × `IpcResponse::Error` 横断検証
 
@@ -164,8 +169,8 @@
 ---
 
 *作成: 涅マユリ（テスト担当）/ 2026-04-25*
-*対応 PR: [#28](https://github.com/shikomi-dev/shikomi/pull/28)*
-*対応 feature: daemon-ipc（Issue #26）*
-*Vモデル対応: E2E ↔ requirements-analysis.md（受入基準 18 項目）/ 結合 ↔ basic-design/ 全 5 ファイル（モジュール連携 + IPC 往復）/ ユニット ↔ detailed-design/ 全 7 ファイル（型・pure 写像・OS API 分割）*
+*対応 PR: [#28](https://github.com/shikomi-dev/shikomi/pull/28)（Phase 1）/ **[#31](https://github.com/shikomi-dev/shikomi/pull/31)（Phase 1.5）***
+*対応 feature: daemon-ipc（**Issue #26（Phase 1: list）/ Issue #30（Phase 1.5: add/edit/remove）**）*
+*Vモデル対応: E2E ↔ requirements-analysis.md（受入基準 18 項目）+ REQ-DAEMON-027（Phase 1.5 reject 撤去）/ 結合 ↔ basic-design/ 全 5 ファイル（モジュール連携 + IPC 往復 + **専用メソッド round-trip**）/ ユニット ↔ detailed-design/ 全 7 ファイル（型・pure 写像・OS API 分割・**案 D 専用メソッド + RepositoryHandle dispatch**）*
 
-> 完璧な daemon は存在しない——これが私の哲学だヨ。受入基準 18 項目と静的監査の全 grep 契約を**実験体のコード**が漏れなく潜り抜けて初めて「動くもの」と呼べる。バグが見つかれば……それは最高の研究成果だネ、クックック。
+> 完璧な daemon は存在しない——これが私の哲学だヨ。受入基準 18 項目と静的監査の全 grep 契約を**実験体のコード**が漏れなく潜り抜けて初めて「動くもの」と呼べる。Phase 1.5 では「案 C で発生していた 3 つの嘘——Plaintext(empty) / 嘘 ID / 常時 true な exists()」が**型システムで再発不能**になっていることを検証する。型レベルで嘘がつけない構造になったか、それともテスト時に嘘が漏れるか——壊れ方こそが研究データだヨ、クックック。バグが見つかれば……それは最高の研究成果だネ、百年後まで御機嫌よう。

@@ -83,6 +83,16 @@ panic hook 内部の secret 漏洩経路監査（TC-CI-023/024）に加え、本
 | TC-CI-022 | 13 | 同 workflow で `runs-on: windows-latest` の job が pass（`pwsh` シェル、既存 `windows.yml` と同型） | exit 0 |
 | TC-CI-025 | 13 | 同 workflow で `cargo test -p shikomi-cli --test 'e2e_ipc_*'` が 3 OS 全てで pass | exit 0 |
 
+### 1.10 [Phase 1.5 新設] Issue #30 案 D 構造契約の CI 強制
+
+PR #29 の runtime reject 撤去（Phase 1.5-α）/ 嘘 ID 出荷の構造的不在（Phase 1.5-β）/ `IpcVaultRepository` の `VaultRepository` trait 非実装（Phase 1.5-γ）を、CI grep で**型エラー以前に静的検出**する。これは UT（TC-UT-118 / 119）と二重防衛となる。
+
+| TC-ID | 対応受入基準 | 操作 | 期待結果 |
+|-------|------------|------|---------|
+| **TC-CI-028** | Phase 1.5-α / REQ-DAEMON-027 | `grep -rnE 'currently supports only the.*list.*subcommand\|--ipc currently supports only' crates/shikomi-cli/src/` | **マッチ 0 件**（PR #29 の runtime reject メッセージ文字列が src/ に残っていない構造検証）。tests/ 配下は対象外（TC-E2E-016 の assert 文言として `.not()` 検証で出現する正当用途） |
+| **TC-CI-029** | Phase 1.5-β | `grep -rnE 'Uuid::now_v7\|Uuid::new_v[0-9]\|uuid::Uuid::new' crates/shikomi-cli/src/io/ipc_vault_repository.rs crates/shikomi-cli/src/io/ipc_client.rs` | **マッチ 0 件**（id 生成は daemon 側集約、CLI 側 IPC モジュールでの UUID 生成不在を構造的に保証） |
+| **TC-CI-030** | Phase 1.5-γ | `grep -rnE 'impl[[:space:]]+VaultRepository[[:space:]]+for[[:space:]]+IpcVaultRepository\|impl[[:space:]]+shikomi_infra::VaultRepository[[:space:]]+for[[:space:]]+IpcVaultRepository' crates/shikomi-cli/src/` | **マッチ 0 件**（案 D 構造契約。`IpcVaultRepository` が `VaultRepository` trait を実装していたら案 C の構造的破綻が再発するため、grep で構造的に遮断） |
+
 ---
 
 ## 2. 静的監査スクリプト拡張（`scripts/ci/audit-secret-paths.sh`）
@@ -162,6 +172,39 @@ if matches="$(grep -rnE 'env::var.*SHIKOMI_DAEMON_SKIP|std::env::var.*SHIKOMI_DA
     2>/dev/null)"; then
     echo "$matches"; fail "TC-CI-027 FAIL: SHIKOMI_DAEMON_SKIP_* env read in production src/"
 fi; echo "[TC-CI-027] PASS"
+
+# --- TC-CI-028 [Phase 1.5] ----------------------------------------
+# Issue #30: PR #29 の runtime reject 文字列が src/ に残っていないことを保証
+# (REQ-DAEMON-027 / Phase 1.5-α)
+echo "[TC-CI-028] PR#29 runtime reject message removed from src/"
+if matches="$(grep -rnE 'currently supports only the.*list.*subcommand|--ipc currently supports only' \
+    crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    2>/dev/null)"; then
+    echo "$matches"; fail "TC-CI-028 FAIL: PR #29 reject message still in src/"
+fi; echo "[TC-CI-028] PASS"
+
+# --- TC-CI-029 [Phase 1.5] ----------------------------------------
+# Issue #30: CLI 側の IPC モジュールで Uuid 生成を行っていないことを保証
+# (Phase 1.5-β、id 生成は daemon 側集約、嘘 ID 出荷の構造的排除)
+echo "[TC-CI-029] No Uuid generation in CLI IPC modules"
+if matches="$(grep -rnE 'Uuid::now_v7|Uuid::new_v[0-9]|uuid::Uuid::new' \
+    crates/shikomi-cli/src/io/ipc_vault_repository.rs \
+    crates/shikomi-cli/src/io/ipc_client.rs \
+    2>/dev/null)"; then
+    echo "$matches"; fail "TC-CI-029 FAIL: UUID generation found in CLI IPC modules"
+fi; echo "[TC-CI-029] PASS"
+
+# --- TC-CI-030 [Phase 1.5] ----------------------------------------
+# Issue #30: IpcVaultRepository が VaultRepository trait を実装しないことを保証
+# (Phase 1.5-γ、案 D 構造契約、案 C の構造的破綻再発防止)
+echo "[TC-CI-030] IpcVaultRepository does NOT implement VaultRepository"
+if matches="$(grep -rnE 'impl[[:space:]]+VaultRepository[[:space:]]+for[[:space:]]+IpcVaultRepository|impl[[:space:]]+shikomi_infra::VaultRepository[[:space:]]+for[[:space:]]+IpcVaultRepository' \
+    crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    2>/dev/null)"; then
+    echo "$matches"; fail "TC-CI-030 FAIL: IpcVaultRepository implements VaultRepository (case D contract violated)"
+fi; echo "[TC-CI-030] PASS"
 ```
 
 既存の TC-CI-012〜015 セクションは維持（`cli-vault-commands` 由来）、本 feature で上記を**追記**する。`tests/` 配下は対象外（`common/peer_mock.rs` は trait 実装のみで env 不使用、理論上マッチしない）。
@@ -195,7 +238,7 @@ test-daemon:
 1. **Stage 1: 静的チェック**（早期 fail）
    - `cargo fmt --check --all`（TC-CI-001）
    - `cargo clippy --workspace --all-targets -- -D warnings`（TC-CI-002）
-   - `bash scripts/ci/audit-secret-paths.sh`（TC-CI-015〜019, 023, 024, **026, 027**）
+   - `bash scripts/ci/audit-secret-paths.sh`（TC-CI-015〜019, 023, 024, 026, 027, **[Phase 1.5] 028〜030**）
    - `bash scripts/ci/audit-arch-docs.sh`（TC-CI-011、差分ゼロ確認）
    - `bash scripts/ci/audit-core-purity.sh`（TC-CI-012, 013、`shikomi-core` 純粋性）
 2. **Stage 2: 依存監査**
@@ -266,17 +309,23 @@ crates/shikomi-daemon/
 
 crates/shikomi-cli/src/io/
 ├── mod.rs                        # 既存編集、ipc_* を export
-├── ipc_vault_repository.rs       # tests { TC-UT-050〜054, 060〜064 }
+├── ipc_vault_repository.rs       # tests { TC-UT-050〜054, [Phase 1.5] TC-UT-100〜114b, 118〜120 }
+│                                 # 旧 TC-UT-060〜064 は §2.11 で廃止
 └── ipc_client.rs
 
 crates/shikomi-cli/src/error.rs   # tests { TC-UT-090〜094, 040, 041 }（cli 側の追加バリアント、`From<PersistenceError>` / `From<&CliError> for ExitCode`）
 crates/shikomi-cli/src/presenter/error.rs  # tests { TC-UT-070〜073 }
+crates/shikomi-cli/src/lib.rs     # tests { [Phase 1.5] TC-UT-115〜117（RepositoryHandle dispatch 網羅性） }
 
 crates/shikomi-cli/tests/
 ├── common/
 │   └── mod.rs                    # spawn_stub_server() / shared fixtures
-├── it_ipc_vault_repository.rs    # TC-IT-040〜052（connect 4 / not-running 1 / save diff 3 / incl. reclassified TC-E2E-041）
-├── e2e_ipc_crud.rs               # TC-E2E-010〜015
+│                                 # [Phase 1.5] record_received_request() 追加
+├── it_ipc_vault_repository.rs    # TC-IT-040〜049（connect 4 + not-running 1 + list_summaries）
+│                                 # [Phase 1.5] TC-IT-080〜089（add/edit/remove 専用メソッド round-trip）
+│                                 # 旧 TC-IT-050〜052 は §5.3 で廃止
+├── it_repository_handle_dispatch.rs  # [Phase 1.5 新設] TC-IT-090〜095（run_*ハンドラ結合）
+├── e2e_ipc_crud.rs               # TC-E2E-010〜015、[Phase 1.5] TC-E2E-016（reject 撤去回帰）
 ├── e2e_ipc_composition.rs        # TC-E2E-080
 └── e2e_ipc_scenarios.rs          # TC-E2E-110〜112
 ```
@@ -328,9 +377,9 @@ just test
 
 | 種別 | ファイル名 | 内容 |
 |------|----------|------|
-| E2E 実行ログ | `daemon-ipc-e2e-report.md` | TC-E2E-001〜112 の結果、3 OS matrix 結果、`SECRET_TEST_VALUE` 不在 grep 結果 |
-| 結合・ユニット集計 | `daemon-ipc-test-summary.md` | `cargo test` の集計（X passed; Y failed の TC 別表）、TC-UT-080 の固定文言確認、round-trip 成功数 |
-| 静的監査 | `daemon-ipc-static-audit.md` | TC-CI-011〜019, 023, 024, 026, 027 の grep 結果（全て 0 件ベースライン） |
+| E2E 実行ログ | `daemon-ipc-e2e-report.md` | TC-E2E-001〜112 + **TC-E2E-016（Phase 1.5 reject 撤去回帰）** の結果、3 OS matrix 結果、`SECRET_TEST_VALUE` 不在 grep 結果 |
+| 結合・ユニット集計 | `daemon-ipc-test-summary.md` | `cargo test` の集計（X passed; Y failed の TC 別表）、TC-UT-080 の固定文言確認、round-trip 成功数、**[Phase 1.5] TC-UT-100〜120（専用メソッド + From<IpcErrorCode> + RepositoryHandle）+ TC-IT-080〜095 の集計** |
+| 静的監査 | `daemon-ipc-static-audit.md` | TC-CI-011〜019, 023, 024, 026, 027 + **[Phase 1.5] TC-CI-028〜030**（reject 撤去 / Uuid 不在 / VaultRepository impl 不在）の grep 結果（全て 0 件ベースライン） |
 | 3 OS matrix | `daemon-ipc-matrix-results.md` | Linux / macOS / Windows の `cargo test` 結果比較、OS 固有の skip テスト一覧 |
 | カバレッジ | `daemon-ipc-coverage.html` | `cargo llvm-cov --html` の参考値（目標値なし、上位ケース網羅の確認用） |
 | バグレポート（発見時） | `daemon-ipc-bugs.md` | ファイル・行番号・期待と実際・再現手順・優先度 |

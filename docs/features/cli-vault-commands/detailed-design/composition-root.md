@@ -1,7 +1,7 @@
 # 詳細設計書 — composition-root（run() の処理順序 / panic hook）
 
 <!-- 基本設計書とは別ファイル。統合禁止 -->
-<!-- feature: cli-vault-commands / Issue #TBD -->
+<!-- feature: cli-vault-commands / Issue #TBD (Phase 1) / Issue #26 (daemon-ipc Phase 1) / Issue #30 (daemon-ipc Phase 1.5) -->
 <!-- 配置先: docs/features/cli-vault-commands/detailed-design/composition-root.md -->
 <!-- 兄弟: ./index.md, ./data-structures.md, ./public-api.md, ./clap-config.md, ./infra-changes.md, ./future-extensions.md -->
 
@@ -21,33 +21,67 @@
 3. **tracing_subscriber 初期化**（verbose / quiet フラグはこの時点で未パースのため、デフォルト `info` レベルで一旦初期化）
 4. **clap パース**: `let args = match CliArgs::try_parse() { Ok(a) => a, Err(e) => return handle_clap_error(e, locale) };`（clap エラー扱いは `./clap-config.md §clap エラー扱い` 参照）
 5. **tracing レベル再設定**（`args.verbose == true` なら `debug` へ）
-6. **Repository 構築**（`daemon-ipc` feature で `args.ipc` 分岐を追加）:
+6. **Repository 構築**（`daemon-ipc` feature で `args.ipc` 分岐を追加、Issue #30 で `RepositoryHandle` enum に確定）:
    - **`args.ipc == false`（既定、Phase 1）**:
      - `args.vault_dir.is_some()` → `SqliteVaultRepository::from_directory(args.vault_dir.as_ref().unwrap())`
      - `args.vault_dir.is_none()` → `let os_default = io::paths::resolve_os_default_vault_dir()?` → `SqliteVaultRepository::from_directory(&os_default)`
-     - 結果を `Box<dyn VaultRepository>` で抽象化保持
-   - **`args.ipc == true`（オプトイン、Phase 2、`daemon-ipc` feature で追加）**:
+     - 結果を `RepositoryHandle::Sqlite(repo)` で保持
+   - **`args.ipc == true`（オプトイン、Phase 1.5 = list/add/edit/remove 全透過、`daemon-ipc` feature で追加）**:
      - `quiet == false` なら `eprintln!("{}", render_warning(WarningKind::IpcOptInNotice, locale))` で `MSG-CLI-051` を stderr に出力
      - `let socket_path = io::ipc_vault_repository::IpcVaultRepository::default_socket_path()?;`
-     - `let repo = io::ipc_vault_repository::IpcVaultRepository::connect(&socket_path)?;`（内部で `tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(...)` 経由）
-     - 結果を `Box<dyn VaultRepository>` で抽象化保持
+     - `let ipc = io::ipc_vault_repository::IpcVaultRepository::connect(&socket_path)?;`（内部で current-thread tokio runtime を構築・所有、`block_on` で daemon 接続 + ハンドシェイク）
+     - 結果を `RepositoryHandle::Ipc(ipc)` で保持
    - エラー時は `render_error(&err, locale)` を stderr に流し `ExitCode::from(&err)` で return（`CliError::DaemonNotRunning` / `ProtocolVersionMismatch` を含む全 `PersistenceError` 経路を統一処理）
-7. **サブコマンド分岐**: `match args.subcommand` で 4 分岐（**`&*repo` を渡すため `args.ipc` の値は意識しない**、Phase 2 移行契約の体現）:
-   - `Subcommand::List` → `run_list(&*repo, locale, args.quiet)`
-   - `Subcommand::Add(a)` → `run_add(&*repo, a, locale, args.quiet)`
-   - `Subcommand::Edit(a)` → `run_edit(&*repo, a, locale, args.quiet)`
-   - `Subcommand::Remove(a)` → `run_remove(&*repo, a, locale, args.quiet)`
+7. **サブコマンド分岐**: `match args.subcommand` で 4 分岐。各 `run_*` 関数に `&handle` を渡し、関数内部で `match handle` の 2 アーム（`Sqlite` / `Ipc`）でさらに経路分岐する（§RepositoryHandle 経路ディスパッチ 参照）:
+   - `Subcommand::List` → `run_list(&handle, locale, args.quiet)`
+   - `Subcommand::Add(a)` → `run_add(&handle, a, locale, args.quiet)`
+   - `Subcommand::Edit(a)` → `run_edit(&handle, a, locale, args.quiet)`
+   - `Subcommand::Remove(a)` → `run_remove(&handle, a, locale, args.quiet)`
 8. **各 `run_*` 関数**は `Result<(), CliError>` を返す。`Ok(())` は `ExitCode::Success` に、`Err(e)` は `render_error(&e, locale)` を stderr に流して `ExitCode::from(&e)` に写像
 
-**`Box<dyn VaultRepository>` 化の背景**:
-- 既存の `cli-vault-commands` Phase 1 実装では `SqliteVaultRepository` を具体型で保持していた（`let repo: SqliteVaultRepository = ...`）
-- `daemon-ipc` feature で `args.ipc == true` の経路が `IpcVaultRepository` を返すため、両者を同じ変数で扱うには `Box<dyn VaultRepository>` 抽象化が必要
-- 既存の `usecase::list::list_records(repo: &dyn VaultRepository)` のシグネチャは `&dyn` を受ける設計のため、`&*box_repo` で渡すだけで互換性維持
+## `RepositoryHandle` enum（Issue #30 で確定）
+
+**配置**: `crates/shikomi-cli/src/lib.rs` の `run()` 内部 / non-public enum
+
+**定義**: `enum RepositoryHandle { Sqlite(SqliteVaultRepository), Ipc(IpcVaultRepository) }`
+
+- `#[non_exhaustive]` を**付けない**（CLI 内部限定 enum、`match` の網羅性検査をコンパイル時の修正漏れ検出に活用）
+- `Sized` 実装可能なため `Box` 不要、stack 配置でオーバーヘッドなし
+- `IpcVaultRepository` は `VaultRepository` trait を**実装しない**（`docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md §設計方針の確定` の単一真実源）。よって `Box<dyn VaultRepository>` は構造的に表現不能、`enum dispatch` を採用する
+
+**設計判断**:
+- PR #29 段階では `Box<dyn VaultRepository>` で「Sqlite / Ipc 両方が `VaultRepository` を実装する」前提で設計したが、Issue #30 で `IpcVaultRepository` の trait 非実装方針が確定したため `enum` 型に切り替え
+- 旧設計の「`run()` の 1 行差し替えで Phase 2 移行」契約は、新設計では「`RepositoryHandle::Sqlite` バリアント削除 1 行 + 各 `run_*` の `match` 1 アーム削除」に置き換わる。コンパイル時に網羅性検査が変更箇所を全列挙するため**修正漏れがない**
+- 将来 `args.ipc` を既定値 `true` に切替えるだけなら enum 構造はそのまま、`construct_handle` 側で構築バリアントを変えるだけで済む
+
+## RepositoryHandle 経路ディスパッチ（`run_*` 各ハンドラの内部）
+
+| サブコマンド | `RepositoryHandle::Sqlite(repo)` 経路 | `RepositoryHandle::Ipc(ipc)` 経路 |
+|-----------|-----------------------------------|--------------------------------|
+| `list` | `usecase::list::list_records(repo)?` → 戻り値 `Vec<RecordView>` | `ipc.list_summaries()?` → `RecordSummary` を `RecordView::from_summary` で射影 → `Vec<RecordView>` |
+| `add` | `usecase::add::add_record(repo, input, now)?` | `ipc.add_record(input.kind, input.label, input.value, now)?`（`AddInput` を分解して渡す） |
+| `edit` | `usecase::edit::edit_record(repo, input, now)?` | `ipc.edit_record(input.id, input.label, input.value, now)?` |
+| `remove` | `usecase::remove::remove_record(repo, input)?` | `ipc.remove_record(input.id().clone())?`（`ConfirmedRemoveInput::id()` から取得） |
+
+**両経路で共通する責務**（`run_*` 関数の前段 / 後段で実行、`match` 分岐の外）:
+- 入力 DTO 構築（`AddInput` / `EditInput` / `ConfirmedRemoveInput`）
+- TTY プロンプト / `--yes` 処理（`run_remove` のみ）
+- shell 履歴警告（`run_add` / `run_edit`）
+- `now: OffsetDateTime` の取得（`OffsetDateTime::now_utc()`）
+- 戻り値 `RecordId` の presenter 整形（`render_added` / `render_updated` / `render_removed`）
+- stdout への出力 / `quiet` 抑止判定
+
+**両経路で共通しない責務**:
+- ID 生成: Sqlite 経路は `usecase::add::add_record` 内で `Uuid::now_v7()` 生成（CLI 側）。IPC 経路は **daemon 側で生成**し、`IpcResponse::Added { id }` で受け取る。CLI 側の IPC 経路は `Uuid` を**呼ばない**（嘘 ID 出荷の構造的排除、`docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md §add_record`）
+- vault 未作成時の初期化: Sqlite 経路は `repo.exists()` false 時に `Vault::new` で空 vault を構築・保存。IPC 経路は daemon 側で `repo.load()` 失敗 → `IpcResponse::Error(Persistence)` 返却 → CLI で終了コード 2 で fail fast（vault 未作成時の自動初期化は Phase 1.5 スコープ外、後続 feature `daemon-vault-init` で対応）
+- 暗号化 vault 検出: Sqlite 経路は `usecase::list::list_records` 等で `EncryptionUnsupported` 検出。IPC 経路は daemon 起動時に検出済（exit 3）、CLI 側は接続失敗で `DaemonNotRunning` 経由（運用上は同じ「使えない」状態）
 
 ## `run_list` 関数の内部
 
-1. `usecase::list::list_records(repo)?`
-2. `presenter::list::render_list(&views, locale)`
+1. `match handle`:
+   - `RepositoryHandle::Sqlite(repo)` → `let views = usecase::list::list_records(repo)?;`
+   - `RepositoryHandle::Ipc(ipc)` → `let summaries = ipc.list_summaries()?;` → `let views: Vec<RecordView> = summaries.iter().map(RecordView::from_summary).collect();`
+2. `let rendered = presenter::list::render_list(&views, locale);`
 3. `args.quiet == false` なら `println!("{}", rendered)` で stdout に書き出し（`quiet == true` なら出力抑止）
 4. `Ok(())`
 
@@ -62,10 +96,16 @@
 3. `RecordLabel::try_new(args.label.clone())?` → `CliError::InvalidLabel` 写像
 4. `let input = AddInput { kind: args.kind.into(), label, value };`
 5. `let now = OffsetDateTime::now_utc();`
-6. `let id = usecase::add::add_record(repo, input, now)?;`
-7. vault 未作成時の初期化メッセージ（stdout）: `if !initially_existed { println!("{}", render_initialized_vault(&path, locale)); }` — ただし `initially_existed` を UseCase から戻す必要があるため、UseCase シグネチャを `Result<(RecordId, bool), CliError>` に拡張するか、`render_initialized_vault` を UseCase の第一書込前に `run()` 側で repo.exists() を事前確認するかを実装時に決定（本設計では後者を採用、repo.exists() を 2 回呼ぶコストは些少）
-8. `println!("{}", render_added(&id, locale))`（`quiet` でなければ）
-9. `Ok(())`
+6. `match handle`:
+   - `RepositoryHandle::Sqlite(repo)`:
+     - vault 未作成時の初期化メッセージ判定: `let initially_existed = repo.exists();`
+     - `let id = usecase::add::add_record(repo, input, now)?;`（UseCase 内で `exists()` 再確認・空 vault 構築・`Uuid::now_v7()` 生成）
+     - `if !initially_existed && args.quiet == false { println!("{}", render_initialized_vault(&path, locale)); }`
+   - `RepositoryHandle::Ipc(ipc)`:
+     - vault 初期化メッセージは**出さない**（IPC 経路では daemon が vault の存在を保証している前提、未作成時は daemon 側で `IpcResponse::Error(Persistence)` 返却 → CLI 終了コード 2 で fail fast）
+     - `let id = ipc.add_record(input.kind, input.label, input.value, now)?;`（id は **daemon 側生成**）
+7. `println!("{}", render_added(&id, locale))`（`quiet` でなければ）
+8. `Ok(())`
 
 ## `run_edit` 関数の内部
 
@@ -77,7 +117,9 @@
 6. `let input = EditInput { id, label, value };`
 7. shell 履歴警告: 既存レコード（まだ load していないので警告判定は `args.value.is_some() && args.stdin == false` だけで済ますか、load 後の既存 kind と照合するかは実装時判断。設計方針は前者（`run_add` と挙動を揃える））
 8. `let now = OffsetDateTime::now_utc();`
-9. `let id = usecase::edit::edit_record(repo, input, now)?;`
+9. `match handle`:
+   - `RepositoryHandle::Sqlite(repo)` → `let id = usecase::edit::edit_record(repo, input, now)?;`
+   - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.edit_record(input.id, input.label, input.value, now)?;`
 10. `println!("{}", render_updated(&id, locale))`
 11. `Ok(())`
 
@@ -92,9 +134,38 @@
        - それ以外 → `println!("{}", render_cancelled(locale))` で stdout 出力 → `Ok(())` で early return（`ExitCode::Success`）
      - `is_stdin_tty() == false` → `CliError::NonInteractiveRemove`
 3. `let input = ConfirmedRemoveInput::new(id);`
-4. `let id = usecase::remove::remove_record(repo, input)?;`
+4. `match handle`:
+   - `RepositoryHandle::Sqlite(repo)` → `let id = usecase::remove::remove_record(repo, input)?;`
+   - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.remove_record(input.id().clone())?;`（`ConfirmedRemoveInput::id()` の read-only アクセサで `&RecordId` を取得し clone、確認経由の型保証は match の Ipc アームに到達する時点で既に成立済み）
 5. `println!("{}", render_removed(&id, locale))`
 6. `Ok(())`
+
+## 確認プロンプトの label 表示と id 存在確認（`run_remove` 補足、Issue #30 で経路追加）
+
+`run_remove` は確認プロンプト前段で **`--yes` の有無に関わらず常に label 取得を実行する**。これにより id 非存在時の Fail Fast 経路が `--yes` / 非 `--yes` で**完全一致**する。
+
+- `match handle`:
+  - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` 経由で `find_record(&id)` → label 取得
+  - `RepositoryHandle::Ipc(ipc)` → `ipc.list_summaries()?` で全 summary を取得 → `iter().find(|s| s.id == id)` で `RecordSummary.label` 取得
+
+両経路で label 取得失敗（id 非存在）時は、確認前に `CliError::RecordNotFound(id)` で early return（プロンプト表示前に Fail Fast、**IPC 経路では `RemoveRecord` リクエストを発行しない**）。
+
+`--yes` 経路の挙動:
+- ステップ 1（label 取得）: **実行する**（id 存在確認のため）
+- ステップ 2（プロンプト y/N 表示）: **スキップする**（`--yes` 確認済み扱い）
+- ステップ 3（`ConfirmedRemoveInput::new(id)` 構築）: 取得した label は**画面に出さない**（`--yes` で UX 簡略化）
+
+`--yes` でない経路の挙動:
+- ステップ 1（label 取得）: 実行する
+- ステップ 2（プロンプト y/N 表示）: 取得した label を `"Delete record {id} ({label})? [y/N]: "` で**表示する**
+- ステップ 3: y/Y なら構築、それ以外は `render_cancelled` で early return（`ExitCode::Success`）
+
+**設計理由**: 「`--yes` 時は label 取得を省略する」最適化を**しない**。理由:
+- `--yes` で daemon に直接 `RemoveRecord` を投げて NotFound を受信するのは余計な往復。Fail Fast を CLI 側 1 段で完結させる方がレイテンシ・ユーザ視認性ともに良い
+- TC-IT-093（`--yes` でも id 非存在時に `RemoveRecord` 未発行）の意図を満たす
+- Sqlite 経路と IPC 経路で挙動を揃え、テスト・実装の重複ロジックを避ける（DRY）
+
+**16 MiB フレーム上限との関係**: IPC 経路で `list_summaries` 全件取得が`MAX_FRAME_LENGTH = 16 MiB` を超える可能性は、約 80k レコード（vault 100k × 平均 200 byte = 約 20 MB の手前）が現実的境界。Phase 1.5 では full-list 戦略で十分（YAGNI、`docs/features/daemon-ipc/basic-design/flows.md §list_summaries 全件取得の境界`）。
 
 **プロンプトに表示する label**: プロンプトは削除対象の label も表示する（`"Delete record {id} ({label})? [y/N]: "`）。label を取得するため、プロンプト表示前に `repo.load()` を一度呼んで `find_record` する必要がある。この load は後続の UseCase 内でも再度呼ばれるが、パフォーマンス上は無視できる（vault 全体を毎回 load する既存 infra の粒度）。実装簡素化のため、プロンプト表示用の label 取得は `run_remove` 内で独自に load するのを許容する。
 
