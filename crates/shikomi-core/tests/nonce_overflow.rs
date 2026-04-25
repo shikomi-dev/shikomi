@@ -1,25 +1,32 @@
-//! 結合テスト: `NonceCounter` オーバーフロー検知（TC-I05）
-//! REQ-010 / AC-05, AC-06
+//! 結合テスト: `NonceCounter` 上限到達検知 (TC-I05)
+//!
+//! Sub-A 凍結後の API:
+//! - `NonceCounter::resume(count: u64) -> Self`
+//! - `NonceCounter::increment(&mut self) -> Result<(), DomainError>`
+//! - 上限 `NonceCounter::LIMIT = 1u64 << 32` (NIST SP 800-38D §8.3 random nonce birthday bound)
 
 use shikomi_core::{DomainError, NonceCounter};
 
-/// TC-I05: `NonceCounter` が `u32::MAX` 到達で `NonceOverflow` を返す
+/// TC-I05: `NonceCounter` が `LIMIT` 到達で `NonceLimitExceeded` を返す。
 #[test]
-fn test_nonce_counter_overflow_at_max_from_public_api() {
-    let mut counter = NonceCounter::resume([0u8; 8], u32::MAX);
-    let err = counter.next().unwrap_err();
+fn test_nonce_counter_increment_at_limit_returns_nonce_limit_exceeded_from_public_api() {
+    let mut counter = NonceCounter::resume(NonceCounter::LIMIT);
+    let err = counter.increment().unwrap_err();
     assert!(
-        matches!(err, DomainError::NonceOverflow),
-        "Expected NonceOverflow, got: {err:?}"
+        matches!(err, DomainError::NonceLimitExceeded),
+        "Expected NonceLimitExceeded, got: {err:?}"
     );
+    // 加算されないこと (Fail Fast: 失敗時は状態不変)
+    assert_eq!(counter.current(), NonceCounter::LIMIT);
 }
 
-/// TC-I05 補足: `u32::MAX` - 1 では成功する（境界値直前）
+/// TC-I05 補足: `LIMIT - 1` では成功し、`current()` が `LIMIT` に到達する。
 #[test]
-fn test_nonce_counter_next_at_max_minus_one_succeeds_from_public_api() {
-    let mut counter = NonceCounter::resume([0u8; 8], u32::MAX - 1);
+fn test_nonce_counter_increment_at_limit_minus_one_succeeds_from_public_api() {
+    let mut counter = NonceCounter::resume(NonceCounter::LIMIT - 1);
     assert!(
-        counter.next().is_ok(),
-        "next() at u32::MAX - 1 must succeed"
+        counter.increment().is_ok(),
+        "increment() at LIMIT - 1 must succeed"
     );
+    assert_eq!(counter.current(), NonceCounter::LIMIT);
 }

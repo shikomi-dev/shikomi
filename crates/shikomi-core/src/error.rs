@@ -1,6 +1,7 @@
 //! ドメインエラー型。
 //!
 //! 全モジュールが返す `DomainError` と、各バリアントの詳細理由を列挙する。
+//! 暗号特化エラーは `CryptoError` に集約し、`DomainError::Crypto` で内包する。
 
 use thiserror::Error;
 
@@ -44,9 +45,19 @@ pub enum DomainError {
     #[error("{0}")]
     VaultConsistencyError(VaultConsistencyReason),
 
-    /// MSG-DEV-005: `NonceCounter` が上限 (`u32::MAX`) に達した。rekey が必要。
-    #[error("nonce counter exhausted; rekey required")]
-    NonceOverflow,
+    /// MSG-DEV-005: `NonceCounter` が上限 (`1u64 << 32`) に達した。
+    /// rekey が必要 (NIST SP 800-38D §8.3 random nonce birthday bound)。
+    ///
+    /// Sub-A 凍結文言。Sub-0 で `NonceLimitExceeded` に統一。
+    #[error("nonce counter limit exceeded; rekey required")]
+    NonceLimitExceeded,
+
+    /// 暗号系エラーを内包する透過バリアント。
+    ///
+    /// 暗号操作 (KDF / AEAD / 強度ゲート) の失敗は `CryptoError` 側で詳細化し、
+    /// `DomainError` はその通過点として動作する。
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
 }
 
 // -------------------------------------------------------------------
@@ -61,13 +72,17 @@ pub enum InvalidVaultHeaderReason {
     #[error("kdf_salt length mismatch: expected {expected}, got {got}")]
     KdfSaltLength { expected: usize, got: usize },
 
-    /// `WrappedVek` が空（0 バイト）。
-    #[error("wrapped_vek is empty")]
+    /// `WrappedVek` の `ciphertext` が空（0 バイト）。
+    #[error("wrapped_vek ciphertext is empty")]
     WrappedVekEmpty,
 
-    /// `WrappedVek` が最小長未満（AES-GCM タグ 16 B 以上必要）。
-    #[error("wrapped_vek is too short")]
+    /// `WrappedVek` の `ciphertext` が最小長未満（VEK 32B が最小）。
+    #[error("wrapped_vek ciphertext is too short")]
     WrappedVekTooShort,
+
+    /// `AuthTag` のバイト長が 16 ではない（AES-GCM 認証タグ仕様）。
+    #[error("auth_tag length mismatch: expected 16, got {got}")]
+    AuthTagLength { got: usize },
 }
 
 /// `DomainError::InvalidRecordId` の詳細理由。
@@ -157,6 +172,65 @@ pub enum VaultConsistencyReason {
     InvalidUpdatedAt,
 }
 
+// -------------------------------------------------------------------
+// CryptoError
+// -------------------------------------------------------------------
+
+/// 暗号操作（KDF / AEAD / 強度ゲート / Verified 構築）に特化したエラー。
+///
+/// `DomainError::Crypto(CryptoError)` で `DomainError` に内包される。
+/// 詳細は `docs/features/vault-encryption/detailed-design/errors-and-contracts.md` を参照。
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CryptoError {
+    /// `MasterPassword::new` が `PasswordStrengthGate::validate` で拒否された。
+    /// 内包する `WeakPasswordFeedback` をそのまま MSG-S08 に渡す（Fail Kindly）。
+    ///
+    /// `Box` でヒープ移送して `CryptoError` enum 全体のサイズを抑える
+    /// (clippy::result_large_err 対策。`WeakPasswordFeedback` は
+    /// `Option<String> + Vec<String>` で約 48B あるため、`DomainError` /
+    /// `PersistenceError` の連鎖サイズ膨張を防ぐ目的でヒープに逃がす)。
+    #[error("weak password rejected by strength gate")]
+    WeakPassword(Box<crate::crypto::password::WeakPasswordFeedback>),
+
+    /// AEAD 復号タグ検証失敗（vault.db 改竄の可能性）。MSG-S10 経路。
+    #[error("AEAD authentication tag verification failed")]
+    AeadTagMismatch,
+
+    /// `NonceCounter::increment` が上限到達。`rekey` 強制（NIST SP 800-38D §8.3）。MSG-S11 経路。
+    #[error("nonce counter exceeded {limit}; rekey required")]
+    NonceLimitExceeded {
+        /// 上限値 (`1u64 << 32`)。
+        limit: u64,
+    },
+
+    /// KDF 計算失敗（Argon2id / PBKDF2 / HKDF）。Sub-B が source エラーを内包する。
+    #[error("KDF computation failed: {kind:?}")]
+    KdfFailed {
+        /// 失敗した KDF の種別。
+        kind: KdfErrorKind,
+        /// 元エラー（Sub-B 実装が `Box<dyn>` 化して内包）。
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// `Plaintext` を `Verified<_>` 経由なしで構築しようとした runtime 検出。
+    /// 通常は `pub(in crate::crypto::verified)` 可視性でコンパイル時に防がれる。
+    #[error("Plaintext requires Verified<_> wrapper")]
+    VerifyRequired,
+}
+
+/// `CryptoError::KdfFailed` の KDF 種別を表す。Sub-B で source エラーを差別化する用途。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KdfErrorKind {
+    /// Argon2id (Master Password 由来 KEK).
+    Argon2id,
+    /// PBKDF2-HMAC-SHA512 (BIP-39 mnemonic → seed).
+    Pbkdf2,
+    /// HKDF-SHA256 (PBKDF2 seed → KEK_recovery).
+    Hkdf,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,8 +267,6 @@ mod tests {
             record_mode: ProtectionMode::Encrypted,
         });
         let msg = format!("{err}");
-        // #[error("{0}")] により VaultConsistencyReason の Display が素通しになる。
-        // ModeMismatch の Display: "vault is in ... mode but record payload is ..."
         assert!(msg.contains("vault") && msg.contains("mode"), "got: {msg}");
     }
 
@@ -205,8 +277,6 @@ mod tests {
         let id = RecordId::new(Uuid::now_v7()).unwrap();
         let err = DomainError::VaultConsistencyError(VaultConsistencyReason::DuplicateId(id));
         let msg = format!("{err}");
-        // 以前は外枠の文言 "vault and record payload mode mismatch" が混入していた。
-        // #[error("{0}")] により DuplicateId の Display だけが出ることを確認する。
         assert!(
             !msg.contains("mode mismatch"),
             "DuplicateId should not contain 'mode mismatch', got: {msg}"
@@ -215,10 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn test_display_nonce_overflow_contains_keyword() {
-        let err = DomainError::NonceOverflow;
+    fn test_display_nonce_limit_exceeded_contains_keyword() {
+        let err = DomainError::NonceLimitExceeded;
         let msg = format!("{err}");
-        assert!(msg.contains("nonce counter exhausted"), "got: {msg}");
+        assert!(msg.contains("nonce counter limit exceeded"), "got: {msg}");
     }
 
     #[test]
@@ -243,5 +313,26 @@ mod tests {
         });
         let msg = format!("{err}");
         assert!(msg.contains("invalid vault header"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_crypto_error_aead_tag_mismatch_displays_known_phrase() {
+        let err = CryptoError::AeadTagMismatch;
+        let msg = format!("{err}");
+        assert!(msg.contains("AEAD"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_crypto_error_nonce_limit_exceeded_includes_limit_value() {
+        let err = CryptoError::NonceLimitExceeded { limit: 1u64 << 32 };
+        let msg = format!("{err}");
+        assert!(msg.contains(&(1u64 << 32).to_string()), "got: {msg}");
+    }
+
+    #[test]
+    fn test_crypto_error_into_domain_error_via_from() {
+        let crypto = CryptoError::AeadTagMismatch;
+        let domain: DomainError = crypto.into();
+        assert!(matches!(domain, DomainError::Crypto(_)));
     }
 }

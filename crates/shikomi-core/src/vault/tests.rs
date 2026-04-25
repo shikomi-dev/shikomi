@@ -1,7 +1,8 @@
 use super::*;
+use crate::crypto::Vek;
 use crate::error::{DomainError, VaultConsistencyReason};
-use crate::secret::{SecretBytes, SecretString};
-use crate::vault::crypto_data::{Aad, CipherText, KdfSalt, WrappedVek};
+use crate::secret::SecretString;
+use crate::vault::crypto_data::{Aad, AuthTag, CipherText, KdfSalt, WrappedVek};
 use crate::vault::id::RecordId;
 use crate::vault::nonce::NonceBytes;
 use crate::vault::record::{
@@ -16,15 +17,23 @@ fn make_plaintext_header() -> VaultHeader {
     VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::UNIX_EPOCH).unwrap()
 }
 
+fn make_wrapped_vek() -> WrappedVek {
+    WrappedVek::new(
+        vec![0u8; 32],
+        NonceBytes::from_random([0u8; 12]),
+        AuthTag::from_array([0u8; 16]),
+    )
+    .unwrap()
+}
+
 fn make_encrypted_header() -> VaultHeader {
     let salt = KdfSalt::try_new(&[0u8; 16]).unwrap();
-    let wrapped = WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap();
     VaultHeader::new_encrypted(
         VaultVersion::CURRENT,
         OffsetDateTime::UNIX_EPOCH,
         salt,
-        wrapped.clone(),
-        wrapped,
+        make_wrapped_vek(),
+        make_wrapped_vek(),
     )
     .unwrap()
 }
@@ -66,7 +75,7 @@ fn make_encrypted_record(id: Option<RecordId>) -> Record {
 // DummyVekProvider for rekey tests
 struct DummyVekProvider {
     should_fail: bool,
-    vek: SecretBytes,
+    vek: Vek,
     wrapped: WrappedVek,
 }
 
@@ -74,22 +83,18 @@ impl DummyVekProvider {
     fn new(should_fail: bool) -> Self {
         Self {
             should_fail,
-            vek: SecretBytes::from_boxed_slice(vec![0u8; 32].into_boxed_slice()),
-            wrapped: WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap(),
+            vek: Vek::from_array([0u8; 32]),
+            wrapped: make_wrapped_vek(),
         }
     }
 }
 
 impl VekProvider for DummyVekProvider {
-    fn new_vek(&self) -> &SecretBytes {
+    fn new_vek(&self) -> &Vek {
         &self.vek
     }
 
-    fn reencrypt_all(
-        &mut self,
-        _records: &mut [Record],
-        _new_vek: &SecretBytes,
-    ) -> Result<(), DomainError> {
+    fn reencrypt_all(&mut self, _records: &mut [Record]) -> Result<(), DomainError> {
         if self.should_fail {
             Err(DomainError::VaultConsistencyError(
                 VaultConsistencyReason::RekeyPartialFailure,
@@ -99,7 +104,7 @@ impl VekProvider for DummyVekProvider {
         }
     }
 
-    fn derive_new_wrapped_pw(&self, _vek: &SecretBytes) -> Result<WrappedVek, DomainError> {
+    fn derive_new_wrapped_pw(&self, _vek: &Vek) -> Result<WrappedVek, DomainError> {
         if self.should_fail {
             Err(DomainError::VaultConsistencyError(
                 VaultConsistencyReason::RekeyPartialFailure,
@@ -109,7 +114,7 @@ impl VekProvider for DummyVekProvider {
         }
     }
 
-    fn derive_new_wrapped_recovery(&self, _vek: &SecretBytes) -> Result<WrappedVek, DomainError> {
+    fn derive_new_wrapped_recovery(&self, _vek: &Vek) -> Result<WrappedVek, DomainError> {
         if self.should_fail {
             Err(DomainError::VaultConsistencyError(
                 VaultConsistencyReason::RekeyPartialFailure,

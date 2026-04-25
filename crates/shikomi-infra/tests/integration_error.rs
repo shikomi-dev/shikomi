@@ -2,7 +2,7 @@
 //! 異常系・エラーハンドリング
 mod helpers;
 use helpers::{make_plaintext_vault, make_repo};
-use shikomi_core::{KdfSalt, Vault, VaultHeader, VaultVersion, WrappedVek};
+use shikomi_core::{AuthTag, KdfSalt, NonceBytes, Vault, VaultHeader, VaultVersion, WrappedVek};
 use shikomi_infra::persistence::{PersistenceError, VaultRepository};
 use tempfile::TempDir;
 use time::OffsetDateTime;
@@ -10,6 +10,18 @@ use time::OffsetDateTime;
 // ---------------------------------------------------------------------------
 // TC-I03: 暗号化モード vault を save → UnsupportedYet
 // ---------------------------------------------------------------------------
+
+fn make_dummy_wrapped_vek() -> WrappedVek {
+    // Sub-A 凍結後の WrappedVek は ciphertext + nonce + tag の 3 フィールド構造。
+    // 暗号化モード永続化は Sub-D で確定するため、本テストは構造の妥当な dummy 値で
+    // VaultHeader::new_encrypted を構築できることのみ確認する。
+    WrappedVek::new(
+        vec![0u8; 32],
+        NonceBytes::from_random([0u8; 12]),
+        AuthTag::from_array([0u8; 16]),
+    )
+    .unwrap()
+}
 
 /// TC-I03 — 暗号化モード vault を save すると `UnsupportedYet` が返る。
 ///
@@ -20,14 +32,12 @@ fn tc_i03_encrypted_vault_save_unsupported() {
     let repo = make_repo(dir.path());
 
     let kdf_salt = KdfSalt::try_new(&[0u8; 16]).unwrap();
-    let wrapped_pw = WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap();
-    let wrapped_rec = WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap();
     let header = VaultHeader::new_encrypted(
         VaultVersion::CURRENT,
         OffsetDateTime::now_utc(),
         kdf_salt,
-        wrapped_pw,
-        wrapped_rec,
+        make_dummy_wrapped_vek(),
+        make_dummy_wrapped_vek(),
     )
     .unwrap();
     let vault = Vault::new(header);
