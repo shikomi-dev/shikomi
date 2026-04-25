@@ -273,6 +273,7 @@ ra_section = ra_section_match.group(0) if ra_section_match else ''
 
 # Build correspondence rules between data model entity names and asset inventory anchors
 expected_anchors = {
+    # Sub-0 凍結エンティティ
     'VaultEncryptedHeader': ['ヘッダ', 'wrapped_VEK', 'kdf_params', 'kdf_salt'],
     'WrappedVek': ['wrapped_VEK_by_pw', 'wrapped_VEK_by_recovery'],
     'KdfSalt': ['kdf_salt'],
@@ -282,6 +283,16 @@ expected_anchors = {
     'MasterPassword': ['マスターパスワード'],
     'RecoveryMnemonic': ['リカバリ', 'BIP-39'],
     'Vek': ['VEK'],
+    # Sub-A 詳細化エンティティ（Sub-0 の Tier-1〜3 資産から派生する型）
+    'NonceBytes': ['nonce'],            # per-record nonce 12B の値オブジェクト
+    'AuthTag': ['AEAD', 'tag'],         # AES-256-GCM 認証タグ
+    'Kek<KekKindPw>': ['KEK_pw'],       # phantom-typed KEK
+    'Kek<KekKindRecovery>': ['KEK_recovery'],
+    'HeaderAeadKey': ['ヘッダ', 'wrapped_VEK', 'kdf_params'],  # ヘッダ独立 AEAD タグの鍵
+    'Plaintext': ['平文レコード'],
+    'Verified<T>': ['平文レコード', 'AEAD'],  # 検証済み平文の newtype
+    'WeakPasswordFeedback': ['マスターパスワード'],  # zxcvbn 入口ゲート Feedback
+    'CryptoOutcome<T>': ['AEAD'],       # 暗号操作の結果列挙
 }
 
 errs = []
@@ -385,6 +396,50 @@ if [[ $rc -eq 0 ]]; then
     emit "TC-DOC-I08" "PASS" "no broken internal links in RA / REQ"
 else
     emit "TC-DOC-I08" "FAIL" "broken internal links (see python output)"
+fi
+
+# ======================================================================
+# DRIFT-CHECK-01: split-aware reference drift (Sub-A Rev1 で
+# detailed-design.md → detailed-design/{index,...}.md に分割された後、
+# 兄弟ドキュメント (basic-design.md / requirements.md / test-design.md /
+# requirements-analysis.md) 内で `detailed-design.md` への裸参照が残存
+# していないことを検証する。
+#
+# Bug-DOC-007 (Sub-A Rev1 review): セルがファイル分割時に basic-design /
+# requirements の参照は更新したが、test-design.md TC-A-U18 内 2 箇所の
+# `detailed-design.md` 言及を見落とし、マユリの TC-A-U18 修正もファイル
+# 分割前の表記のままだった。両者がかりの参照ドリフト。
+#
+# このチェックは split が起きた後でないと意味を持たないため、
+# detailed-design/ ディレクトリの存在を前提条件とする。
+# ======================================================================
+SPLIT_DIR="$ROOT/docs/features/vault-encryption/detailed-design"
+if [[ -d "$SPLIT_DIR" ]]; then
+    drift=()
+    for f in "$ROOT/docs/features/vault-encryption/test-design.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design.md" \
+             "$ROOT/docs/features/vault-encryption/requirements.md" \
+             "$ROOT/docs/features/vault-encryption/requirements-analysis.md"; do
+        [[ -f "$f" ]] || continue
+        # Look for `detailed-design.md` token in code blocks / inline backticks /
+        # markdown links. Allow it inside HTML comments (history reference).
+        # Strategy: strip <!-- ... --> blocks then grep.
+        clean=$(python3 -c '
+import re, sys, pathlib
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+sys.stdout.write(text)
+' "$f")
+        if echo "$clean" | grep -qE 'detailed-design\.md'; then
+            count=$(echo "$clean" | grep -cE 'detailed-design\.md' || true)
+            drift+=("$(basename "$f"): $count occurrence(s) of bare detailed-design.md")
+        fi
+    done
+    if [[ ${#drift[@]} -eq 0 ]]; then
+        emit "DRIFT-CHECK-01" "PASS" "no stale 'detailed-design.md' refs in sibling docs (split-aware)"
+    else
+        emit "DRIFT-CHECK-01" "FAIL" "stale 'detailed-design.md' references survive after split: ${drift[*]}"
+    fi
 fi
 
 # ======================================================================
