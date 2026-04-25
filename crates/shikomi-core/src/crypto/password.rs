@@ -53,8 +53,15 @@ impl MasterPassword {
         })
     }
 
-    /// crate 内部からのみ生バイト列を取り出す (Sub-B Argon2id 入力に渡すため)。
-    pub(crate) fn expose_secret_bytes_within_crate(&self) -> &[u8] {
+    /// 生バイト列を取り出す (Sub-B `Argon2idAdapter::derive_kek_pw` 入力専用)。
+    ///
+    /// **呼び出して良いのは `shikomi-infra::crypto::kdf` モジュールのみ**。
+    /// CLI / GUI / daemon の bin crate から本メソッドを呼ぶことは禁止
+    /// (CI grep による静的検出対象、`detailed-design/kdf.md` §`Argon2idAdapter` 参照)。
+    /// shikomi-infra から呼ぶために `pub` 公開しているが、API 契約上は crate 内部経路相当
+    /// (関数名末尾 `_within_crate` で意図を明示)。
+    #[must_use]
+    pub fn expose_secret_bytes_within_crate(&self) -> &[u8] {
         self.inner.expose_secret()
     }
 }

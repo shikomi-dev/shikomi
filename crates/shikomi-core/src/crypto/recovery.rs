@@ -48,8 +48,15 @@ impl RecoveryMnemonic {
         }
     }
 
-    /// crate 内部からのみ単語配列への参照を取り出す (Sub-B BIP-39 検証用)。
-    pub(crate) fn expose_within_crate(&self) -> &[String; MNEMONIC_WORD_COUNT] {
+    /// 単語配列への参照を取り出す (Sub-B `Bip39Pbkdf2Hkdf::derive_kek_recovery` 専用)。
+    ///
+    /// **呼び出して良いのは `shikomi-infra::crypto::kdf` モジュールのみ**。
+    /// CLI / GUI / daemon の bin crate から本メソッドを呼ぶことは禁止
+    /// (CI grep による静的検出対象、`detailed-design/kdf.md` §`Bip39Pbkdf2Hkdf` 参照)。
+    /// shikomi-infra から呼ぶために `pub` 公開しているが、API 契約上は crate 内部経路相当
+    /// (関数名末尾 `_within_crate` で意図を明示)。
+    #[must_use]
+    pub fn expose_within_crate(&self) -> &[String; MNEMONIC_WORD_COUNT] {
         self.words.expose_secret()
     }
 

@@ -15,6 +15,18 @@ tracing       = { workspace = true }
 dirs          = { workspace = true }
 thiserror     = { workspace = true }
 time          = { workspace = true }
+# Sub-B (#40) crypto アダプタ層（KDF / RNG / 強度ゲート）。
+# `pbkdf2` / `hmac` は bip39 / hkdf / argon2 内部経由のため直接依存しない
+# (tech-stack.md §4.7、kdf.md §`bip39` / `pbkdf2` / `hkdf` crate 呼出契約)。
+argon2        = { workspace = true }
+hkdf          = { workspace = true }
+sha2          = { workspace = true }
+bip39         = { workspace = true }
+rand_core     = { workspace = true }
+getrandom     = { workspace = true }
+zxcvbn        = { workspace = true }
+secrecy       = { workspace = true }
+zeroize       = { workspace = true }
 
 [dev-dependencies]
 tempfile     = { workspace = true }
