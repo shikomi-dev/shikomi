@@ -66,6 +66,12 @@ skip = [
     # `fs4` が rustix 1.x に追従次第、両エントリとも削除して重複解消する。
     { name = "rustix", version = "0.38" },
     { name = "linux-raw-sys", version = "0.4" },
+    # nix 0.26.4 は `expectrl 0.8` → `ptyprocess` 経由の **dev-dep 限定** 共存。
+    # 本番バイナリには混入しない（`shikomi-daemon/Cargo.toml` の `[dev-dependencies]`、
+    # かつ `cfg(unix)` 限定）。`shikomi-daemon` 直接依存の nix 0.29 と版差。
+    # Issue #33（Phase 1.5-ε pty 観測 TC-E2E-017）で導入。expectrl が nix 0.29+ に
+    # 追従次第、本エントリを削除して重複解消する。
+    { name = "nix", version = "0.26.4" },
 ]
 skip-tree = []
 

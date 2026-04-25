@@ -147,24 +147,24 @@ fn discriminant(handle: &RepositoryHandle) -> RepositoryHandleDiscriminant {
 /// `run_edit` の値入力 kind を決定する純粋関数。
 ///
 /// PR #32 の方針 B（`composition-root.md §run_edit IPC 経路の方針 B`）を
-/// **型レベルで強制**する: IPC 経路で既存 kind が判明できないとき
-/// 戻り値は `RecordKind::Secret` に**確定**し、後段の `read_value_from_stdin(kind)`
-/// が TTY 上で `read_password`（非エコー）経路を選択する——この決定論を
+/// **型レベルで強制**する: **IPC 経路では `existing_kind` の如何に関わらず**
+/// 戻り値は `RecordKind::Secret` に**確定**する。後段の `read_value_from_stdin(kind)`
+/// は TTY 上で `read_password`（非エコー）経路を選択する——この決定論を
 /// 単体テスト可能な形で封じ込める。
 ///
 /// 決定表:
 ///
 /// | 入力 | 戻り値 | 備考 |
 /// |------|--------|------|
-/// | `Some(k), _` | `k` | 既存 kind を尊重（Sqlite + load 成功） |
-/// | `None, Ipc` | `RecordKind::Secret` | **fail-secure**（方針 B の核） |
+/// | `_, Ipc` | `RecordKind::Secret` | **fail-secure**（方針 B の核、IPC アーム不変条件） |
+/// | `Some(k), Sqlite` | `k` | 既存 kind を尊重（Sqlite + load 成功） |
 /// | `None, Sqlite` | `RecordKind::Text` | dummy。`needs_value_input == false` 経路でのみ到達、`resolve_secret_value` の `--value` 経路は kind 非参照 |
 ///
-/// 副次契約（IPC アーム不変条件）: `handle == Ipc` の任意の `existing_kind` で
-/// 戻り値が **`RecordKind::Text` を一切返さない**こと。実装上、
-/// `(Some(Text), Ipc)` が起こるのは Sqlite 経路から既存 kind が引き渡された場合
-/// のみ（呼出側の `existing_kind` 算出が `Sqlite` アームでしか `Some(_)` を返さない
-/// ため、`(Some(_), Ipc)` 自体が論理的に到達不能）。
+/// 副次契約（**IPC アーム不変条件**）: `handle == Ipc` の任意の `existing_kind` で
+/// 戻り値が **`RecordKind::Text` を一切返さない**ことを `match` の構造で保証する。
+/// 「呼出側の `existing_kind` 算出が `Sqlite` アームでしか `Some(_)` を返さない」という
+/// 呼出側ロジックへの依存に頼らず、本関数単体で fail-secure を担保する
+/// （Defense in Depth、ペテルギウス review b50e15d 指摘 → 案 a 対応）。
 ///
 /// 設計根拠:
 /// - docs/features/daemon-ipc/test-design/unit.md §2.17（TC-UT-130〜134）/ §3.10 ①
@@ -174,8 +174,10 @@ fn decide_kind_for_input(
     handle: RepositoryHandleDiscriminant,
 ) -> RecordKind {
     match (existing_kind, handle) {
-        (Some(k), _) => k,
-        (None, RepositoryHandleDiscriminant::Ipc) => RecordKind::Secret,
+        // IPC アーム: existing_kind の如何によらず常に Secret 強制（fail-secure）
+        (_, RepositoryHandleDiscriminant::Ipc) => RecordKind::Secret,
+        // Sqlite アーム: 既存 kind を尊重、不明時は dummy（needs_value_input == false 経路）
+        (Some(k), RepositoryHandleDiscriminant::Sqlite) => k,
         (None, RepositoryHandleDiscriminant::Sqlite) => RecordKind::Text,
     }
 }
