@@ -1,13 +1,23 @@
 //! `VaultHeader` ↔ `SQLite` 行のマッピング。
+//!
+//! Sub-A 改訂: `WrappedVek` の内部構造分離型化に伴い、暗号化ヘッダの BLOB シリアライズ
+//! 形式は **Sub-D で `bincode` 等の正式フォーマットに確定する**。
+//! Sub-A 〜 Sub-C 期間中、暗号化ヘッダの永続化は型レベルで未実装とし、本マッピング層は
+//! `UnsupportedYet { feature: "encrypted vault header (Sub-D)" }` を即返す。
+//! `repository::save_inner` / `repository::load` も Encrypted モードを Fail Fast で
+//! 弾いており、本層は二重防御として動作する。
 
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use shikomi_core::{KdfSalt, ProtectionMode, VaultHeader, VaultVersion, WrappedVek};
+use shikomi_core::{ProtectionMode, VaultHeader, VaultVersion};
 
 use crate::persistence::error::{CorruptedReason, PersistenceError};
 
 use super::{params::HeaderParams, Mapping};
+
+/// Sub-D で実装予定の暗号化ヘッダ永続化の追跡 Issue 番号 (Epic #37 / Sub-D #42)。
+const TRACKING_ISSUE_ENCRYPTED_HEADER: Option<u32> = Some(42);
 
 impl Mapping {
     /// `VaultHeader` → `HeaderParams` に変換する。
@@ -15,6 +25,8 @@ impl Mapping {
     /// # Errors
     ///
     /// - `created_at` の RFC3339 フォーマット失敗: `PersistenceError::Corrupted`
+    /// - 暗号化モードヘッダ: `PersistenceError::UnsupportedYet`
+    ///   (Sub-D で `WrappedVek` の正式 BLOB シリアライザを実装するまで未対応)
     pub(crate) fn vault_header_to_params(
         header: &VaultHeader,
     ) -> Result<HeaderParams, PersistenceError> {
@@ -42,21 +54,10 @@ impl Mapping {
                 wrapped_vek_by_pw: None,
                 wrapped_vek_by_recovery: None,
             }),
-            ProtectionMode::Encrypted => {
-                let kdf_salt = header.kdf_salt().map(|s| s.as_array().to_vec());
-                let wrapped_vek_by_pw = header.wrapped_vek_by_pw().map(|w| w.as_bytes().to_vec());
-                let wrapped_vek_by_recovery = header
-                    .wrapped_vek_by_recovery()
-                    .map(|w| w.as_bytes().to_vec());
-                Ok(HeaderParams {
-                    protection_mode,
-                    vault_version,
-                    created_at_rfc3339,
-                    kdf_salt,
-                    wrapped_vek_by_pw,
-                    wrapped_vek_by_recovery,
-                })
-            }
+            ProtectionMode::Encrypted => Err(PersistenceError::UnsupportedYet {
+                feature: "encrypted vault header (Sub-D)",
+                tracking_issue: TRACKING_ISSUE_ENCRYPTED_HEADER,
+            }),
         }
     }
 
@@ -67,8 +68,8 @@ impl Mapping {
     /// - 保護モード不明: `PersistenceError::Corrupted`
     /// - vault バージョン範囲外: `PersistenceError::Corrupted`
     /// - RFC3339 パース失敗: `PersistenceError::Corrupted`
-    /// - 暗号化フィールドが NULL: `PersistenceError::Corrupted`
-    /// - ドメイン型の構築失敗: `PersistenceError::Corrupted`
+    /// - 暗号化モード行: `PersistenceError::UnsupportedYet`
+    ///   (Sub-D で `WrappedVek` の正式 BLOB デシリアライザを実装するまで未対応)
     pub(crate) fn row_to_vault_header(
         row: &rusqlite::Row<'_>,
     ) -> Result<VaultHeader, PersistenceError> {
@@ -135,89 +136,10 @@ impl Mapping {
                     },
                     source: Some(e),
                 }),
-            ProtectionMode::Encrypted => {
-                // Col 3: kdf_salt (BLOB)
-                let kdf_salt_raw: Option<Vec<u8>> = row
-                    .get(3)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let kdf_salt_bytes = kdf_salt_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation { column: "kdf_salt" },
-                    source: None,
-                })?;
-                let kdf_salt =
-                    KdfSalt::try_new(&kdf_salt_bytes).map_err(|e| PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    })?;
-
-                // Col 4: wrapped_vek_by_pw (BLOB)
-                let pw_raw: Option<Vec<u8>> = row
-                    .get(4)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let pw_bytes = pw_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_pw",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_pw =
-                    WrappedVek::try_new(pw_bytes.into_boxed_slice()).map_err(|e| {
-                        PersistenceError::Corrupted {
-                            table: "vault_header",
-                            row_key: Some("1".to_string()),
-                            reason: CorruptedReason::InvalidRowCombination {
-                                detail: e.to_string(),
-                            },
-                            source: Some(e),
-                        }
-                    })?;
-
-                // Col 5: wrapped_vek_by_recovery (BLOB)
-                let rec_raw: Option<Vec<u8>> = row
-                    .get(5)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let rec_bytes = rec_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_recovery",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_recovery = WrappedVek::try_new(rec_bytes.into_boxed_slice())
-                    .map_err(|e| PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: e.to_string(),
-                        },
-                        source: Some(e),
-                    })?;
-
-                VaultHeader::new_encrypted(
-                    vault_version,
-                    created_at,
-                    kdf_salt,
-                    wrapped_vek_by_pw,
-                    wrapped_vek_by_recovery,
-                )
-                .map_err(|e| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::InvalidRowCombination {
-                        detail: e.to_string(),
-                    },
-                    source: Some(e),
-                })
-            }
+            ProtectionMode::Encrypted => Err(PersistenceError::UnsupportedYet {
+                feature: "encrypted vault header (Sub-D)",
+                tracking_issue: TRACKING_ISSUE_ENCRYPTED_HEADER,
+            }),
         }
     }
 }

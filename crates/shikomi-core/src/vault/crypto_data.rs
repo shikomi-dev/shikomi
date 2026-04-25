@@ -1,20 +1,28 @@
 //! 暗号化関連バイト列 newtype 群。
 //!
-//! `KdfSalt` / `WrappedVek` / `CipherText` / `Aad` の 4 型。
+//! `KdfSalt` / `WrappedVek` / `AuthTag` / `CipherText` / `Aad` の 5 型。
 //! いずれも検証済み newtype で、生バイト列の取り違えを型で防ぐ。
+//!
+//! Sub-A Boy Scout Rule: `WrappedVek` の内部構造を `(ciphertext, nonce, tag)` の
+//! 3 フィールドに分離型化 (旧: `Box<[u8]>` 単一)。byte offset 演算を呼出側に漏らさない
+//! (Tell, Don't Ask)。`AuthTag` を新規導入し AES-GCM 認証タグ 16B を独立型として表現する。
 
 use time::OffsetDateTime;
 
 use crate::error::{DomainError, InvalidRecordPayloadReason, InvalidVaultHeaderReason};
 use crate::vault::id::RecordId;
+use crate::vault::nonce::NonceBytes;
 use crate::vault::version::VaultVersion;
 
 /// Argon2id KDF ソルト長（16 byte、OWASP 推奨 16 B 以上）。
 const KDF_SALT_LEN: usize = 16;
 
-/// `WrappedVek` に必要な最小バイト長。
-/// AES-GCM 認証タグが 16 B 固定のため、それ以上でなければ暗号的に不正。
-const WRAPPED_VEK_MIN_LEN: usize = 16;
+/// AES-GCM 認証タグ長 (NIST SP 800-38D §5.2.1.2、128 bit)。
+const AUTH_TAG_LEN: usize = 16;
+
+/// `WrappedVek::ciphertext` の最小バイト長 (VEK 32B が最小)。
+/// AES-GCM 認証タグは別フィールド `AuthTag` に分離されるため本最小には含めない (契約 C-11)。
+const WRAPPED_VEK_CIPHERTEXT_MIN_LEN: usize = 32;
 
 // -------------------------------------------------------------------
 // KdfSalt
@@ -53,41 +61,112 @@ impl KdfSalt {
 }
 
 // -------------------------------------------------------------------
-// WrappedVek
+// AuthTag (新規、Sub-A)
 // -------------------------------------------------------------------
 
-/// VEK（Vault Encryption Key）を暗号化してラップしたバイト列。
+/// AES-256-GCM 認証タグ (16 byte 固定)。
 ///
-/// AES-GCM wrap には認証タグ（16 B）が含まれるため、実態は空ではない。
+/// `WrappedVek` の `tag` フィールド・将来のヘッダ AEAD タグなどで利用する。
+/// 旧来の「ciphertext + tag 連結」を分離型化することで byte offset 演算を呼出側から消す
+/// (Sub-A Boy Scout Rule)。
+#[derive(Debug, Clone)]
+pub struct AuthTag {
+    inner: [u8; AUTH_TAG_LEN],
+}
+
+impl AuthTag {
+    /// バイトスライスから `AuthTag` を構築する。
+    ///
+    /// # Errors
+    /// `bytes.len() != 16` の場合 `DomainError::InvalidVaultHeader(AuthTagLength)` を返す。
+    pub fn try_new(bytes: &[u8]) -> Result<Self, DomainError> {
+        if bytes.len() != AUTH_TAG_LEN {
+            return Err(DomainError::InvalidVaultHeader(
+                InvalidVaultHeaderReason::AuthTagLength { got: bytes.len() },
+            ));
+        }
+        let mut inner = [0u8; AUTH_TAG_LEN];
+        inner.copy_from_slice(bytes);
+        Ok(Self { inner })
+    }
+
+    /// 16 byte 配列から直接構築する (Sub-C AEAD 完了直後の経路で使用)。
+    #[must_use]
+    pub fn from_array(bytes: [u8; AUTH_TAG_LEN]) -> Self {
+        Self { inner: bytes }
+    }
+
+    /// 内包する 16 バイト配列への参照を返す。
+    #[must_use]
+    pub fn as_array(&self) -> &[u8; AUTH_TAG_LEN] {
+        &self.inner
+    }
+}
+
+// -------------------------------------------------------------------
+// WrappedVek (Sub-A: ciphertext + nonce + tag の 3 フィールドに分離)
+// -------------------------------------------------------------------
+
+/// VEK を AES-256-GCM でラップしたデータ。`ciphertext` / `nonce` / `tag` を独立フィールドで保持。
+///
+/// 旧来の単一 `Box<[u8]>` フィールドを Sub-A で 3 フィールド構造に分離した (Boy Scout Rule)。
+/// byte offset 演算は `WrappedVek::new` / `into_parts` に閉じる (Tell, Don't Ask)。
+///
+/// 永続化フォーマットは Sub-D で確定する (本 Sub-A はシリアライズ実装を持たない)。
 #[derive(Debug, Clone)]
 pub struct WrappedVek {
-    inner: Box<[u8]>,
+    ciphertext: Vec<u8>,
+    nonce: NonceBytes,
+    tag: AuthTag,
 }
 
 impl WrappedVek {
-    /// バイト列から `WrappedVek` を構築する。
+    /// 3 要素 (ciphertext / nonce / tag) から `WrappedVek` を構築する (契約 C-11)。
     ///
     /// # Errors
-    /// - 空の場合 `DomainError::InvalidVaultHeader(WrappedVekEmpty)` を返す。
-    /// - 16 バイト未満の場合 `DomainError::InvalidVaultHeader(WrappedVekTooShort)` を返す。
-    pub fn try_new(bytes: Box<[u8]>) -> Result<Self, DomainError> {
-        if bytes.is_empty() {
+    ///
+    /// - `ciphertext` が空: `DomainError::InvalidVaultHeader(WrappedVekEmpty)`
+    /// - `ciphertext` の長さが 32 byte 未満: `DomainError::InvalidVaultHeader(WrappedVekTooShort)`
+    pub fn new(ciphertext: Vec<u8>, nonce: NonceBytes, tag: AuthTag) -> Result<Self, DomainError> {
+        if ciphertext.is_empty() {
             return Err(DomainError::InvalidVaultHeader(
                 InvalidVaultHeaderReason::WrappedVekEmpty,
             ));
         }
-        if bytes.len() < WRAPPED_VEK_MIN_LEN {
+        if ciphertext.len() < WRAPPED_VEK_CIPHERTEXT_MIN_LEN {
             return Err(DomainError::InvalidVaultHeader(
                 InvalidVaultHeaderReason::WrappedVekTooShort,
             ));
         }
-        Ok(Self { inner: bytes })
+        Ok(Self {
+            ciphertext,
+            nonce,
+            tag,
+        })
     }
 
-    /// 内包するバイト列への参照を返す。
+    /// `ciphertext` への参照を返す。
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.inner
+    pub fn ciphertext(&self) -> &[u8] {
+        &self.ciphertext
+    }
+
+    /// `nonce` への参照を返す。
+    #[must_use]
+    pub fn nonce(&self) -> &NonceBytes {
+        &self.nonce
+    }
+
+    /// `tag` への参照を返す。
+    #[must_use]
+    pub fn tag(&self) -> &AuthTag {
+        &self.tag
+    }
+
+    /// 3 要素を所有権付きで取り出す (永続化シリアライズ用)。
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<u8>, NonceBytes, AuthTag) {
+        (self.ciphertext, self.nonce, self.tag)
     }
 }
 
@@ -95,7 +174,10 @@ impl WrappedVek {
 // CipherText
 // -------------------------------------------------------------------
 
-/// AES-256-GCM 暗号化済みのレコードペイロード。認証タグを含む。
+/// AES-256-GCM 暗号化済みのレコードペイロード。認証タグを含む (レコード境界での連結保持)。
+///
+/// レコード単位の AEAD 出力フォーマットは vault-persistence (Issue #7) で既に確定済。
+/// 本 Sub-A では構造変更しない (`WrappedVek` のみ Boy Scout 分離)。
 #[derive(Debug, Clone)]
 pub struct CipherText {
     inner: Box<[u8]>,
@@ -207,6 +289,7 @@ impl Aad {
 mod tests {
     use super::*;
     use crate::vault::id::RecordId;
+    use crate::vault::nonce::NonceBytes;
     use crate::vault::version::VaultVersion;
     use time::OffsetDateTime;
     use uuid::Uuid;
@@ -215,64 +298,83 @@ mod tests {
         RecordId::new(Uuid::now_v7()).unwrap()
     }
 
-    // ---------------------------------------------------------------
-    // WrappedVek::try_new 境界値テスト（TC-U06a）
-    // REQ-009 / AC-09（Defense in Depth: 暗号的不正入力のドメイン層排除）
-    // ---------------------------------------------------------------
-
-    /// TC-U06a-01: 空バイト列 → WrappedVekEmpty
-    #[test]
-    fn test_wrapped_vek_try_new_with_empty_bytes_returns_wrapped_vek_empty() {
-        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekEmpty)
-            ),
-            "Expected WrappedVekEmpty, got: {:?}",
-            err
-        );
+    fn dummy_nonce() -> NonceBytes {
+        NonceBytes::from_random([0u8; 12])
     }
 
-    /// TC-U06a-02: 1 バイト（最小不正値）→ WrappedVekTooShort
-    #[test]
-    fn test_wrapped_vek_try_new_with_1_byte_returns_wrapped_vek_too_short() {
-        let err = WrappedVek::try_new(vec![0u8; 1].into_boxed_slice()).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekTooShort)
-            ),
-            "Expected WrappedVekTooShort for 1-byte input, got: {:?}",
-            err
-        );
-    }
-
-    /// TC-U06a-03: 15 バイト（上限不正値）→ WrappedVekTooShort
-    #[test]
-    fn test_wrapped_vek_try_new_with_15_bytes_returns_wrapped_vek_too_short() {
-        let err = WrappedVek::try_new(vec![0u8; 15].into_boxed_slice()).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekTooShort)
-            ),
-            "Expected WrappedVekTooShort for 15-byte input, got: {:?}",
-            err
-        );
-    }
-
-    /// TC-U06a-04: 16 バイト（最小有効値）→ Ok
-    #[test]
-    fn test_wrapped_vek_try_new_with_16_bytes_ok() {
-        assert!(
-            WrappedVek::try_new(vec![0u8; 16].into_boxed_slice()).is_ok(),
-            "WrappedVek with 16 bytes must succeed"
-        );
+    fn dummy_tag() -> AuthTag {
+        AuthTag::from_array([0u8; 16])
     }
 
     // ---------------------------------------------------------------
-    // Aad テスト
+    // AuthTag
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn auth_tag_from_array_constructs_without_panic() {
+        let _ = AuthTag::from_array([0u8; 16]);
+    }
+
+    #[test]
+    fn auth_tag_try_new_with_16_bytes_ok() {
+        assert!(AuthTag::try_new(&[0u8; 16]).is_ok());
+    }
+
+    #[test]
+    fn auth_tag_try_new_with_15_bytes_returns_auth_tag_length_error() {
+        let err = AuthTag::try_new(&[0u8; 15]).unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::AuthTagLength { got: 15 })
+        ));
+    }
+
+    // ---------------------------------------------------------------
+    // WrappedVek::new 境界値テスト (C-11)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn wrapped_vek_new_with_empty_ciphertext_returns_wrapped_vek_empty() {
+        let err = WrappedVek::new(vec![], dummy_nonce(), dummy_tag()).unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekEmpty)
+        ));
+    }
+
+    #[test]
+    fn wrapped_vek_new_with_31_bytes_ciphertext_returns_wrapped_vek_too_short() {
+        let err = WrappedVek::new(vec![0u8; 31], dummy_nonce(), dummy_tag()).unwrap_err();
+        assert!(matches!(
+            err,
+            DomainError::InvalidVaultHeader(InvalidVaultHeaderReason::WrappedVekTooShort)
+        ));
+    }
+
+    #[test]
+    fn wrapped_vek_new_with_32_bytes_ciphertext_ok() {
+        assert!(WrappedVek::new(vec![0u8; 32], dummy_nonce(), dummy_tag()).is_ok());
+    }
+
+    #[test]
+    fn wrapped_vek_into_parts_round_trips_with_new() {
+        let w = WrappedVek::new(vec![0xAAu8; 32], dummy_nonce(), dummy_tag()).unwrap();
+        let (ct, n, t) = w.into_parts();
+        assert_eq!(ct, vec![0xAAu8; 32]);
+        assert_eq!(n.as_array(), &[0u8; 12]);
+        assert_eq!(t.as_array(), &[0u8; 16]);
+    }
+
+    #[test]
+    fn wrapped_vek_field_accessors_return_references() {
+        let w = WrappedVek::new(vec![1u8; 32], dummy_nonce(), dummy_tag()).unwrap();
+        assert_eq!(w.ciphertext(), &[1u8; 32]);
+        assert_eq!(w.nonce().as_array(), &[0u8; 12]);
+        assert_eq!(w.tag().as_array(), &[0u8; 16]);
+    }
+
+    // ---------------------------------------------------------------
+    // Aad テスト (既存維持)
     // ---------------------------------------------------------------
 
     #[test]
@@ -283,13 +385,6 @@ mod tests {
 
     #[test]
     fn test_aad_new_with_out_of_range_timestamp_returns_aad_timestamp_out_of_range() {
-        // TC-U11-02: AadTimestampOutOfRange fires when microseconds overflow i64.
-        // Overflow threshold: seconds > i64::MAX / 1_000_000 ≈ 9_223_372_036_854.
-        // time 0.3 limits representable years to [-9999, 9999]; max unix timestamp
-        // ≈ year 9999 ≈ 2.53×10^11 s → max microseconds ≈ 2.53×10^17 << i64::MAX.
-        // Therefore AadTimestampOutOfRange is unreachable within time 0.3's range.
-        // If time 0.3 cannot represent the threshold timestamp, the test is
-        // vacuously satisfied (defensive path cannot be triggered with this crate).
         let threshold = i64::MAX / 1_000_000 + 1;
         if let Ok(far_future) = OffsetDateTime::from_unix_timestamp(threshold) {
             let id = make_id();
@@ -301,8 +396,6 @@ mod tests {
                 )
             ));
         }
-        // else: time 0.3 cannot represent this timestamp; the error variant is
-        // dead code in practice — test is vacuously satisfied.
     }
 
     #[test]
@@ -314,11 +407,6 @@ mod tests {
 
     #[test]
     fn test_aad_to_canonical_bytes_golden_value() {
-        // Golden value test: known RecordId + VaultVersion::CURRENT + UNIX_EPOCH
-        // Expected 26 bytes:
-        //   [0..16]: UUID bytes MSB first
-        //   [16..18]: u16=1 big-endian = [0x00, 0x01]
-        //   [18..26]: i64=0 big-endian = [0x00; 8]
         let uuid_bytes = [
             0x01u8, 0x8f, 0x12, 0x34, 0x56, 0x78, 0x7a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78,
             0x90, 0x12,
@@ -334,10 +422,6 @@ mod tests {
             0x00, 0x01, // u16=1 BE [16..18]
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // i64=0 BE [18..26]
         ];
-        assert_eq!(
-            canonical, expected,
-            "Golden value mismatch: got {:02x?}, expected {:02x?}",
-            canonical, expected
-        );
+        assert_eq!(canonical, expected);
     }
 }

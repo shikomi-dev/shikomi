@@ -8,7 +8,7 @@ pub mod protection_mode;
 pub mod record;
 pub mod version;
 
-pub use crypto_data::{Aad, CipherText, KdfSalt, WrappedVek};
+pub use crypto_data::{Aad, AuthTag, CipherText, KdfSalt, WrappedVek};
 pub use header::{VaultHeader, VaultHeaderEncrypted, VaultHeaderPlaintext};
 pub use id::RecordId;
 pub use nonce::{NonceBytes, NonceCounter};
@@ -16,8 +16,8 @@ pub use protection_mode::ProtectionMode;
 pub use record::{Record, RecordKind, RecordLabel, RecordPayload, RecordPayloadEncrypted};
 pub use version::VaultVersion;
 
+use crate::crypto::Vek;
 use crate::error::{DomainError, VaultConsistencyReason};
-use crate::secret::SecretBytes;
 
 // -------------------------------------------------------------------
 // VekProvider trait
@@ -27,36 +27,36 @@ use crate::secret::SecretBytes;
 ///
 /// 実装は `shikomi-infra` に置く（Dependency Inversion）。
 /// `shikomi-core` はこの trait シグネチャのみを所有し、暗号実装に依存しない。
+///
+/// Sub-A 改訂 (Boy Scout Rule): 引数型 `&SecretBytes` を `&Vek` に置換。
+/// `Vek` は Clone 禁止のため、`reencrypt_all` は `&mut self, records` のみを取り、
+/// 内部で `self.new_vek()` を呼び出して新 VEK を参照する責務を負う
+/// (借用衝突回避。Sub-B で具象実装を新設する際の前提)。
 pub trait VekProvider {
     /// プロバイダが保持する新 VEK への参照を返す。
-    ///
-    /// `Vault::rekey_with` が呼び出し元（`shikomi-infra`）の提供する VEK を受け取るために使う。
-    fn new_vek(&self) -> &SecretBytes;
+    fn new_vek(&self) -> &Vek;
 
     /// 全レコードを新 VEK で再暗号化する（in-place）。
     ///
+    /// 実装は内部で `self.new_vek()` を呼び出して新 VEK を参照する。
     /// 部分失敗した場合は `DomainError::VaultConsistencyError(RekeyPartialFailure)` を返す。
     /// 呼び出し元は `SQLite` トランザクションでアトミック更新を保証すること。
     ///
     /// # Errors
     /// 再暗号化失敗時に `DomainError` を返す。
-    fn reencrypt_all(
-        &mut self,
-        records: &mut [Record],
-        new_vek: &SecretBytes,
-    ) -> Result<(), DomainError>;
+    fn reencrypt_all(&mut self, records: &mut [Record]) -> Result<(), DomainError>;
 
     /// 新 VEK をパスワード由来の KEK でラップした `WrappedVek` を返す。
     ///
     /// # Errors
     /// KDF / 暗号化失敗時に `DomainError` を返す。
-    fn derive_new_wrapped_pw(&self, vek: &SecretBytes) -> Result<WrappedVek, DomainError>;
+    fn derive_new_wrapped_pw(&self, vek: &Vek) -> Result<WrappedVek, DomainError>;
 
     /// 新 VEK をリカバリ由来の KEK でラップした `WrappedVek` を返す。
     ///
     /// # Errors
     /// KDF / 暗号化失敗時に `DomainError` を返す。
-    fn derive_new_wrapped_recovery(&self, vek: &SecretBytes) -> Result<WrappedVek, DomainError>;
+    fn derive_new_wrapped_recovery(&self, vek: &Vek) -> Result<WrappedVek, DomainError>;
 }
 
 // -------------------------------------------------------------------
@@ -207,12 +207,11 @@ impl Vault {
             ));
         }
 
-        // VEK を provider から取得（clone で借用競合を回避）
-        let new_vek: SecretBytes = provider.new_vek().clone();
-
-        let new_wrapped_pw = provider.derive_new_wrapped_pw(&new_vek)?;
-        let new_wrapped_recovery = provider.derive_new_wrapped_recovery(&new_vek)?;
-        provider.reencrypt_all(&mut self.records, &new_vek)?;
+        // Vek は Clone 禁止 (Sub-A 契約 C-2)。`new_vek()` の参照を順次の借用で消費する。
+        // derive_new_wrapped_* は &self、reencrypt_all は &mut self を取るため借用衝突しない。
+        let new_wrapped_pw = provider.derive_new_wrapped_pw(provider.new_vek())?;
+        let new_wrapped_recovery = provider.derive_new_wrapped_recovery(provider.new_vek())?;
+        provider.reencrypt_all(&mut self.records)?;
 
         // ヘッダの wrapped VEK を更新
         if let VaultHeader::Encrypted(ref mut enc) = self.header {

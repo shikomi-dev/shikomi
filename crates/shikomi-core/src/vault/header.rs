@@ -169,6 +169,8 @@ use InvalidVaultHeaderReason as _;
 mod tests {
     use super::*;
     use crate::error::DomainError;
+    use crate::vault::crypto_data::AuthTag;
+    use crate::vault::nonce::NonceBytes;
     use time::OffsetDateTime;
 
     fn now() -> OffsetDateTime {
@@ -180,7 +182,12 @@ mod tests {
     }
 
     fn valid_wrapped_vek() -> WrappedVek {
-        WrappedVek::try_new(vec![0u8; 48].into_boxed_slice()).unwrap()
+        WrappedVek::new(
+            vec![0u8; 32],
+            NonceBytes::from_random([0u8; 12]),
+            AuthTag::from_array([0u8; 16]),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -220,13 +227,23 @@ mod tests {
 
     #[test]
     fn test_new_encrypted_with_empty_wrapped_vek_pw_returns_error() {
-        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
+        let err = WrappedVek::new(
+            vec![],
+            NonceBytes::from_random([0u8; 12]),
+            AuthTag::from_array([0u8; 16]),
+        )
+        .unwrap_err();
         assert!(matches!(err, DomainError::InvalidVaultHeader(_)));
     }
 
     #[test]
     fn test_new_encrypted_with_empty_wrapped_vek_recovery_returns_error() {
-        let err = WrappedVek::try_new(vec![].into_boxed_slice()).unwrap_err();
+        let err = WrappedVek::new(
+            vec![],
+            NonceBytes::from_random([0u8; 12]),
+            AuthTag::from_array([0u8; 16]),
+        )
+        .unwrap_err();
         assert!(matches!(err, DomainError::InvalidVaultHeader(_)));
     }
 
