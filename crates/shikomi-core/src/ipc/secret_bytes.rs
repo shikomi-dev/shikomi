@@ -12,7 +12,7 @@ use std::fmt;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::secret::SecretBytes;
+use crate::secret::{clone_secret_string_bytes, SecretBytes, SecretString};
 
 // -------------------------------------------------------------------
 // SerializableSecretBytes
@@ -43,6 +43,20 @@ impl SerializableSecretBytes {
     #[must_use]
     pub fn into_inner(self) -> SecretBytes {
         self.0
+    }
+
+    /// `SecretString` を消費して IPC 送信用 `SerializableSecretBytes` に変換する。
+    ///
+    /// CLI 側 `IpcVaultRepository::add_record` / `edit_record` から呼ばれ、
+    /// 平文取り出し経路を core 内（本ファイル）に閉じる
+    /// （CI grep TC-CI-015 / TC-CI-016 の監査範囲外を維持）。
+    ///
+    /// 設計根拠: docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md
+    /// §`add_record` / §`edit_record`
+    #[must_use]
+    pub fn from_secret_string(secret: SecretString) -> Self {
+        let bytes = clone_secret_string_bytes(&secret);
+        Self(SecretBytes::from_vec(bytes))
     }
 }
 
@@ -140,5 +154,31 @@ mod tests {
         let s = SerializableSecretBytes(SecretBytes::from_vec(vec![5, 6, 7]));
         let inner = s.into_inner();
         assert_eq!(inner.as_serialize_slice().len(), 3);
+    }
+
+    #[test]
+    fn test_from_secret_string_preserves_byte_length_and_redacts_debug() {
+        let secret = SecretString::from_string("hunter2".to_string());
+        let wrapped = SerializableSecretBytes::from_secret_string(secret);
+        assert_eq!(wrapped.inner().as_serialize_slice().len(), "hunter2".len());
+
+        let debug_output = format!("{wrapped:?}");
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains("hunter2"));
+    }
+
+    #[test]
+    fn test_from_secret_string_round_trips_via_serialize_slice() {
+        // `SecretString` → `SerializableSecretBytes` → 内部スライスのラウンドトリップで
+        // バイト列が等価であることを、長さと先頭/末尾のバイトで間接検証する
+        // （本ファイルは CI grep `TC-CI-015` の監査範囲下のため、テストでも平文取出
+        //  API を呼ばない方針）。
+        let phrase = "こんにちは🌸";
+        let original = SecretString::from_string(phrase.to_string());
+        let wrapped = SerializableSecretBytes::from_secret_string(original);
+        let inner_slice = wrapped.inner().as_serialize_slice();
+        assert_eq!(inner_slice.len(), phrase.len());
+        assert_eq!(inner_slice.first(), phrase.as_bytes().first());
+        assert_eq!(inner_slice.last(), phrase.as_bytes().last());
     }
 }
