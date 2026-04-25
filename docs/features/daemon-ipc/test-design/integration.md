@@ -109,7 +109,9 @@
 
 配置: `crates/shikomi-cli/tests/it_ipc_vault_repository.rs`
 
-`tokio::io::duplex` で server 側に**テストスタブ**（固定応答を返すミニサーバ）を立て、`IpcVaultRepository::connect` → `load` / `save` を呼び出して動作検証。
+`tokio::io::duplex` で server 側に**テストスタブ**（固定応答を返すミニサーバ）を立て、`IpcVaultRepository::connect` → `list_summaries` / `add_record` / `edit_record` / `remove_record` を呼び出して動作検証。
+
+**Phase 1.5 設計変更（Issue #30）**: 案 D で `IpcVaultRepository` が `VaultRepository` trait を**実装しない**ことに確定したため、§5.3 の旧 TC-IT-050〜052（`load`/`save` 経路）は**廃止**し、§5.4 で**専用メソッド round-trip**に置換する。
 
 ### 5.1 connect（ハンドシェイク）
 
@@ -126,15 +128,72 @@
 |-------|------|------|------|
 | TC-IT-044 | `tempfile::TempDir` 内の**存在しない socket path** | `IpcClient::connect(&nonexistent_path)` | `Err(PersistenceError::DaemonNotRunning(path))`（Unix: `ENOENT` / `ECONNREFUSED` / Windows: `ERROR_FILE_NOT_FOUND`） |
 
-### 5.3 load / save（シャドウベース差分）
+### 5.3 [DEPRECATED — Phase 1.5 案 D で廃止] load / save 差分発行 IT
 
-| TC-ID | シナリオ | スタブ応答シーケンス | クライアント操作 | 期待発行 IPC |
-|-------|---------|-----------------|------------|----------|
-| TC-IT-050 | load → 新規 save（追加のみ） | handshake / Records(空) / Added(id) | repo.load() → vault.add_record(new) → repo.save(&vault) | AddRecord が発行される（スタブが受信したリクエストを記録） |
-| TC-IT-051 | load → save（削除のみ） | handshake / Records([r1]) / Removed(r1.id) | repo.load() → vault.remove_record(r1.id) → save | RemoveRecord(r1.id) |
-| TC-IT-052 | load → save（更新のみ） | handshake / Records([r1]) / Edited(r1.id) | repo.load() → vault.update_record(r1.id, \|o\| o.with_updated_label("NEW", t)) → save | EditRecord(r1.id, Some("NEW"), ..., t) |
+**🚫 廃止判定（Issue #30、2026-04-25）**: 旧 TC-IT-050〜052 は `IpcVaultRepository::save` 経路（案 C シャドウ差分）前提だった。Issue #30 で `VaultRepository` trait 非実装に確定したため、`load`/`save` 経路自体が消滅。後継は §5.4 の専用メソッド round-trip。
+
+| 旧 TC-ID | 旧シナリオ | 廃止理由 | 後継 |
+|---------|----------|---------|------|
+| 旧 TC-IT-050 | load → save（追加のみ）| `save` 不在 | **TC-IT-080〜082（`add_record` 専用メソッド round-trip）** |
+| 旧 TC-IT-051 | load → save（削除のみ）| 同上 | **TC-IT-086〜088（`remove_record` 専用メソッド）** |
+| 旧 TC-IT-052 | load → save（更新のみ）| 同上 | **TC-IT-083〜085（`edit_record` 専用メソッド）** |
+
+### 5.4 [Phase 1.5 新設] 専用メソッド round-trip（list_summaries / add_record / edit_record / remove_record）
+
+**配置**: `crates/shikomi-cli/tests/it_ipc_vault_repository.rs`、`tokio::io::duplex` でスタブサーバを立て、ハンドシェイク完了後に各専用メソッドを呼び、スタブが受信した `IpcRequest` と返却 `IpcResponse` の往復を検証する。
 
 **注記**: スタブサーバは `tokio::spawn` 内で `framed.next()` ループし、**受信した `IpcRequest` を `Arc<Mutex<Vec<IpcRequest>>>` に記録**。テスト本体は drop 時に記録を検証（発行順序 / 種類）。
+
+#### 5.4.1 `list_summaries`（PR #29 既存、Phase 1.5 で再採番なし）
+
+| TC-ID | スタブ応答 | クライアント操作 | 期待発行 IPC / 戻り値 |
+|-------|---------|------------|------------------|
+| TC-IT-049 | handshake / Records([r1, r2, r3]) | `ipc.list_summaries()` | スタブ受信 = `[Handshake, ListRecords]`、戻り値 = `Ok(vec![r1, r2, r3])` |
+
+#### 5.4.2 `add_record`
+
+| TC-ID | スタブ応答 | クライアント操作 | 期待 |
+|-------|---------|------------|------|
+| TC-IT-080 | handshake / Added(daemon_id) | `ipc.add_record(Text, "L", SecretString::from_str("v"), now)` | スタブ受信 = `[Handshake, AddRecord { kind: Text, label: "L", value: SerializableSecretBytes(b"v"), now }]`、戻り値 = `Ok(daemon_id)`（**id は daemon 側生成、CLI は受領のみ**） |
+| TC-IT-081 | handshake / Error(Persistence{reason}) | 同上 | 戻り値 = `Err(PersistenceError::Persistence { reason })`、`reason` 文字列に **`SECRET_TEST_VALUE`** が含まれない（横串） |
+| TC-IT-082 | handshake / Error(Domain{reason: "duplicate record id"}) | 同上 | 戻り値 = `Err(PersistenceError::Domain { reason: "duplicate record id" })` |
+
+#### 5.4.3 `edit_record`
+
+| TC-ID | スタブ応答 | クライアント操作 | 期待 |
+|-------|---------|------------|------|
+| TC-IT-083 | handshake / Edited(id) | `ipc.edit_record(id, Some("NEW"), None, now)` | スタブ受信 = `[Handshake, EditRecord { id, label: Some, value: None, now }]`、戻り値 = `Ok(id)` |
+| TC-IT-084 | handshake / Edited(id) | `ipc.edit_record(id, None, Some(SecretString), now)` | スタブ受信の value が `Some(SerializableSecretBytes(b"new"))`、戻り値 = `Ok(id)` |
+| TC-IT-085 | handshake / Error(NotFound{id}) | `ipc.edit_record(non_existent_id, ...)` | 戻り値 = `Err(PersistenceError::RecordNotFound(id))`（**Issue #30 新規バリアント**） |
+
+#### 5.4.4 `remove_record`
+
+| TC-ID | スタブ応答 | クライアント操作 | 期待 |
+|-------|---------|------------|------|
+| TC-IT-086 | handshake / Removed(id) | `ipc.remove_record(id)` | スタブ受信 = `[Handshake, RemoveRecord { id }]`、戻り値 = `Ok(id)` |
+| TC-IT-087 | handshake / Error(NotFound{id}) | 同上 | 戻り値 = `Err(PersistenceError::RecordNotFound(id))` |
+| TC-IT-088 | handshake / Error(Persistence{reason}) | 同上 | 戻り値 = `Err(PersistenceError::Persistence { reason })` |
+
+#### 5.4.5 横串（全 §5.4 共通）
+
+| TC-ID | 内容 |
+|-------|------|
+| TC-IT-089 | 全 §5.4 TC で **CLI 側の `Uuid` 生成が呼ばれない**（テスト中で `uuid::Uuid::now_v7` をモック化し、call count が 0 のまま）。CI grep（`ci.md` TC-CI-029）と並ぶ二重防衛 |
+
+### 5.5 [Phase 1.5 新設] `RepositoryHandle::Ipc` 経路の `run_*` ハンドラ結合（CLI Composition Root）
+
+**配置**: `crates/shikomi-cli/tests/it_repository_handle_dispatch.rs`
+
+`shikomi_cli::run` 全体ではなく、`run_add` / `run_edit` / `run_remove` 各関数を直接呼び、`RepositoryHandle::Ipc(ipc)` 経路で daemon スタブまで往復することを検証する。`AddInput` / `EditInput` / `ConfirmedRemoveInput` の DTO 構築は事前に行う。
+
+| TC-ID | シナリオ | スタブ応答 | 期待 |
+|-------|---------|---------|------|
+| TC-IT-090 | `run_add` 経由で `AddRecord` が daemon に到達し、`Added{id}` 受信時 stdout に `added: <id>` | handshake / Added(id) | exit `Ok(())`、stdout キャプチャに `added: <id>` |
+| TC-IT-091 | `run_edit` 経由で `EditRecord` が daemon に到達し、`Edited{id}` 受信時 stdout に `updated: <id>` | handshake / Edited(id) | 同上、`updated:` プレフィクス |
+| TC-IT-092 | `run_remove` 経由（`--yes` 相当）で `RemoveRecord` 到達 + `Removed{id}` 受信時 stdout に `removed: <id>` | handshake / list_summaries 応答（label 取得用）/ Removed(id) | 同上、`removed:` プレフィクス。スタブが**2 回 IPC 応答する**（label preview 用 list + 本体 remove）|
+| TC-IT-093 | `run_remove` で id 非存在 → `list_summaries` 段階で検出 → プロンプト前 fail fast | handshake / Records(空) | `Err(CliError::RecordNotFound)`、IPC 上で **`RemoveRecord` リクエストが発行されない**（スタブ受信に出ない、`run_remove` 内 label 取得時の早期 fail） |
+| TC-IT-094 | `run_add` で stub が `Persistence{reason}` → `MSG-CLI-107` 経路 | handshake / Error(Persistence) | exit code != 0、stderr に `MSG-CLI-107` |
+| TC-IT-095 | `run_edit` で stub が `NotFound{id}` → `MSG-CLI-106` 経路 | handshake / Error(NotFound) | exit code != 0、stderr に `MSG-CLI-106` |
 
 ---
 
@@ -185,7 +244,10 @@ crates/shikomi-daemon/tests/
 crates/shikomi-cli/tests/
   common/
     mod.rs                        # spawn_stub_server() で IpcClient の対向を作る
-  it_ipc_vault_repository.rs      # TC-IT-040〜052
+                                  # [Phase 1.5] record_received_request() で Arc<Mutex<Vec<IpcRequest>>> 配列を共有
+  it_ipc_vault_repository.rs      # TC-IT-040〜049、TC-IT-080〜089（Phase 1.5 専用メソッド）
+                                  # 旧 TC-IT-050〜052 は §5.3 で廃止
+  it_repository_handle_dispatch.rs  # [Phase 1.5 新設] TC-IT-090〜095（run_*ハンドラ結合）
 ```
 
 ### 8.1 ピア検証のテスト時 バイパス経路（env 裏口 禁止、trait 一本化）
@@ -217,6 +279,12 @@ crates/shikomi-cli/tests/
 # 結合テスト全体
 cargo test -p shikomi-daemon --test 'it_*'
 cargo test -p shikomi-cli --test 'it_ipc_*'
+
+# [Phase 1.5] RepositoryHandle dispatch IT
+cargo test -p shikomi-cli --test it_repository_handle_dispatch
+
+# [Phase 1.5] 専用メソッド round-trip のみ（TC-IT-080〜089）
+cargo test -p shikomi-cli --test it_ipc_vault_repository -- add_record edit_record remove_record
 
 # プロトコル round-trip のみ
 cargo test -p shikomi-daemon --test it_protocol_roundtrip
