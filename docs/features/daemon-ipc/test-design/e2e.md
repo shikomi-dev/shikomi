@@ -128,8 +128,8 @@
 | 対応受入基準 | 3 |
 | 対応 REQ | REQ-DAEMON-002, REQ-DAEMON-003 |
 | 種別 | 異常系（起動競合） |
-| 前提条件 | daemon A を起動、listening 確認 |
-| 操作 | 同じ `SHIKOMI_DAEMON_SOCKET_DIR` で daemon B を spawn |
+| 前提条件 | daemon A を `XDG_RUNTIME_DIR=<tmp>` + `SHIKOMI_VAULT_DIR=<tmp>/vault` で起動、listening 確認 |
+| 操作 | **同じ** `XDG_RUNTIME_DIR=<tmp>` + `SHIKOMI_VAULT_DIR=<tmp>/vault` env で daemon B を spawn（A と同じ socket dir `<tmp>/shikomi/daemon.sock` を参照、env 裏口は不使用） |
 | 期待結果 | B が **exit code 2**（`SingleInstanceUnavailable`）、stderr に `another daemon is running` または同意のメッセージ / A は継続 |
 | 検証アサート | `B.wait().await?.code() == Some(2)` + A の stdout が続いて出る |
 
@@ -151,8 +151,8 @@
 | 対応受入基準 | 4 |
 | 対応 REQ | REQ-DAEMON-002 |
 | 種別 | 正常系（カーネル flock 自動解放） |
-| 前提条件 | daemon A を起動 → SIGKILL で強制終了（Drop ハンドラ不発火） |
-| 操作 | 同じ `SHIKOMI_DAEMON_SOCKET_DIR` で daemon B を起動 |
+| 前提条件 | daemon A を `XDG_RUNTIME_DIR=<tmp>` + `SHIKOMI_VAULT_DIR=<tmp>/vault` で起動 → SIGKILL で強制終了（Drop ハンドラ不発火） |
+| 操作 | **同じ** `XDG_RUNTIME_DIR=<tmp>` + `SHIKOMI_VAULT_DIR=<tmp>/vault` env で daemon B を起動（env 裏口は不使用、A の残留ソケット / lock を参照） |
 | 期待結果 | B が listening に到達（`flock` は OS が A の終了時に release 済み、`daemon.lock` / `daemon.sock` が残存していても獲得可能） |
 
 ---
@@ -251,15 +251,15 @@
 | 操作 | daemon を spawn（`SHIKOMI_VAULT_DIR=<tmp>`） |
 | 期待結果 | daemon が exit 3、stderr に `vault is encrypted; daemon does not support encrypted vaults yet`、ソケット非作成 |
 
-### TC-E2E-071: `--ipc add` を暗号化 vault へ発行した場合（防御的）
+### TC-E2E-071: `--ipc add` を暗号化 vault へ発行した場合（防御的、**scope-out**）
 
 | 項目 | 内容 |
 |------|------|
 | 対応受入基準 | 11 |
 | 対応 REQ | REQ-DAEMON-013 |
 | 種別 | 異常系 |
-| 前提条件 | daemon 起動時は平文だが、**起動後**に別プロセスで vault を再暗号化（競合シナリオ、後続 Issue 想定）。本 TC では **平文で起動した daemon のハンドラ防御コード**を検証するため、test-only な `--vault-protection-mode encrypted` フラグを daemon に追加するか、mock repo で代替 |
-| 代替案 | daemon 側のハンドラ防御的検査はユニット TC-UT-039 / IT TC-IT-014 で網羅。本 E2E は **scope-out**（`#[ignore]`） |
+| 判定 | **scope-out（`#[ignore]`）** — 本番バイナリに test-only フラグ（例: `--vault-protection-mode encrypted` 等）を**追加しない**（ペテルギウス review 指摘 ② 対応、2026-04-25 怠惰の残滓削除）。実 E2E で「起動後に vault が再暗号化される」競合状況を再現する経路は現行アーキテクチャに存在せず、後続 Issue（`daemon-vault-encryption`、未起票）で unlock / lock 状態遷移が入るまで E2E は不可 |
+| 担保先 | **daemon 側のハンドラ防御的 `EncryptionUnsupported` 返送**はユニット **TC-UT-039**（mock vault `ProtectionMode::Encrypted`）+ IT **TC-IT-014**（fixture 暗号化 vault を load した daemon プロセス内挙動）で完全網羅。本 E2E は `#[ignore]` 維持で **scope-out 一本化** |
 
 ---
 

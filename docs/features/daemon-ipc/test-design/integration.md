@@ -16,7 +16,7 @@
   - UDS / Named Pipe は `tokio::io::duplex(64 * 1024)` で in-memory 双方向 stream を使う（**唯一の「OS の代替」**、実 socket は `SingleInstanceLock` テストと E2E に任せる）
   - SQLite は実物（`tempfile::TempDir`）
   - 時刻は固定値（`OffsetDateTime::from_unix_timestamp(...)`）
-  - ピア資格情報は `#[cfg(test)]` で verify をバイパス or `TestPeerCredential` を注入
+  - ピア資格情報は **`PeerCredentialSource` trait の `TestPeerCredential` 実装を `IpcServer::new_for_test(...)` 経由で注入**する（§8.1 で確定、本番コードに `#[cfg(test)]` バイパス分岐は**書かない**）
 - **配置**: `crates/shikomi-daemon/tests/it_*.rs` + `crates/shikomi-cli/tests/it_ipc_*.rs`。Rust 慣習で `[lib] + [[bin]]` の lib 経由呼出
 
 ---

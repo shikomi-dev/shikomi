@@ -100,7 +100,7 @@
 | TC-UT-023 | Windows 版 正常 | `TestPeerCredential { peer_sid: "S-1-5-21-...", self_sid: 同 }` | `Ok(())` |
 | TC-UT-024 | Windows 版 異常 | 異なる SID | `Err(PeerVerificationError::SidMismatch)` |
 
-**引き継ぎ事項**: `PeerCredentialSource` trait（or 関数ポインタでも可）は**詳細設計 `daemon-runtime.md §peer_credential` に暗黙的に提示されている**が、trait 境界が明示されていない。実装担当（坂田銀時）は本 UT を書けるように **`#[cfg(test)]` で差替可能な引数経路を `verify_unix` / `verify_windows` に設ける**こと。別案: 実 syscall をラップする `peer_uid(fd) -> Result<u32, _>` / `peer_sid(handle) -> Result<String, _>` を pub(crate) で切り出し、`verify_*` が高階関数でこれを受け取る。どちらでも UT が可能な形で OK。
+**引き継ぎ事項（断定）**: 実装担当（坂田銀時）は **`pub(crate) trait PeerCredentialSource` を `crates/shikomi-daemon/src/permission/peer_credential/mod.rs` に定義し、`verify_unix` / `verify_windows` がこの trait を介して UID / SID を取得する** 形に実装する（§3.1 で仕様確定）。本番コードに `#[cfg(test)]` バイパス分岐を入れない——trait 注入一本化で UT・IT ともに差替可能（integration.md §8.1「src/ 配下の `#[cfg(test)]` は `mod tests` の UT のみ」と完全整合）。
 
 ### 2.7 `shikomi_cli::error` — `From<PersistenceError> for CliError` 追加写像
 
@@ -170,13 +170,22 @@
 
 詳細設計で未確定な実装ポイントをここに集約する。
 
-### 3.1 `PeerCredentialSource` trait（TC-UT-020〜024 のため）
+### 3.1 `PeerCredentialSource` trait（TC-UT-020〜024 のため、**断定仕様**）
 
-**詳細設計 `daemon-runtime.md §peer_credential`** では `peer_credential::verify(&stream)` の呼出箇所まで示されているが、**ユニットテスト可能な注入点が未確定**。
+**ペテルギウス review 指摘 ④ 対応（2026-04-25）**: 前版の「推奨 API / 代替案」両論併記を撤廃し、**trait 注入一本化の断定仕様**として確定する。`#[cfg(test)]` 差替機構・関数ポインタ方式は**採用しない**。
 
-**推奨 API**: `pub(crate) trait PeerCredentialSource { fn peer_uid(&self) -> Result<u32, PeerVerificationError>; fn self_uid(&self) -> u32; }` と `impl PeerCredentialSource for tokio::net::UnixStream`（cfg(unix)）を提供し、`verify_unix(source: &impl PeerCredentialSource) -> Result<(), PeerVerificationError>` で受け取る。テストでは `struct TestPeerCred { peer: u32, slf: u32 }` を `impl PeerCredentialSource` で渡す。Windows も同型（`peer_sid` / `self_sid`）。
+**確定 API**:
 
-**代替案**: 関数ポインタ or クロージャで `fn(&Stream) -> Result<u32, _>` を高階関数として受ける。いずれでも UT 可能。
+- `pub(crate) trait PeerCredentialSource { fn peer_uid(&self) -> Result<u32, PeerVerificationError>; fn self_uid(&self) -> u32; }` を `crates/shikomi-daemon/src/permission/peer_credential/mod.rs` に定義
+- 本番実装: `impl PeerCredentialSource for tokio::net::UnixStream`（cfg unix）/ `impl PeerCredentialSource for tokio::net::windows::named_pipe::NamedPipeServer`（cfg windows）
+- 検証関数: `pub(crate) fn verify_unix(source: &impl PeerCredentialSource) -> Result<(), PeerVerificationError>`（Windows 版 `verify_windows` も同型、SID 比較）
+- テスト実装: `crates/shikomi-daemon/tests/common/peer_mock.rs` に `pub struct TestPeerCredential { peer: u32, slf: u32 }` を `impl PeerCredentialSource` で配置、UT は `verify_unix(&TestPeerCredential { peer: 1000, slf: 1000 })` で直接呼び出す
+- `IpcServer` 側: `pub fn new(...)` は `UnixStream` の `impl PeerCredentialSource` を自動使用、`#[cfg(test)] pub fn new_for_test(..., source: Box<dyn PeerCredentialSource>)` で IT から mock を差替（integration.md §8.1 で確定）
+
+**禁止事項**:
+- 本番 `src/` 配下に `#[cfg(test)]` バイパス分岐を書かない
+- `std::env::var("SHIKOMI_DAEMON_SKIP_*")` 系の読取を本番 / テストコードに書かない
+- Windows 版は `peer_sid` / `self_sid` を返す同型 trait（署名は `Result<String, PeerVerificationError>` で SID 文字列）
 
 ### 3.2 `default_socket_path` の pure 切り出し（TC-UT-050〜054 のため）
 
