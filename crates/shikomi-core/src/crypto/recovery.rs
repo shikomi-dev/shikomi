@@ -50,7 +50,7 @@ impl RecoveryMnemonic {
 
     /// crate 内部からのみ単語配列への参照を取り出す (Sub-B BIP-39 検証用)。
     pub(crate) fn expose_within_crate(&self) -> &[String; MNEMONIC_WORD_COUNT] {
-        &**self.words.expose_secret()
+        self.words.expose_secret()
     }
 
     /// 24 語固定。
