@@ -57,6 +57,9 @@ jobs:
           just commit-msg-check good.msg
 
       # 異常系: 非準拠メッセージ → exit 非 0 (失敗で ok、成功なら回帰発生でジョブ fail)
+      # pwsh は step 終了時の $LASTEXITCODE をそのまま step exit code にするため、
+      # `just` が exit 1 した直後の残留値で step が fail する。期待通りの失敗を
+      # 「成功」と再判定するため、明示的に `exit 0` でステップを締める。
       - name: commit-msg-check rejects non-conventional commit
         run: |
           "random nonsense message" | Out-File -FilePath bad.msg -Encoding utf8
@@ -67,6 +70,7 @@ jobs:
             exit 1
           }
           Write-Host "[OK] commit-msg-check rejected non-conventional message as expected"
+          exit 0
 
       # AI フッター検出 (REQ-DW-018) の Windows 側通過確認
       - name: commit-msg-no-ai-footer passes clean message
@@ -74,6 +78,7 @@ jobs:
           "feat: clean" | Out-File -FilePath clean.msg -Encoding utf8
           just commit-msg-no-ai-footer clean.msg
 
+      # pwsh の $LASTEXITCODE 残留対策（上記 commit-msg-check rejects ステップ参照）。
       - name: commit-msg-no-ai-footer rejects AI trailer
         run: |
           @"
@@ -88,3 +93,4 @@ jobs:
             exit 1
           }
           Write-Host "[OK] commit-msg-no-ai-footer rejected AI trailer as expected"
+          exit 0
