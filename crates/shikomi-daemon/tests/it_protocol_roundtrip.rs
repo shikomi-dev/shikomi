@@ -190,6 +190,56 @@ fn tc_it_006_roundtrip_protocol_version_mismatch() {
 }
 
 // -------------------------------------------------------------------
+// TC-IT-006b: 未知 version 文字列 → `IpcProtocolVersion::Unknown` 吸収
+//
+// **BUG-DAEMON-IPC-001 retest**: `#[serde(other)]` フォールバックが
+// rmp-serde の wire 経路でも有効であることを確認する。これにより daemon は
+// decode 失敗で応答なし切断するのではなく、`ProtocolVersionMismatch` 応答を
+// 返してから切断できる（fail-secure + diagnostics 両立）。
+// -------------------------------------------------------------------
+#[test]
+fn tc_it_006b_unknown_version_string_decodes_as_unknown_variant() {
+    // 正常 V1 を MessagePack 化してから "v1" → "v9" に書換える
+    let req = IpcRequest::Handshake {
+        client_version: IpcProtocolVersion::V1,
+    };
+    let mut bytes = rmp_serde::to_vec(&req).unwrap();
+    let pos = bytes
+        .windows(2)
+        .position(|w| w == b"v1")
+        .expect("v1 bytes present");
+    bytes[pos + 1] = b'9';
+
+    let decoded: IpcRequest = rmp_serde::from_slice(&bytes).expect("decode v9 yields Unknown");
+    match decoded {
+        IpcRequest::Handshake { client_version } => {
+            assert_eq!(client_version, IpcProtocolVersion::Unknown);
+        }
+        other => panic!("expected Handshake, got {other:?}"),
+    }
+}
+
+// -------------------------------------------------------------------
+// TC-IT-006c: `ProtocolVersionMismatch { client: Unknown }` の wire round-trip
+// -------------------------------------------------------------------
+#[test]
+fn tc_it_006c_roundtrip_protocol_version_mismatch_with_unknown_client() {
+    let resp = IpcResponse::ProtocolVersionMismatch {
+        server: IpcProtocolVersion::V1,
+        client: IpcProtocolVersion::Unknown,
+    };
+    let bytes = rmp_serde::to_vec(&resp).unwrap();
+    let decoded: IpcResponse = rmp_serde::from_slice(&bytes).unwrap();
+    match decoded {
+        IpcResponse::ProtocolVersionMismatch { server, client } => {
+            assert_eq!(server, IpcProtocolVersion::V1);
+            assert_eq!(client, IpcProtocolVersion::Unknown);
+        }
+        other => panic!("expected ProtocolVersionMismatch, got {other:?}"),
+    }
+}
+
+// -------------------------------------------------------------------
 // TC-IT-007: IpcErrorCode::NotFound round-trip
 // -------------------------------------------------------------------
 #[test]

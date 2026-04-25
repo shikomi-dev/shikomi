@@ -120,10 +120,10 @@ mod tests {
 
     impl PeerCredentialSource for TestPeerCredential {
         fn peer_identity(&self) -> Result<PeerIdentity, PeerVerificationError> {
-            self.peer.as_ref().cloned().map_err(|e| to_err(&e))
+            self.peer.as_ref().cloned().map_err(to_err)
         }
         fn self_identity(&self) -> Result<PeerIdentity, PeerVerificationError> {
-            self.slf.as_ref().cloned().map_err(|e| to_err(&e))
+            self.slf.as_ref().cloned().map_err(to_err)
         }
     }
 

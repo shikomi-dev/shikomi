@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use shikomi_core::ProtectionMode;
 use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 use crate::ipc::server::IpcServer;
@@ -44,6 +44,12 @@ pub async fn run() -> ExitCode {
     panic_hook::install();
 
     init_tracing();
+
+    // 親プロセスから継承された signal mask を解除する（Unix 専用 / Windows は noop）。
+    // `cargo test` 等で `std::process::Command::spawn` した親 thread の sigmask が
+    // SIGTERM/SIGINT を block していると、子プロセスもそのマスクを継承し
+    // tokio signal handler が起動しない（BUG-DAEMON-IPC-002）。
+    lifecycle::signal_mask::unblock_shutdown_signals();
 
     let socket_dir = match socket_path::resolve_socket_dir() {
         Ok(d) => d,
@@ -111,22 +117,22 @@ pub async fn run() -> ExitCode {
 
     let repo = Arc::new(repo);
     let vault = Arc::new(Mutex::new(vault));
-    let shutdown_signal = Arc::new(Notify::new());
+
+    // shutdown 通知 channel。`watch::channel<bool>` を使うことで、シグナル到達と
+    // receiver の poll 順序に関わらず通知が消失しない（BUG-DAEMON-IPC-002 対策）。
+    let (shutdown_tx, shutdown_rx) = shutdown::channel();
 
     // listening ログ（観測性、tests/IT-010 で検証）
     log_listening(&listener);
 
-    // shutdown 受信タスク
-    let shutdown_for_signal = Arc::clone(&shutdown_signal);
+    // shutdown 受信タスク（Sender を move 所有、シグナル受信で send(true)）
     let signal_task = tokio::spawn(async move {
-        shutdown::wait_for_signal(shutdown_for_signal).await;
+        shutdown::wait_for_signal(shutdown_tx).await;
     });
 
     // server 実行
     let mut server = IpcServer::new(listener, Arc::clone(&repo), Arc::clone(&vault));
-    let server_result = server
-        .start_with_shutdown(Arc::clone(&shutdown_signal))
-        .await;
+    let server_result = server.start_with_shutdown(shutdown_rx).await;
 
     // signal task の解放（shutdown 通知済みなら戻ってくる）
     signal_task.abort();

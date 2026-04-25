@@ -28,7 +28,7 @@ use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultR
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use uuid::Uuid;
 
@@ -108,7 +108,7 @@ async fn recv_response(framed: &mut Framed<UnixStream, LengthDelimitedCodec>) ->
 }
 
 /// IpcServer を tempfile ソケットで起動し、`(socket_path, lock_guard, shutdown, server_handle)`
-/// を返す。shutdown.notify_waiters() で server を停止できる。
+/// を返す。`handle.shutdown.send(true)` で server を停止できる。
 async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
     let (vault_arc, repo_arc) = fresh_vault_and_repo(dir.path());
 
@@ -121,7 +121,7 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
         unreachable!("test only cfg(unix)")
     };
 
-    let shutdown = Arc::new(Notify::new());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut server = IpcServer::new(
         ListenerEnum::Unix {
             listener,
@@ -130,16 +130,15 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
         Arc::clone(&repo_arc),
         Arc::clone(&vault_arc),
     );
-    let shutdown_for_server = Arc::clone(&shutdown);
     let server_handle = tokio::spawn(async move {
-        let _ = server.start_with_shutdown(shutdown_for_server).await;
+        let _ = server.start_with_shutdown(shutdown_rx).await;
     });
     // accept loop の開始を保証するため微小 yield
     tokio::time::sleep(Duration::from_millis(30)).await;
     TestServerHandle {
         socket_path,
         _lock: lock,
-        shutdown,
+        shutdown: shutdown_tx,
         server_handle,
         vault: vault_arc,
         repo: repo_arc,
@@ -149,7 +148,7 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
 struct TestServerHandle {
     socket_path: std::path::PathBuf,
     _lock: SingleInstanceLock,
-    shutdown: Arc<Notify>,
+    shutdown: watch::Sender<bool>,
     server_handle: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
     vault: Arc<Mutex<Vault>>,
@@ -159,7 +158,7 @@ struct TestServerHandle {
 
 impl TestServerHandle {
     async fn shutdown_and_join(self) {
-        self.shutdown.notify_waiters();
+        let _ = self.shutdown.send(true);
         // graceful shutdown 完了を待つ（最大 5 秒）
         let _ = tokio::time::timeout(Duration::from_secs(5), self.server_handle).await;
     }
@@ -328,22 +327,17 @@ async fn tc_it_015_edit_nonexistent_id_returns_not_found() {
 // -------------------------------------------------------------------
 // TC-IT-020: プロトコル不一致（server-side 判定）
 //
-// **重要な観察（BUG-DAEMON-IPC-001）**:
-// test-design §4.3 TC-IT-020 は「未知 version 文字列 → `ProtocolVersionMismatch`
-// 応答 → 切断」を期待しているが、現実装の `IpcProtocolVersion` enum は V1 のみで
-// `#[serde(other)]` 等の未知 variant フォールバックを持たない。その結果、未知
-// version 文字列を含むフレームは rmp-serde の decode 時点で失敗し、
-// `HandshakeError::Decode` が返り **`ProtocolVersionMismatch` 応答を送らずに
-// 接続が即切断される**。
-//
-// 本 TC は現実装の挙動（decode reject → close）を検証する。将来 `V2` 等の新
-// バリアント追加時に「V2 daemon ↔ V1 client」の組合せで初めて ProtocolVersionMismatch
-// 経路が実呼出されるため、本 TC は `V2` 追加時に応答検証版へ昇格予定。
-//
-// 詳細はバグレポート `daemon-ipc-bugs.md` §BUG-DAEMON-IPC-001 参照。
+// **BUG-DAEMON-IPC-001 修正後の本来の契約**:
+// test-design §4.3 TC-IT-020 のとおり「未知 version 文字列 →
+// `IpcResponse::ProtocolVersionMismatch` 応答 1 フレーム → 接続切断」を検証する。
+// `IpcProtocolVersion` に `#[serde(other)] Unknown` を追加した結果、
+// 未知 version は `Unknown` バリアントへ吸収され、handshake は
+// `current() (=V1) != Unknown` の不一致経路に入って応答を送る。
+// fail-secure（応答後に接続切断）と diagnostics（観測可能なエラーコード）を
+// 両立する契約。
 // -------------------------------------------------------------------
 #[tokio::test]
-async fn tc_it_020_unknown_version_bytes_close_connection() {
+async fn tc_it_020_unknown_version_bytes_returns_mismatch_then_closes() {
     let dir = fresh_socket_dir();
     let handle = spawn_test_server(&dir).await;
     let mut framed = connect_framed(&handle.socket_path).await;
@@ -361,15 +355,32 @@ async fn tc_it_020_unknown_version_bytes_close_connection() {
 
     framed.send(Bytes::from(bytes)).await.expect("send");
 
-    // 現実装では decode 失敗 → 応答なしで close。test-design の期待値
-    // （`ProtocolVersionMismatch` 応答）は V2 variant 追加後に満たされる。
-    // 本 TC は **接続が切断されること**（fail-secure）のみ検証する。
+    // 1 フレーム目: `ProtocolVersionMismatch` 応答
+    let first = tokio::time::timeout(Duration::from_secs(3), framed.next())
+        .await
+        .expect("response within 3s")
+        .expect("frame present")
+        .expect("frame ok");
+    let resp: IpcResponse = rmp_serde::from_slice(&first).expect("decode response");
+    match resp {
+        IpcResponse::ProtocolVersionMismatch { server, client } => {
+            assert_eq!(server, IpcProtocolVersion::V1, "server side is V1");
+            assert_eq!(
+                client,
+                IpcProtocolVersion::Unknown,
+                "client side decoded as Unknown via #[serde(other)]"
+            );
+        }
+        other => panic!("expected ProtocolVersionMismatch, got {other:?}"),
+    }
+
+    // 2 フレーム目以降: 接続切断（fail-secure）
     let next = tokio::time::timeout(Duration::from_secs(3), framed.next())
         .await
-        .expect("response within 3s");
+        .expect("close within 3s");
     assert!(
         next.is_none() || matches!(next, Some(Err(_))),
-        "connection should close on unknown version variant (current impl: decode reject); got {next:?}"
+        "connection should close after mismatch response; got {next:?}"
     );
     handle.shutdown_and_join().await;
 }
@@ -462,7 +473,7 @@ async fn tc_it_030_graceful_shutdown_closes_idle_connection() {
     let mut framed = connect_framed(&handle.socket_path).await;
     client_handshake_v1(&mut framed).await;
     // アイドル状態で shutdown を発火
-    handle.shutdown.notify_waiters();
+    let _ = handle.shutdown.send(true);
     // client 側は接続 close を観測する
     let next = tokio::time::timeout(Duration::from_secs(3), framed.next())
         .await

@@ -110,18 +110,19 @@ impl DaemonGuard {
 
     fn send_sigterm(&self) {
         if let Some(child) = &self.child {
-            // nix workspace は signal feature 無効のため /usr/bin/kill を呼ぶ。
             // daemon は SIGTERM で graceful shutdown する契約（REQ-DAEMON-014）。
-            let _ = Command::new("kill")
-                .args(["-TERM", &child.id().to_string()])
-                .status();
+            // nix の signal feature 経由で直接 syscall（procps の /usr/bin/kill に依存しない）。
+            // BUG-DAEMON-IPC-002 の調査で「`Command::new("kill")` は kill バイナリが
+            // PATH に無い slim 環境（rust:1.80-slim 等）では silent failure する」ことが
+            // 判明したため、この経路を採用。
+            #[allow(clippy::cast_possible_wrap)]
+            let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         }
     }
 
     fn wait_exit(&mut self, timeout: Duration) -> Option<std::process::ExitStatus> {
-        let Some(mut child) = self.child.take() else {
-            return None;
-        };
+        let mut child = self.child.take()?;
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             match child.try_wait() {
@@ -231,35 +232,38 @@ fn tc_e2e_020_second_daemon_exits_with_code_2() {
 // -------------------------------------------------------------------
 // TC-E2E-030: SIGTERM で graceful shutdown → exit 0
 //
-// **#[ignore]: BUG-DAEMON-IPC-002 により SIGTERM が完全に応答されない**
-// 35 秒待機しても daemon は exit せず（500ms タイミング guard を入れても再現）、
-// 単なる race window ではなく **SIGTERM が server まで届かない構造的バグ**。
-// 詳細は別添 `daemon-ipc-bugs.md §BUG-DAEMON-IPC-002` 参照。
-// 受入基準 5（REQ-DAEMON-014 graceful shutdown）はユーザ運用の前提のため
-// **実装担当が修正するまで本テストは regression marker として #[ignore]**
-// で保持。修正 PR で `#[ignore]` を外せば即時検証可能。
+// **BUG-DAEMON-IPC-002 修正済み（regression marker 兼 受入基準 5 検証）**
+// `Notify` → `tokio::sync::watch::channel<bool>` への置換で、シグナル到達と
+// receiver の poll 順序に関わらず通知が消失しない構造に変更。signal task は
+// `send(true)` で全 receiver を起こす。
 // -------------------------------------------------------------------
 #[test]
-#[ignore = "BUG-DAEMON-IPC-002: SIGTERM not delivered to server, daemon hangs forever"]
 fn tc_e2e_030_sigterm_triggers_graceful_shutdown() {
     let xdg = tight_tempdir();
     let vault_dir = tight_tempdir();
     seed_empty_vault(vault_dir.path());
     let mut guard = DaemonGuard::spawn(xdg.path(), vault_dir.path());
 
-    // 「listening on」ログ後、server.start_with_shutdown の accept_loop_unix で
-    // notified() が pin されるまで race window があるため少し待つ
-    thread::sleep(Duration::from_millis(500));
+    // 「listening on」ログが出てから server が accept loop に入るまでの微小な
+    // タイミングをカバーするため少し待つ（watch ベースなら必須ではないが、
+    // 実プロセスのスケジューリング揺らぎに対する安全マージン）。
+    thread::sleep(Duration::from_millis(200));
 
     guard.send_sigterm();
-    // BUG-DAEMON-IPC-002 修正後は 5s に戻す
     let status = guard.wait_exit(Duration::from_secs(5));
     assert!(
         status.is_some(),
-        "daemon should exit within 5s after SIGTERM (currently exhibits BUG-DAEMON-IPC-002)"
+        "daemon should exit within 5s after SIGTERM. stderr:\n{}",
+        guard.stderr()
     );
     let code = status.unwrap().code();
     assert_eq!(code, Some(0), "graceful shutdown should exit 0");
+    // shutdown ログが流れていること（観測性）
+    let stderr = guard.stderr();
+    assert!(
+        stderr.contains("shutdown signal received"),
+        "stderr should contain 'shutdown signal received'. stderr:\n{stderr}"
+    );
 }
 
 // -------------------------------------------------------------------

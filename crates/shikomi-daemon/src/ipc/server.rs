@@ -9,7 +9,7 @@ use shikomi_core::ipc::IpcRequest;
 use shikomi_core::Vault;
 use shikomi_infra::persistence::VaultRepository;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
@@ -48,9 +48,17 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
     ///
     /// shutdown 通知後は in-flight 接続が完了するまで最大 30 秒待機する。
     ///
+    /// `shutdown` は `tokio::sync::watch::Receiver<bool>`。`true` への変更
+    /// （または `Sender` の drop）で graceful shutdown を開始する。
+    /// `Notify` ではなく `watch` を使うのは、シグナル到達と `notified()` 登録の
+    /// race window で通知が消える BUG-DAEMON-IPC-002 を構造的に防ぐため。
+    ///
     /// # Errors
     /// `ServerError::Accept` / `ServerError::Join`。
-    pub async fn start_with_shutdown(&mut self, shutdown: Arc<Notify>) -> Result<(), ServerError> {
+    pub async fn start_with_shutdown(
+        &mut self,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<(), ServerError> {
         let listener = self
             .listener
             .take()
@@ -101,16 +109,21 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
         &self,
         listener: tokio::net::UnixListener,
         connections: &mut JoinSet<()>,
-        shutdown: Arc<Notify>,
+        mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), ServerError> {
-        // shutdown.notified() を pin して、複数 iteration で同じ future を poll する。
-        // notify_waiters は pending な future を resolve するが、新規 future は permit を持たない。
-        // pin することで「signal 受信 → notify_waiters → ここで resolve」の順序が保証される。
-        let notified = shutdown.notified();
-        tokio::pin!(notified);
+        // 既に shutdown=true なら即終了（signal が server 起動前に到達したケース）
+        if *shutdown.borrow_and_update() {
+            drop(listener);
+            return Ok(());
+        }
         loop {
             tokio::select! {
-                () = &mut notified => {
+                // biased: shutdown を accept より優先して poll
+                biased;
+                changed = shutdown.changed() => {
+                    // Ok(()) = `send(true)` 受信 / Err = Sender drop（fail-secure）
+                    // どちらでも shutdown 経路に入る
+                    let _ = changed;
                     tracing::info!(
                         target: "shikomi_daemon::ipc::server",
                         "stop accepting new connections"
@@ -140,7 +153,7 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
                     let repo = Arc::clone(&self.repo);
                     let vault = Arc::clone(&self.vault);
-                    let shutdown_for_task = Arc::clone(&shutdown);
+                    let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
                         handle_connection(stream, repo, vault, shutdown_for_task).await;
                     });
@@ -159,16 +172,20 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
         first_server: tokio::net::windows::named_pipe::NamedPipeServer,
         pipe_name: &str,
         connections: &mut JoinSet<()>,
-        shutdown: Arc<Notify>,
+        mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), ServerError> {
         use tokio::net::windows::named_pipe::ServerOptions;
 
-        let notified = shutdown.notified();
-        tokio::pin!(notified);
+        if *shutdown.borrow_and_update() {
+            drop(first_server);
+            return Ok(());
+        }
         let mut current = first_server;
         loop {
             tokio::select! {
-                () = &mut notified => {
+                biased;
+                changed = shutdown.changed() => {
+                    let _ = changed;
                     tracing::info!(
                         target: "shikomi_daemon::ipc::server",
                         "stop accepting new connections"
@@ -200,7 +217,7 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
                     let repo = Arc::clone(&self.repo);
                     let vault = Arc::clone(&self.vault);
-                    let shutdown_for_task = Arc::clone(&shutdown);
+                    let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
                         handle_connection(stream, repo, vault, shutdown_for_task).await;
                     });
@@ -221,7 +238,7 @@ async fn handle_connection<S, R>(
     stream: S,
     repo: Arc<R>,
     vault: Arc<Mutex<Vault>>,
-    shutdown: Arc<Notify>,
+    mut shutdown: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
     R: VaultRepository + Send + Sync + 'static,
@@ -236,11 +253,15 @@ async fn handle_connection<S, R>(
         return;
     }
 
-    let notified = shutdown.notified();
-    tokio::pin!(notified);
+    // 既に shutdown=true なら handshake 完了直後に閉じる
+    if *shutdown.borrow_and_update() {
+        return;
+    }
     loop {
         tokio::select! {
-            () = &mut notified => {
+            biased;
+            changed = shutdown.changed() => {
+                let _ = changed;
                 tracing::info!(
                     target: "shikomi_daemon::ipc::server",
                     "shutdown received; closing connection"
