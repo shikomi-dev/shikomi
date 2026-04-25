@@ -170,6 +170,7 @@
 | 処理 | TBD by Sub-D / Sub-E（生成 → 表示完了確認 → zeroize の単一フロー、再表示 API を提供しない） |
 | 出力 | TBD by Sub-D / Sub-E |
 | エラー時 | TBD by Sub-D / Sub-E（Fail-Secure 必須: 表示完了前のクラッシュ時は新規 vault 作成を巻戻し、未確認の `wrapped_VEK_by_recovery` を残さない） |
+| **アクセシビリティ** | **「初回 1 度きり表示」は視覚障害ユーザにとって完全敗北リスクに直結**（24 語を視認できない → 手書き不能 → 再表示不可 → マスターパスワード失念時に L4 相当の永久損失）。以下の代替経路を Sub-D / Sub-F が提供する: (1) **スクリーンリーダー対応**: 24 語表示要素に明示的な ARIA ロール / `aria-live="assertive"` / 連続読み上げ可能なテキスト構造を付与、(2) **OS 読み上げ拒否環境への代替**: `vault recovery-show --print` で**ハイコントラスト印刷可能 PDF**（黒地白文字、最大 36pt フォント、各語に番号付与）を出力、(3) **点字対応**: `vault recovery-show --braille` で `.brf`（Braille Ready Format）出力、(4) **音声プレイヤー優先順位ガイド**: `--audio` オプションで OS 標準 TTS を呼ぶ際、録音禁止プレイヤー（macOS VoiceOver / Windows ナレーター / Linux Orca 直接呼出し）の優先順位をドキュメント化。ユーザ向け案内は MSG-S18 で確定。**WCAG 2.1 AA 準拠**を非機能要件として固定し、Sub-D / Sub-F の受入条件に組み込む |
 
 ### REQ-S14: nonce overflow 検知 → rekey 強制
 
@@ -257,13 +258,16 @@
 | MSG-S06 | 警告 | TBD by Sub-D / Sub-F | `vault recovery-show` 表示直前（「この画面を 1 度しか表示しない」「写真撮影禁止」「金庫保管」） |
 | MSG-S07 | 成功 | TBD by Sub-F | `vault rekey` 完了時（再暗号化レコード数を表示） |
 | MSG-S08 | エラー | TBD by Sub-D | パスワード強度不足（zxcvbn `feedback.warning` + `feedback.suggestions` を埋め込む、Fail Kindly） |
-| MSG-S09 | エラー | TBD by Sub-E | アンロック失敗（連続失敗回数 / 次の試行可能までの待機秒数を含む、内部詳細は含めない） |
+| MSG-S09 | エラー | TBD by Sub-E（**カテゴリ別ヒント方針**: 単一文言で「失敗しました」と返さず、原因カテゴリ別に異なる Fail Kindly メッセージを出す。最低 3 カテゴリ — (a)「パスワード違い」: 連続失敗回数 / 次の試行可能までの待機秒数 + 「リカバリニーモニックでの復号 (`vault unlock --recovery`) も可能」案内、(b)「IPC 接続不能」: daemon 起動状態 (`shikomi daemon status`) の確認案内、(c)「キャッシュ揮発タイムアウト / 自動 lock」: アイドル 15min / スクリーンロック / サスペンドで lock した旨と再 unlock 案内。**内部詳細**（KDF パラメータ・nonce カウンタ・スタックトレース）は含めない。MSG 文言は Sub-E で確定） | アンロック失敗（IPC 経由全般） |
 | MSG-S10 | エラー | TBD by Sub-C / Sub-D | AEAD 認証タグ不一致（vault.db 改竄の可能性、ユーザにバックアップから復元を案内） |
 | MSG-S11 | エラー | TBD by Sub-C / Sub-F | nonce 上限到達（`vault rekey` への誘導） |
 | MSG-S12 | エラー | TBD by Sub-D | リカバリニーモニック検証失敗（チェックサム不一致 / 単語数不正） |
 | MSG-S13 | エラー | TBD by Sub-D | 平文 ⇄ 暗号化マイグレーション失敗（atomic write 失敗、原状復帰済みを明示） |
 | MSG-S14 | 確認 | TBD by Sub-F | `vault decrypt` 実行前（暗号保護を外すリスクを明示） |
 | MSG-S15 | エラー | TBD by Sub-E | IPC V2 非対応クライアント（V1 クライアントへの guidance） |
+| MSG-S16 | 警告 | TBD by Sub-D / Sub-F（**暗号化モード初回切替時の限界説明**: 受入基準#9「過信なく / 過小評価なく伝わる」を担保する MSG。`vault encrypt` 確認モーダル / プロンプトで以下 3 点を必ず提示する — (1)「**侵害された端末（root マルウェア / 同特権デバッガ / kernel keylogger）からは保護できません**」、(2)「**BIP-39 24 語が漏洩した場合は完全敗北です。手書きメモを写真撮影 / クラウド同期しないでください**」、(3)「**画面共有・リモートデスクトップ中は秘密情報の表示を避けてください**」。CLI / GUI 両経路で同等表示、ユーザの明示的合意（`--accept-limits` フラグ / モーダル「理解しました」ボタン）なしに次工程へ進ませない） | `vault encrypt` 初回実行直前 / GUI 「暗号化モードに切替」ボタン押下直後 |
+| MSG-S17 | 警告 | TBD by Sub-F + 後続 GUI feature（**GUI 暗号化モード可視化（田中ペルソナ対応）**: ペルソナ A 田中は CLI を読めない。Tauri WebView の常駐表示要素（タイトルバー / トレイアイコンツールチップ / レコード一覧画面ヘッダ）に **`[encrypted]` / `[plaintext]` バッジを常時表示**する。色（緑/灰）と文字（暗号化中/平文）の二重符号化（色覚多様性対応）。CLI 側 `shikomi list` の `[plaintext]` / `[encrypted]` バナー（REQ-S16）と文言を統一し、ユーザがどちらの UI を使ってもモードが視覚的に同期する。Sub-F の CLI 実装と将来の GUI feature 設計で同 MSG ID を共有 | GUI 起動時 / モード切替直後 / レコード一覧画面常時 |
+| MSG-S18 | 警告 | TBD by Sub-D / Sub-F（**アクセシビリティ代替経路**: スクリーンリーダー利用ユーザ / 視覚障害ユーザがリカバリニーモニック（24 語）を取り扱う際の代替手段案内。OS 読み上げ拒否環境では「**録音禁止の音声プレイヤー優先順位ガイド**」「**印刷可能なハイコントラスト PDF 出力経路（`vault recovery-show --print`）**」「**点字対応プリンタ向け .brf 出力**」のいずれかを選べる旨を明示。Sub-D / Sub-F のアクセシビリティ要件（REQ-S13 末尾）と整合 | `vault recovery-show` 実行時にアクセシビリティモードが OS / shikomi 設定で検出された場合 |
 
 ## 依存関係
 
