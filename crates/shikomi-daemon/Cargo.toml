@@ -45,5 +45,10 @@ tempfile           = { workspace = true }
 assert_cmd         = { workspace = true }
 predicates         = { workspace = true }
 
+# pty 経由 E2E（Issue #33 / TC-E2E-017、Unix 限定）。
+# `e2e_daemon_phase15_pty.rs` のみで使用、本番バイナリ非混入。
+[target.'cfg(unix)'.dev-dependencies]
+expectrl           = { workspace = true }
+
 [lints]
 workspace = true
