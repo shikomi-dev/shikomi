@@ -45,7 +45,8 @@ impl MasterPassword {
     /// 入力 `s` は本関数内で `into_bytes()` 経由で消費されるため、呼出側は別途
     /// 保持していたコピーを `zeroize` で消す責務を負う (Sub-D 境界で明示)。
     pub fn new(s: String, gate: &dyn PasswordStrengthGate) -> Result<Self, CryptoError> {
-        gate.validate(&s).map_err(CryptoError::WeakPassword)?;
+        gate.validate(&s)
+            .map_err(|fb| CryptoError::WeakPassword(Box::new(fb)))?;
         let bytes = s.into_bytes();
         Ok(Self {
             inner: SecretBytes::from_vec(bytes),
@@ -163,6 +164,18 @@ mod tests {
                 assert_eq!(fb.suggestions, vec!["use longer".to_string()]);
             }
             other => panic!("expected WeakPassword, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn master_password_new_returns_boxed_feedback_to_keep_crypto_error_small() {
+        // CryptoError::WeakPassword は Box<WeakPasswordFeedback> を保持する。
+        // この型形状そのものをコンパイル時に固定する (回帰防止)。
+        let err = MasterPassword::new("x".to_string(), &AlwaysRejectGate).unwrap_err();
+        if let CryptoError::WeakPassword(boxed) = err {
+            let _: Box<WeakPasswordFeedback> = boxed;
+        } else {
+            panic!("expected WeakPassword variant");
         }
     }
 

@@ -185,8 +185,13 @@ pub enum VaultConsistencyReason {
 pub enum CryptoError {
     /// `MasterPassword::new` が `PasswordStrengthGate::validate` で拒否された。
     /// 内包する `WeakPasswordFeedback` をそのまま MSG-S08 に渡す（Fail Kindly）。
+    ///
+    /// `Box` でヒープ移送して `CryptoError` enum 全体のサイズを抑える
+    /// (clippy::result_large_err 対策。`WeakPasswordFeedback` は
+    /// `Option<String> + Vec<String>` で約 48B あるため、`DomainError` /
+    /// `PersistenceError` の連鎖サイズ膨張を防ぐ目的でヒープに逃がす)。
     #[error("weak password rejected by strength gate")]
-    WeakPassword(crate::crypto::password::WeakPasswordFeedback),
+    WeakPassword(Box<crate::crypto::password::WeakPasswordFeedback>),
 
     /// AEAD 復号タグ検証失敗（vault.db 改竄の可能性）。MSG-S10 経路。
     #[error("AEAD authentication tag verification failed")]

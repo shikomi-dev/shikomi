@@ -170,7 +170,8 @@ pub enum CryptoOutcome<T> {
     /// KDF 計算失敗 (Argon2id / PBKDF2 / HKDF)。MSG-S09 KDF カテゴリ。
     KdfFailed(KdfErrorKind),
     /// `MasterPassword::new` 構築失敗。MSG-S08 (Fail Kindly)。
-    WeakPassword(WeakPasswordFeedback),
+    /// `Box` で `CryptoOutcome` enum 全体のサイズを抑える (詳細は `CryptoError::WeakPassword` 参照)。
+    WeakPassword(Box<WeakPasswordFeedback>),
     /// 正常系: AEAD 検証成功 + 平文取得 (`T = Plaintext` が主用途)。
     Verified(Verified<T>),
 }
@@ -251,7 +252,10 @@ mod tests {
         let _ = CryptoOutcome::<Plaintext>::TagMismatch;
         let _ = CryptoOutcome::<Plaintext>::NonceLimit;
         let _ = CryptoOutcome::<Plaintext>::KdfFailed(KdfErrorKind::Argon2id);
-        let _ = CryptoOutcome::<Plaintext>::WeakPassword(WeakPasswordFeedback::new(None, vec![]));
+        let _ = CryptoOutcome::<Plaintext>::WeakPassword(Box::new(WeakPasswordFeedback::new(
+            None,
+            vec![],
+        )));
         let _ = CryptoOutcome::<Plaintext>::Verified(Verified::new_from_aead_decrypt(
             Plaintext::new_within_module(vec![]),
         ));
