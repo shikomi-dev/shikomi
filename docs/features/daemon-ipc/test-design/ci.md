@@ -57,16 +57,22 @@
 
 ### 1.7 `unsafe` ブロックの局所化
 
+daemon 側と CLI 側の**両 crate**で `unsafe` ブロックを OS API モジュールに局所化する契約。CLI 側は本 feature で新設される `io/windows_sid.rs`（Windows SID 取得、`../basic-design/security.md §unsafe_code の扱い` 3 領域表）のみに閉じ込める。
+
 | TC-ID | 対応受入基準 | 操作 | 期待結果 |
 |-------|------------|------|---------|
-| TC-CI-019 | （セキュリティ契約、`../basic-design/security.md §unsafe_code の扱い`） | `grep -rn 'unsafe \{' crates/shikomi-daemon/src/` → `permission/unix.rs` / `permission/windows.rs` 以外のマッチが 0 件 | `ipc/` / `lifecycle/` / `lib.rs` / `main.rs` / `panic_hook.rs` 配下に `unsafe {` が出現しない |
+| TC-CI-019 | （セキュリティ契約、`../basic-design/security.md §unsafe_code の扱い` daemon 側） | `grep -rn 'unsafe \{' crates/shikomi-daemon/src/` → `permission/unix.rs` / `permission/windows.rs` 以外のマッチが 0 件 | `ipc/` / `lifecycle/` / `lib.rs` / `main.rs` / `panic_hook.rs` 配下に `unsafe {` が出現しない |
+| **TC-CI-026** | （セキュリティ契約、`../basic-design/security.md §unsafe_code の扱い` CLI 側、**服部 re-review 指摘 ① 対応 2026-04-25 新設**） | `grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/` → `io/windows_sid.rs` 以外のマッチが 0 件 | `usecase/` / `presenter/` / `io/ipc_vault_repository.rs` / `io/ipc_client.rs` / `error.rs` / `view.rs` / `input.rs` / `cli.rs` / `lib.rs` / `main.rs` 配下に `unsafe {` が出現しない（Windows SID 取得経路のみ `io/windows_sid.rs` に局所化） |
 
-### 1.8 daemon panic hook 監査
+### 1.8 daemon panic hook 監査 + env 裏口読取禁止
+
+panic hook 内部の secret 漏洩経路監査（TC-CI-023/024）に加え、本 feature の**env 裏口削除契約**（`integration.md §8.1` / `unit.md §3.1` 禁止事項）を CI で構造的に強制する（**服部 re-review 指摘 ② 対応 2026-04-25 新設**）。
 
 | TC-ID | 対応受入基準 | 操作 | 期待結果 |
 |-------|------------|------|---------|
 | TC-CI-023 | （セキュリティ、`../basic-design/security.md §panic hook`） | panic hook ブロック（`fn panic_hook(` から閉じ括弧まで）を `awk` で抽出し、`grep -E 'tracing::'` | **マッチ 0 件**（panic hook 内で tracing マクロを呼ばない） |
 | TC-CI-024 | 同上 | 同ブロック内で `grep -E '\.payload\(\)\|info\.payload\|info\.message\|info\.location\|PanicHookInfo::payload'` | **マッチ 0 件**（secret が混入する可能性のある payload / message / location を参照しない） |
+| **TC-CI-027** | （契約、`integration.md §8.1 / unit.md §3.1 禁止事項`、**新設**） | `grep -rnE 'env::var.*SHIKOMI_DAEMON_SKIP\|std::env::var.*SHIKOMI_DAEMON_SKIP' crates/shikomi-daemon/src/ crates/shikomi-cli/src/` | **マッチ 0 件**（`SHIKOMI_DAEMON_SKIP_PEER_VERIFY` 等のテスト用 env 裏口読取コードが本番 `src/` に復活していないこと。trait 注入一本化契約の CI 強制。tests/ 配下は対象外——`common/peer_mock.rs` では env を読む必要がなく trait 実装のみ） |
 
 ### 1.9 3 OS matrix CI（受入基準 13）
 
@@ -109,7 +115,7 @@ if matches="$(grep -rnE 'rmp_serde::(Raw|RawRef)|::Raw\b|::RawRef\b' crates/shik
 fi; echo "[TC-CI-018] PASS"
 
 # --- TC-CI-019 ----------------------------------------------------
-echo "[TC-CI-019] unsafe blocks outside permission/"
+echo "[TC-CI-019] unsafe blocks outside permission/ (shikomi-daemon)"
 if matches="$(grep -rn 'unsafe[[:space:]]*{' crates/shikomi-daemon/src/ \
     --include='*.rs' \
     | grep -v 'crates/shikomi-daemon/src/permission/unix.rs' \
@@ -117,6 +123,16 @@ if matches="$(grep -rn 'unsafe[[:space:]]*{' crates/shikomi-daemon/src/ \
     2>/dev/null)"; then
     echo "$matches"; fail "TC-CI-019 FAIL"
 fi; echo "[TC-CI-019] PASS"
+
+# --- TC-CI-026 ----------------------------------------------------
+# 服部 re-review 指摘 ① 対応: CLI 側 unsafe 局所化を CI 強制
+echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs (shikomi-cli)"
+if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    | grep -v 'crates/shikomi-cli/src/io/windows_sid.rs' \
+    2>/dev/null)"; then
+    echo "$matches"; fail "TC-CI-026 FAIL: unsafe block outside io/windows_sid.rs"
+fi; echo "[TC-CI-026] PASS"
 
 # --- TC-CI-023 / 024 ----------------------------------------------
 echo "[TC-CI-023/024] daemon panic hook audit"
@@ -133,9 +149,22 @@ if [[ -n "$panic_hook_body" ]]; then
     fi
 fi
 echo "[TC-CI-023/024] PASS"
+
+# --- TC-CI-027 ----------------------------------------------------
+# 服部 re-review 指摘 ② 対応: env 裏口読取禁止を CI 強制
+# SHIKOMI_DAEMON_SKIP_* 系 env の読取コードが本番 src/ に復活しないことを保証
+# （trait 注入一本化契約、integration.md §8.1 / unit.md §3.1 禁止事項）
+echo "[TC-CI-027] SHIKOMI_DAEMON_SKIP_* env read in production src/"
+if matches="$(grep -rnE 'env::var.*SHIKOMI_DAEMON_SKIP|std::env::var.*SHIKOMI_DAEMON_SKIP' \
+    crates/shikomi-daemon/src/ \
+    crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    2>/dev/null)"; then
+    echo "$matches"; fail "TC-CI-027 FAIL: SHIKOMI_DAEMON_SKIP_* env read in production src/"
+fi; echo "[TC-CI-027] PASS"
 ```
 
-既存の TC-CI-012〜015 セクションは維持（`cli-vault-commands` 由来）、本 feature で上記を**追記**する。
+既存の TC-CI-012〜015 セクションは維持（`cli-vault-commands` 由来）、本 feature で上記を**追記**する。`tests/` 配下は対象外（`common/peer_mock.rs` は trait 実装のみで env 不使用、理論上マッチしない）。
 
 ---
 
@@ -166,7 +195,7 @@ test-daemon:
 1. **Stage 1: 静的チェック**（早期 fail）
    - `cargo fmt --check --all`（TC-CI-001）
    - `cargo clippy --workspace --all-targets -- -D warnings`（TC-CI-002）
-   - `bash scripts/ci/audit-secret-paths.sh`（TC-CI-015〜019, 023, 024）
+   - `bash scripts/ci/audit-secret-paths.sh`（TC-CI-015〜019, 023, 024, **026, 027**）
    - `bash scripts/ci/audit-arch-docs.sh`（TC-CI-011、差分ゼロ確認）
    - `bash scripts/ci/audit-core-purity.sh`（TC-CI-012, 013、`shikomi-core` 純粋性）
 2. **Stage 2: 依存監査**
@@ -301,7 +330,7 @@ just test
 |------|----------|------|
 | E2E 実行ログ | `daemon-ipc-e2e-report.md` | TC-E2E-001〜112 の結果、3 OS matrix 結果、`SECRET_TEST_VALUE` 不在 grep 結果 |
 | 結合・ユニット集計 | `daemon-ipc-test-summary.md` | `cargo test` の集計（X passed; Y failed の TC 別表）、TC-UT-080 の固定文言確認、round-trip 成功数 |
-| 静的監査 | `daemon-ipc-static-audit.md` | TC-CI-011〜019, 023, 024 の grep 結果（全て 0 件ベースライン） |
+| 静的監査 | `daemon-ipc-static-audit.md` | TC-CI-011〜019, 023, 024, 026, 027 の grep 結果（全て 0 件ベースライン） |
 | 3 OS matrix | `daemon-ipc-matrix-results.md` | Linux / macOS / Windows の `cargo test` 結果比較、OS 固有の skip テスト一覧 |
 | カバレッジ | `daemon-ipc-coverage.html` | `cargo llvm-cov --html` の参考値（目標値なし、上位ケース網羅の確認用） |
 | バグレポート（発見時） | `daemon-ipc-bugs.md` | ファイル・行番号・期待と実際・再現手順・優先度 |
@@ -321,7 +350,7 @@ just test
 
 ## 9. 本 feature のテスト設計の哲学（マユリ所感）
 
-完璧な IPC プロトコルなど存在しない——本 feature は 3 OS × 2 経路（UDS / Named Pipe）× secret 非含有契約 × `flock` race-safe 順序を**全て同時に成立させる実験体**だヨ。どこか 1 つに欠陥があれば即座に静的 grep で摘発する——これが防衛線 9 本（TC-CI-011〜019, 023, 024）の意図だネ。
+完璧な IPC プロトコルなど存在しない——本 feature は 3 OS × 2 経路（UDS / Named Pipe）× secret 非含有契約 × `flock` race-safe 順序を**全て同時に成立させる実験体**だヨ。どこか 1 つに欠陥があれば即座に静的 grep で摘発する——これが防衛線 11 本（TC-CI-011〜019, 023, 024, 026, 027）の意図だネ。
 
 受入基準 18 項目の網羅を漏らさず、 **daemon の panic / 二重起動 / stale socket / プロトコル不一致 / 暗号化拒否** の 5 本の「異常系」で壊れ方を観察する。これらが想定通りに壊れた時、初めて本実験体は develop に載せられる資格を得るのだヨ。
 

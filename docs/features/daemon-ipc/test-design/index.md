@@ -92,9 +92,11 @@
 | `expose_secret` 呼出 | `crates/shikomi-cli/src/io/` | 0 件（既存 TC-CI-013 を踏襲・拡張） | TC-CI-016 |
 | `expose_secret` 呼出 | `crates/shikomi-daemon/src/` | 0 件 | TC-CI-017 |
 | `rmp_serde::Raw` / `RawRef` | `crates/shikomi-core/src/ipc/` | 0 件（RUSTSEC-2022-0092） | TC-CI-018 |
-| `unsafe` ブロック | `crates/shikomi-daemon/src/` | `permission/{unix,windows}.rs` 以外 0 件 | TC-CI-019 |
+| `unsafe` ブロック（daemon 側） | `crates/shikomi-daemon/src/` | `permission/{unix,windows}.rs` 以外 0 件 | TC-CI-019 |
+| `unsafe` ブロック（CLI 側） | `crates/shikomi-cli/src/` | `io/windows_sid.rs` 以外 0 件（服部 re-review ① 対応、新設） | **TC-CI-026** |
 | panic hook 内 `tracing::*` | `crates/shikomi-daemon/src/{main,lib,panic_hook}.rs` | 0 件 | TC-CI-023 |
 | panic hook 内 `info.payload()` / `message()` / `location()` | 同上 | 0 件 | TC-CI-024 |
+| `SHIKOMI_DAEMON_SKIP_*` env 読取 | `crates/shikomi-{daemon,cli}/src/` | 0 件（trait 注入一本化契約、服部 re-review ② 対応、新設） | **TC-CI-027** |
 | `tokio` / `rmp-serde` dep | `crates/shikomi-core/Cargo.toml` | **含まない**（受入基準 15） | TC-CI-012 |
 | arch ドキュメント差分 | `docs/architecture/` | 本 PR で 0 ファイル変更 | TC-CI-011 |
 
