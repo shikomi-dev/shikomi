@@ -91,7 +91,7 @@ Epic #37 の Sub-issue 分割案 v2 確定時に以下を合意（PR #45 工程0
 | **リカバリニーモニック**（BIP-39 24 語） | 1 | 初回 1 度のみ画面表示、ユーザ手書き保管。プロセス内には**保持しない**（生成直後に zeroize、再表示不可） | 表示中 + ユーザ手書き保管期間 | KEK_recovery 再導出可能 → `wrapped_VEK_by_recovery` を offline 復号 → VEK 復元 → 全レコード平文化（**完全敗北、回復不能**） |
 | **VEK**（Vault Encryption Key、32B） | 1 | プロセス内 RAM（`secrecy::SecretBox<[u8;32]>`、unlock 後〜アイドル 15min / スクリーンロック / サスペンドで `zeroize`） | unlock〜lock（最大 15min） | 全レコード平文化（即時） |
 | **KEK_pw**（パスワード由来 KEK、32B） | 1 | プロセス内 RAM（`SecretBytes`、Argon2id 完了 → wrap/unwrap 完了で `zeroize`） | 数百ms〜1 秒 | VEK unwrap 可能 → 全レコード平文化 |
-| **KEK_recovery**（リカバリ由来 KEK、32B） | 1 | プロセス内 RAM（同上） | 数百ms〜1 秒 | 同上 |
+| **KEK_recovery**（リカバリ由来 KEK、32B） | 1 | プロセス内 RAM（`SecretBytes`、PBKDF2-HMAC-SHA512 + HKDF-SHA256 完了 → wrap/unwrap 完了で `zeroize`、`Drop` 連鎖で派生集約も連動消去） | 数百ms〜1 秒 | VEK unwrap 可能 → 全レコード平文化 |
 | **平文レコード**（unlock 後の records） | 1 | プロセス内 RAM（`SecretBytes`、表示完了 → 30 秒クリップボードクリア後 `zeroize`） | レコード単位、表示〜30 秒 | 該当レコード即時漏洩 |
 | **`wrapped_VEK_by_pw`**（AEAD ciphertext + nonce + tag） | 2 | vault.db ヘッダ（ディスク平文保管） | 永続 | 強パスワード（Argon2id KDF 強度依存）であれば offline brute force 困難。**弱パスワード時（zxcvbn 強度 < 3）は事実上 Tier-1 等価**——KDF 作業証明があってもコモディティ攻撃で突破される現実があるため、Tier-2 の前提は REQ-S08 の入口ゲート通過後にのみ成立する（Sub-D の zxcvbn ゲートが Fail Fast 拒否することが Tier 分類の不可欠な前提条件） |
 | **`wrapped_VEK_by_recovery`**（同上） | 2 | vault.db ヘッダ（ディスク平文保管） | 永続 | BIP-39 24 語の暗号エントロピー 256 bit + PBKDF2 2048iter で offline brute force は事実上不可能（24 語盗難時のみ L4 相当の完全敗北） |

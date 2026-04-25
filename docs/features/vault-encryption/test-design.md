@@ -63,7 +63,7 @@
 | TC-DOC-U02 | AC-01 | L1〜L4 各層の「対策」セルに最低 3 個以上の具体的対策（記号 (a)(b)(c)... 形式）が列挙されている | ユニット | 網羅性 |
 | TC-DOC-U03 | AC-01 / AC-09 | L4 の「対策」が**明示的に「対象外」**と書かれている（防御不能の受容を曖昧化していない） | ユニット | 過小評価防止 |
 | TC-DOC-U04 | AC-02 | 保護資産表で全 13 資産に Tier 1〜3 のいずれかが付与されている | ユニット | 構造完全性 |
-| TC-DOC-U05 | AC-02 | Tier-1 資産（マスターパスワード / リカバリ / VEK / KEK_pw / KEK_recovery / 平文レコード）の「寿命」欄に**ゼロ化トリガ**（KDF 完了 / unlock-lock / 30 秒後 等）が明記されている | ユニット | 過信防止 |
+| TC-DOC-U05 | AC-02 | Tier-1 資産（マスターパスワード / リカバリ / VEK / KEK_pw / KEK_recovery / 平文レコード）の「**所在**」または「寿命」欄に**ゼロ化トリガ**（zeroize / KDF 完了 / unlock-lock / Drop / 30 秒 / 15min / アイドル / 保持しない 等）が明記されている。**寿命列は時間メトリクス、所在列はゼロ化契約**という意味論分業を尊重する | ユニット | 過信防止 |
 | TC-DOC-U06 | AC-03 | 信頼境界表が 5 種（プロセス / ユーザ / 永続化 / 表示 / 入力）以上、各行に「内側 / 外側 / 横断ポイント」3 列が埋まっている | ユニット | 構造完全性 |
 | TC-DOC-U07 | AC-04 | スコープ外表に 10 カテゴリ以上、各行に「受容根拠」が記載されている（空セル無し） | ユニット | 構造完全性 |
 | TC-DOC-U08 | AC-05 | Fail-Secure 型レベル強制パターン表に 5 種以上のパターン（match / Verified newtype / NonceCounter::increment / MasterPassword::new / Drop 連鎖）が記載されている | ユニット | 構造完全性 |
@@ -71,7 +71,7 @@
 | TC-DOC-U10 | AC-06 | REQ-S01〜S17 の「関連脅威 ID」欄に L1〜L4 のいずれか（または `—` で意図的不適用）が必ず記載されている | ユニット | トレーサビリティ |
 | TC-DOC-I01 | AC-08 | `requirements-analysis.md` で参照される `threat-model.md` の節番号（§7.0 / §7.1 / §7.2 / §8 / §A07）が実在する | 結合 | 参照整合性 |
 | TC-DOC-I02 | AC-08 | `requirements-analysis.md` で参照される `tech-stack.md` の節番号（§2.4 / §4.7 / §4.3.2）が実在する | 結合 | 参照整合性 |
-| TC-DOC-I03 | AC-08 | `requirements-analysis.md` の凍結値（KDF `m=19456, t=2, p=1` / nonce 12B / AAD 26B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B / アイドル 15min）が `tech-stack.md` §2.4 / §4.7 と完全一致 | 結合 | 矛盾検出 |
+| TC-DOC-I03 | AC-08 | 凍結値の二段検証: **(a) tech-stack 凍結値**（KDF `m=19456, t=2, p=1` / nonce 12B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B）が `requirements-analysis.md` と `tech-stack.md` §2.4 / §4.7 で**両方に出現**、**(b) feature 局所凍結値**（AAD 26B / アイドル 15min）は `requirements-analysis.md` 内のみで定義され `tech-stack.md` に書かないことを確認（Bug-DOC-003: 当初「全 7 値が両文書一致」と書いていたが、AAD サイズとキャッシュ idle は feature 局所のため tech-stack 不在が正常） | 結合 | 矛盾検出 + 責務分離 |
 | TC-DOC-I04 | AC-08 | `requirements-analysis.md` 機能一覧 REQ-S01〜S17 の Sub マッピングと、Sub-issue 分割計画 §（DAG 0→A→{B,C}→D→E→F）が**1:1 で整合**している | 結合 | DAG 整合性 |
 | TC-DOC-I05 | AC-08 | `requirements.md` REQ-S* の「担当 Sub」欄と `requirements-analysis.md` 機能一覧の「担当 Sub」欄が**全 17 行で一致** | 結合 | 双方向参照整合 |
 | TC-DOC-I06 | AC-06 / AC-08 | `requirements.md` データモデル表のエンティティ（VaultEncryptedHeader / WrappedVek / KdfSalt / KdfParams / NonceCounter / EncryptedRecord / MasterPassword / RecoveryMnemonic / Vek）が `requirements-analysis.md` §保護資産インベントリと**過不足なく対応**している | 結合 | エンティティ網羅 |
@@ -111,7 +111,7 @@
 |---------|---------|------------------|---------|------|---------|
 | TC-DOC-I01 | requirements-analysis.md → threat-model.md | `grep -E "threat-model.md (§7\.0\|§7\.1\|§7\.2\|§7\|§8\|§A07)" docs/features/vault-encryption/requirements-analysis.md` で抽出した節番号を `docs/architecture/context/threat-model.md` 内で `grep -E "^### 7\.0\|^## 7\|^## 8"` で実在確認 | `develop` ブランチに最新 threat-model.md がマージ済 | 抽出 → 突合 → 不一致一覧を出力 | 全節番号が threat-model.md 内に実在（不一致 0 件） |
 | TC-DOC-I02 | requirements-analysis.md → tech-stack.md | 同上方式で `tech-stack.md §2.4 / §4.7 / §4.3.2` を実在確認 | tech-stack.md PR #45 マージ済 | 抽出 → 突合 | 全節番号実在 |
-| TC-DOC-I03 | 凍結値の 2 文書間一致 | 凍結値を 1 ファイル（`/tmp/frozen-values.txt`）に書き出し、両文書から `grep` で抽出して `diff` | requirements-analysis.md / tech-stack.md がローカル | 7 値（KDF `m=19456, t=2, p=1` / nonce 12B / AAD 26B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B / アイドル 15min）を grep で抽出 → diff | 全 7 値が両文書で完全一致（diff 出力 0 行） |
+| TC-DOC-I03 | 凍結値の責務分離検証 | 二段 grep: (a) tech-stack 凍結値が RA + TS 両方に出現 (b) feature 局所凍結値が RA 内のみ定義 | RA / TS / REQ がローカル | (a) 5 値（KDF `m=19456, t=2, p=1` / nonce 12B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B）grep → 両文書出現確認、(b) 2 値（AAD 26B / アイドル 15min）grep → RA のみ出現確認 | (a) 全 5 値が両文書出現、(b) 全 2 値が RA に最低 1 回出現。tech-stack 越境した feature 局所値は責務違反として検出 |
 | TC-DOC-I04 | DAG 整合性 | requirements-analysis.md §機能一覧の Sub マッピング表 vs §Sub-issue分割計画 表 | 同一文書内の 2 表 | 17 行の Sub マッピングを抽出 → DAG 表（7 行）の依存先と整合チェック | Sub-A 依存 = Sub-0、Sub-B/C 依存 = Sub-A、Sub-D 依存 = Sub-B+C、Sub-E 依存 = Sub-D、Sub-F 依存 = Sub-E が崩れていない |
 | TC-DOC-I05 | requirements-analysis ↔ requirements の Sub マッピング双方向 | 両文書から「REQ-S* / 担当 Sub」を抽出して join | 両ファイル存在 | REQ-S01〜S17 の 17 行を両文書から抽出 → join | 17 行全て担当 Sub が一致（不一致 0 件） |
 | TC-DOC-I06 | データモデル ↔ 保護資産インベントリ | requirements.md §データモデルの 9 エンティティ vs requirements-analysis.md §3 の 13 資産 | 両文書存在 | エンティティ名と資産名を突合 | 9 エンティティが資産インベントリのいずれかに対応する（VaultEncryptedHeader = ヘッダ複合資産 / Vek = VEK / MasterPassword = マスターパスワード …） |
@@ -131,7 +131,7 @@
 | TC-DOC-U02 | 同上 §対策セル | 網羅性 | L1〜L4 の対策セル本文 | L1 / L2 / L3 各層で**最低 3 個以上**の対策（記号 (a)(b)(c)... 形式）。L4 のみ「対象外」明示で例外 |
 | TC-DOC-U03 | §4 L4 §対策 | 過小評価防止 | L4 §対策 セル | 文字列 `**対象外**` が含まれる（曖昧な「考慮中」「将来検討」を禁止） |
 | TC-DOC-U04 | §3 保護資産インベントリ表 | 構造完全性 | 13 資産行 | 全 13 行に Tier 1 / 2 / 3 のいずれかが付与（空 Tier 0 件） |
-| TC-DOC-U05 | §3 Tier-1 資産行（6 資産） | 過信防止 | Tier-1 各行の「寿命」セル | 各行に**ゼロ化トリガ語**（`zeroize` / `KDF 完了` / `unlock-lock` / `Drop` / `30 秒` / `15min` 等）が含まれる |
+| TC-DOC-U05 | §3 Tier-1 資産行（6 資産） | 過信防止 | Tier-1 各行の「所在」または「寿命」セル | 各行の**所在 or 寿命のいずれか**に**ゼロ化トリガ語**（`zeroize` / `KDF 完了` / `unlock` / `Drop` / `30 秒` / `15min` / `アイドル` / `保持しない` 等）が含まれる。**寿命列は時間メトリクス、所在列はゼロ化契約という意味論分業**を尊重（Sub-0 テスト実行時に発見、Boy Scout Rule で TC 文言を実態に同期、Bug-DOC-001 参照） |
 | TC-DOC-U06 | §2 信頼境界表 | 構造完全性 | 5 行（プロセス / ユーザ / 永続化 / 表示 / 入力） | 5 行以上、各行 「内側 / 外側 / 横断ポイント」3 列が非空 |
 | TC-DOC-U07 | §5 スコープ外表 | 構造完全性 | スコープ外行 | 10 カテゴリ以上、各行に「受容根拠」セルが非空 |
 | TC-DOC-U08 | §6 Fail-Secure 型レベル強制パターン表 | 構造完全性 | パターン表 | 5 行以上、各行「適用 / 効果」セルが非空 |
