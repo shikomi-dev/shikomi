@@ -21,16 +21,28 @@
 3. **tracing_subscriber 初期化**（verbose / quiet フラグはこの時点で未パースのため、デフォルト `info` レベルで一旦初期化）
 4. **clap パース**: `let args = match CliArgs::try_parse() { Ok(a) => a, Err(e) => return handle_clap_error(e, locale) };`（clap エラー扱いは `./clap-config.md §clap エラー扱い` 参照）
 5. **tracing レベル再設定**（`args.verbose == true` なら `debug` へ）
-6. **Repository 構築**:
-   - `args.vault_dir.is_some()` → `SqliteVaultRepository::from_directory(args.vault_dir.as_ref().unwrap())`
-   - `args.vault_dir.is_none()` → `let os_default = io::paths::resolve_os_default_vault_dir()?` → `SqliteVaultRepository::from_directory(&os_default)`
-   - エラー時は `render_error(&err, locale)` を stderr に流し `ExitCode::from(&err)` で return
-7. **サブコマンド分岐**: `match args.subcommand` で 4 分岐:
-   - `Subcommand::List` → `run_list(&repo, locale, args.quiet)`
-   - `Subcommand::Add(a)` → `run_add(&repo, a, locale, args.quiet)`
-   - `Subcommand::Edit(a)` → `run_edit(&repo, a, locale, args.quiet)`
-   - `Subcommand::Remove(a)` → `run_remove(&repo, a, locale, args.quiet)`
+6. **Repository 構築**（`daemon-ipc` feature で `args.ipc` 分岐を追加）:
+   - **`args.ipc == false`（既定、Phase 1）**:
+     - `args.vault_dir.is_some()` → `SqliteVaultRepository::from_directory(args.vault_dir.as_ref().unwrap())`
+     - `args.vault_dir.is_none()` → `let os_default = io::paths::resolve_os_default_vault_dir()?` → `SqliteVaultRepository::from_directory(&os_default)`
+     - 結果を `Box<dyn VaultRepository>` で抽象化保持
+   - **`args.ipc == true`（オプトイン、Phase 2、`daemon-ipc` feature で追加）**:
+     - `quiet == false` なら `eprintln!("{}", render_warning(WarningKind::IpcOptInNotice, locale))` で `MSG-CLI-051` を stderr に出力
+     - `let socket_path = io::ipc_vault_repository::IpcVaultRepository::default_socket_path()?;`
+     - `let repo = io::ipc_vault_repository::IpcVaultRepository::connect(&socket_path)?;`（内部で `tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(...)` 経由）
+     - 結果を `Box<dyn VaultRepository>` で抽象化保持
+   - エラー時は `render_error(&err, locale)` を stderr に流し `ExitCode::from(&err)` で return（`CliError::DaemonNotRunning` / `ProtocolVersionMismatch` を含む全 `PersistenceError` 経路を統一処理）
+7. **サブコマンド分岐**: `match args.subcommand` で 4 分岐（**`&*repo` を渡すため `args.ipc` の値は意識しない**、Phase 2 移行契約の体現）:
+   - `Subcommand::List` → `run_list(&*repo, locale, args.quiet)`
+   - `Subcommand::Add(a)` → `run_add(&*repo, a, locale, args.quiet)`
+   - `Subcommand::Edit(a)` → `run_edit(&*repo, a, locale, args.quiet)`
+   - `Subcommand::Remove(a)` → `run_remove(&*repo, a, locale, args.quiet)`
 8. **各 `run_*` 関数**は `Result<(), CliError>` を返す。`Ok(())` は `ExitCode::Success` に、`Err(e)` は `render_error(&e, locale)` を stderr に流して `ExitCode::from(&e)` に写像
+
+**`Box<dyn VaultRepository>` 化の背景**:
+- 既存の `cli-vault-commands` Phase 1 実装では `SqliteVaultRepository` を具体型で保持していた（`let repo: SqliteVaultRepository = ...`）
+- `daemon-ipc` feature で `args.ipc == true` の経路が `IpcVaultRepository` を返すため、両者を同じ変数で扱うには `Box<dyn VaultRepository>` 抽象化が必要
+- 既存の `usecase::list::list_records(repo: &dyn VaultRepository)` のシグネチャは `&dyn` を受ける設計のため、`&*box_repo` で渡すだけで互換性維持
 
 ## `run_list` 関数の内部
 
