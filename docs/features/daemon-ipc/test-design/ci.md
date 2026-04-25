@@ -226,28 +226,27 @@ crates/shikomi-daemon/
     │   ├── daemon_guard.rs       # Drop で kill する RAII
     │   └── peer_mock.rs
     ├── it_protocol_roundtrip.rs  # TC-IT-001〜009
-    ├── it_server_connection.rs   # TC-IT-010〜020, 030〜034, 015〜019
-    ├── it_single_instance.rs     # TC-IT-001〜007
+    ├── it_server_connection.rs   # TC-IT-010〜032（正常4 / エラー5 / 異常5 / 独立1 / shutdown3）
+    ├── it_single_instance.rs     # TC-IT-060〜071（unix 5 / windows 2）
     ├── e2e_startup.rs            # TC-E2E-001, 002
     ├── e2e_single_instance.rs    # TC-E2E-020〜022
     ├── e2e_shutdown.rs           # TC-E2E-030, 031
-    ├── e2e_encrypted.rs          # TC-E2E-070, 071
+    ├── e2e_encrypted.rs          # TC-E2E-070（TC-E2E-071 は scope-out の `#[ignore]`）
     ├── e2e_permissions.rs        # TC-E2E-050, 051
-    ├── e2e_protocol_mismatch.rs  # TC-E2E-040, 041
-    └── e2e_peer_credential_linux.rs  # TC-E2E-060（#[ignore]）
+    └── e2e_peer_credential_linux.rs  # TC-E2E-060（#[ignore]、Linux 専用 sudo 検証）
 
 crates/shikomi-cli/src/io/
 ├── mod.rs                        # 既存編集、ipc_* を export
 ├── ipc_vault_repository.rs       # tests { TC-UT-050〜054, 060〜064 }
 └── ipc_client.rs
 
-crates/shikomi-cli/src/error.rs   # tests { TC-UT-030〜034, 040, 041 }（cli 側の追加バリアント）
+crates/shikomi-cli/src/error.rs   # tests { TC-UT-090〜094, 040, 041 }（cli 側の追加バリアント、`From<PersistenceError>` / `From<&CliError> for ExitCode`）
 crates/shikomi-cli/src/presenter/error.rs  # tests { TC-UT-070〜073 }
 
 crates/shikomi-cli/tests/
 ├── common/
 │   └── mod.rs                    # spawn_stub_server() / shared fixtures
-├── it_ipc_vault_repository.rs    # TC-IT-030〜042
+├── it_ipc_vault_repository.rs    # TC-IT-040〜052（connect 4 / not-running 1 / save diff 3 / incl. reclassified TC-E2E-041）
 ├── e2e_ipc_crud.rs               # TC-E2E-010〜015
 ├── e2e_ipc_composition.rs        # TC-E2E-080
 └── e2e_ipc_scenarios.rs          # TC-E2E-110〜112

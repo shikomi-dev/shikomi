@@ -13,8 +13,8 @@
 ## 2. テスト共通前提
 
 - **daemon プロセスの spawn**: `tokio::process::Command::new(assert_cmd::cargo::cargo_bin("shikomi-daemon"))` で起動 → stdout/stderr を `Stdio::piped()` で捕捉 → 起動完了を `"listening on"` ログで検知（`BufReader::lines()` で stdout を 5 秒以内に読む、タイムアウトで fail）
-- **一意なソケット / pipe パス**: 各テストで `tempfile::TempDir` を作り `SHIKOMI_VAULT_DIR=<tmp>` を注入。Unix は `SHIKOMI_DAEMON_SOCKET_DIR=<tmp>`（本 feature で daemon に env 追加を推奨、後述）、Windows は pipe 名に pid / uuid suffix
-  - **設計上の追加**: daemon にソケットパス上書き用 env `SHIKOMI_DAEMON_SOCKET_DIR`（Unix）または `SHIKOMI_DAEMON_PIPE_NAME`（Windows）を**テスト専用**で追加することを実装担当に推奨。本番では未使用（ユーザ向けは既定パスのみ、`requirements.md §shikomi-daemon バイナリの起動`）
+- **一意なソケットパス（Unix）**: 各テストで `tempfile::TempDir` を作り、`XDG_RUNTIME_DIR=<tmp>` と `SHIKOMI_VAULT_DIR=<tmp>/vault` を `assert_cmd::Command::env()` で注入。daemon は既存の `$XDG_RUNTIME_DIR/shikomi/daemon.sock` 解決経路（REQ-DAEMON-004）でテスト専用ディレクトリに socket を作成する。**新規 env 変数は追加しない**（ペテルギウス review 指摘 ③ 対応、2026-04-25 env 裏口撤廃）
+- **一意なパイプ名（Windows）**: pipe 名は user SID 由来で**上書き不可**（REQ-DAEMON-003 / 004）。同ユーザ内で並行 daemon 起動は single-instance 契約で原理的に禁止のため、Windows E2E は `cargo test --test-threads=1` で**直列実行**する（`ci.md §3 justfile レシピ案` に反映）
 - **daemon のクリーンアップ**: テスト終了時に `child.kill().await` or `SIGTERM` 送信 → `child.wait()` で exit 確認。`Drop` impl で自動 kill する `DaemonGuard` ヘルパーを `tests/common/daemon_guard.rs` に置く
 - **secret マーカー**: `SECRET_TEST_VALUE` 固定。全 stdout / stderr / daemon stdout / daemon stderr で `contains("SECRET_TEST_VALUE").not()` を**横串アサート**
 - **exit code**: `.code(N)` で厳密一致
@@ -32,9 +32,9 @@
 | 対応 REQ | REQ-DAEMON-001, REQ-DAEMON-004 |
 | 種別 | 正常系 |
 | 前提条件 | `tempfile::TempDir` 内に空 vault dir |
-| 操作 | `shikomi-daemon` バイナリを spawn（env `SHIKOMI_VAULT_DIR=<tmp>`、`SHIKOMI_DAEMON_LOG=info`） |
-| 期待結果 | 5 秒以内に stdout に `listening on ` を含む行、ソケットファイル `<tmp>/daemon.sock`（または `$XDG_RUNTIME_DIR/shikomi/daemon.sock`）が存在、パーミッション `0600` |
-| 検証アサート | `std::fs::metadata(&sock).mode() & 0o777 == 0o600` + 親ディレクトリ `0700` |
+| 操作 | `shikomi-daemon` バイナリを spawn（env `XDG_RUNTIME_DIR=<tmp>`、`SHIKOMI_VAULT_DIR=<tmp>/vault`、`SHIKOMI_DAEMON_LOG=info`） |
+| 期待結果 | 5 秒以内に stdout に `listening on ` を含む行、ソケットファイル `<tmp>/shikomi/daemon.sock` が存在、パーミッション `0600` |
+| 検証アサート | `std::fs::metadata(&sock).mode() & 0o777 == 0o600` + 親ディレクトリ `<tmp>/shikomi/` が `0700` |
 
 ### TC-E2E-002: daemon 起動（Windows）
 
@@ -43,9 +43,9 @@
 | 対応受入基準 | 1, 9 |
 | 対応 REQ | REQ-DAEMON-003, REQ-DAEMON-004 |
 | 種別 | 正常系 |
-| 前提条件 | 空 vault dir |
-| 操作 | `shikomi-daemon` を spawn（`SHIKOMI_DAEMON_PIPE_NAME=\\.\pipe\shikomi-test-{uuid}`） |
-| 期待結果 | stdout に `listening on \\.\pipe\shikomi-test-{uuid}`、`GetNamedSecurityInfoW` で DACL を取得し owner-only（ACE 1 個 + 所有者 SID） |
+| 前提条件 | 空 vault dir（直列実行、`cargo test --test-threads=1`） |
+| 操作 | `shikomi-daemon` を spawn（env `SHIKOMI_VAULT_DIR=<tmp>/vault`、pipe 名はユーザ SID 由来で自動決定） |
+| 期待結果 | stdout に `listening on \\.\pipe\shikomi-daemon-{user-sid}` 形式のログ、`GetNamedSecurityInfoW` で DACL を取得し owner-only（ACE 1 個 + 所有者 SID） |
 | 検証アサート | Windows crate 経由で DACL 列挙、owner SID のみ |
 
 ---
@@ -185,30 +185,18 @@
 
 ---
 
-## 7. プロトコル不一致
+## 7. プロトコル不一致（IT に再分類、本節は参照のみ）
 
-### TC-E2E-040: クライアントが V99 を送った場合（offline fabrication）
+**ペテルギウス review 指摘 ② 対応（2026-04-25）**: 旧 TC-E2E-040 / TC-E2E-041 は**完全ブラックボックス = 実ユーザ操作**の原則に違反していたため、`integration.md` 側に再分類した。
 
-| 項目 | 内容 |
-|------|------|
-| 対応受入基準 | 6 |
-| 対応 REQ | REQ-DAEMON-006, REQ-DAEMON-019 |
-| 種別 | 異常系 |
-| 前提条件 | daemon 起動済 |
-| 操作 | **バイナリ改変ではなく test-only クライアントスタブ**: `crates/shikomi-daemon/tests/e2e_protocol_mismatch.rs` 内で `tokio::net::UnixStream::connect` → 手動で `IpcRequest::Handshake` を V99 相当のバイト列（`rmp_serde::to_vec(&{"handshake": {"client_version": "v99"}})` 等）で送る |
-| 期待結果 | daemon が `IpcResponse::ProtocolVersionMismatch { server: V1, client: V99 }` を返して切断、stub が受信成功、daemon stderr に `protocol mismatch` ログ |
-| 検証アサート | 受信 frame の decode で `ProtocolVersionMismatch` variant + `server == V1` |
+| 旧 ID | 再分類先 | 理由 |
+|-------|---------|------|
+| 旧 TC-E2E-040（V99 offline fabrication）| **TC-IT-020**（`integration.md §4.3`） | `tokio::net::UnixStream::connect` で手製 V99 バイトを送る操作は、実 CLI バイナリを経由しないため E2E の完全ブラックボックス要件に違反。IPC プロトコル境界の契約検証は IT の責務 |
+| 旧 TC-E2E-041（偽 daemon スタブ）| **TC-IT-041**（`integration.md §5.1`） | 偽 daemon スタブは実システムを検証しない。`IpcClient::connect` のハンドシェイク不一致写像は IT の責務（client 側 `PersistenceError::ProtocolVersionMismatch` 構築ロジックの単独検証） |
 
-### TC-E2E-041: CLI が `MSG-CLI-111` を出す（実 CLI + 偽 daemon スタブ）
+**E2E 側での担保**: 受入基準 6（プロトコル不一致で CLI が exit 非 0）の実ユーザ観測は、**将来 V1 daemon ↔ V2 client の実バージョン組合せが develop に入った時点で**本 E2E に復活する。本 feature 範囲では「`shikomi --ipc list` がプロトコル不一致経由で `MSG-CLI-111` を stderr に出す」実シナリオは**存在しない**（daemon も CLI も V1 のみ）。CLI 側の stderr 出力と exit code は TC-UT-070〜073（render_error）+ TC-UT-040/041（ExitCode 写像）で担保済み、IT 側で PersistenceError 構築まで保証済み。
 
-| 項目 | 内容 |
-|------|------|
-| 対応受入基準 | 6 |
-| 対応 REQ | REQ-DAEMON-017 |
-| 種別 | 異常系（CLI 側観測） |
-| 前提条件 | test-only 偽 daemon スタブを立て、`ProtocolVersionMismatch { server: V2, client: V1 }` を即返す（将来の V2 daemon vs V1 client 相当の模擬） |
-| 操作 | `shikomi --ipc --vault-dir <tmp> list` |
-| 期待結果 | exit 1、stderr に `MSG-CLI-111` 相当（英語: `protocol version mismatch (server=v2, client=v1)`）、`hint: rebuild shikomi-cli and shikomi-daemon` |
+**結論**: 本節は **TC なし**。受入基準 6 のトレーサビリティは `index.md §4.1` 更新で IT-020 / IT-041 にリンクを張り替えた。
 
 ---
 
@@ -234,16 +222,19 @@
 | 操作 | daemon 起動後、`GetNamedSecurityInfoW` で DACL を取得し ACE 列挙 |
 | 期待結果 | DACL に所有者 SID のみの ACE、Everyone / Anonymous / NetworkService は不在 |
 
-### TC-E2E-060: 別ユーザから UDS 接続拒否（Linux）
+### TC-E2E-060: 別ユーザから UDS 接続拒否（Linux、`#[ignore]` 付与）
 
 | 項目 | 内容 |
 |------|------|
 | 対応受入基準 | 10 |
-| 対応 REQ | REQ-DAEMON-005 |
-| 種別 | セキュリティ |
-| 前提条件 | daemon を user A で起動、`sudo -u nobody` で user B から接続試行。CI 環境では `sudo` 使用が困難なため **`#[ignore]` 付与**、ローカル手動検証 |
-| 操作 | `sudo -u nobody shikomi --ipc --vault-dir <tmp> list` |
-| 期待結果 | 接続は OS レイヤで `EACCES`（UDS 0600）→ CLI が `DaemonNotRunning` 扱いで exit 1 / または接続できた場合（パーミッションが甘い場合）は daemon がピア UID 不一致で即切断、CLI は I/O エラーで exit 1 |
+| 対応 REQ | REQ-DAEMON-005（多層防御の OS レイヤ第 1 層） |
+| 種別 | セキュリティ（完全ブラックボックス、実ユーザ操作） |
+| 前提条件 | daemon を user A で起動（TC-E2E-001 の手順）。検証は `sudo -u nobody` で user B から実行。CI 環境では `sudo` 権限が困難なため `#[ignore]` 付与、ローカル / staging 手動検証 |
+| 操作 | `sudo -u nobody -E shikomi --ipc --vault-dir <tmp> list`（`-E` で `XDG_RUNTIME_DIR` / `SHIKOMI_VAULT_DIR` を引き継ぎ、同じソケットパスを参照させる） |
+| 期待結果（**一意**） | **exit code 1** + stderr に **`MSG-CLI-110`**（`error: shikomi-daemon is not running (socket {path} unreachable)`）が英日 2 段で出力される |
+| 検証アサート | `.code(1)` + `.stderr(contains("daemon is not running"))` + `.stderr(contains("SECRET_TEST_VALUE").not())` |
+| 根拠 | UDS パーミッション `0600` が OS レイヤで user B の `connect(2)` を **`EACCES`** で拒否する。CLI 側 `IpcVaultRepository::connect` は `PersistenceError::DaemonNotRunning` に写像（詳細設計 `../detailed-design/ipc-vault-repository.md §connect の処理順序` の `ECONNREFUSED / ENOENT / EACCES` 写像規則）。**daemon 側のピア検証（REQ-DAEMON-005 多層防御第 2 層）には到達しない**——OS の第 1 層で既に拒否される決定論的経路。ペテルギウス指摘 ④ 対応で「二択期待値」から「第 1 層拒否の一意期待値」に書き換え（2026-04-25） |
+| 注記 | daemon 側のピア UID 検証（第 2 層）単独の振る舞いは **ユニットテスト TC-UT-020〜022**（`PeerCredentialSource` trait 経由モック）で網羅済み。E2E では第 1 層 OS 拒否までを確認し、第 2 層の存在は多層防御のバックアップとして UT で担保する——**E2E に二択を許さない**（検証の一意性） |
 
 ---
 
@@ -268,7 +259,7 @@
 | 対応 REQ | REQ-DAEMON-013 |
 | 種別 | 異常系 |
 | 前提条件 | daemon 起動時は平文だが、**起動後**に別プロセスで vault を再暗号化（競合シナリオ、後続 Issue 想定）。本 TC では **平文で起動した daemon のハンドラ防御コード**を検証するため、test-only な `--vault-protection-mode encrypted` フラグを daemon に追加するか、mock repo で代替 |
-| 代替案 | daemon 側のハンドラ防御的検査はユニット TC-UT-039 / IT TC-IT-015 で網羅。本 E2E は **scope-out**（`#[ignore]`） |
+| 代替案 | daemon 側のハンドラ防御的検査はユニット TC-UT-039 / IT TC-IT-014 で網羅。本 E2E は **scope-out**（`#[ignore]`） |
 
 ---
 
@@ -340,7 +331,6 @@ crates/shikomi-daemon/tests/
   e2e_shutdown.rs                   # TC-E2E-030, 031
   e2e_encrypted.rs                  # TC-E2E-070, 071
   e2e_permissions.rs                # TC-E2E-050, 051
-  e2e_protocol_mismatch.rs          # TC-E2E-040, 041
   e2e_peer_credential_linux.rs      # TC-E2E-060（#[ignore]）
 
 crates/shikomi-cli/tests/
@@ -348,6 +338,8 @@ crates/shikomi-cli/tests/
   e2e_ipc_composition.rs            # TC-E2E-080
   e2e_ipc_scenarios.rs              # TC-E2E-110〜112
 ```
+
+**注記（ペテルギウス指摘 ② 対応）**: 旧 `e2e_protocol_mismatch.rs` は**削除**。プロトコル不一致の契約検証は `crates/shikomi-daemon/tests/it_server_connection.rs`（TC-IT-020、server-side）+ `crates/shikomi-cli/tests/it_ipc_vault_repository.rs`（TC-IT-041、client-side）の 2 箇所で担保する。
 
 ---
 
@@ -360,7 +352,7 @@ crates/shikomi-cli/tests/
 | E2E 実行ログ | `daemon-ipc-e2e-report.md` | TC-E2E-001〜112 の `assert_cmd` 出力（stdout/stderr/exit code/diff）+ `SECRET_TEST_VALUE` 不在 grep 結果 + 3 OS matrix の結果まとめ |
 | ペルソナシナリオ録画 | `daemon-ipc-scn-a.log` / `scn-b.log` / `scn-c.log` | 各シナリオの全ステップの shell 出力（`script` コマンドで記録） |
 | パーミッション監査 | `daemon-ipc-permissions.md` | TC-E2E-050（UDS mode）/ TC-E2E-051（Windows DACL ACE list） |
-| プロトコル不一致シミュレーション | `daemon-ipc-protocol-mismatch.md` | TC-E2E-040 のフレーム 16 進ダンプ + receive 値 |
+| プロトコル不一致シミュレーション | `daemon-ipc-protocol-mismatch.md` | **IT 側で証跡提出**（TC-IT-020 server-side / TC-IT-041 client-side のフレーム 16 進ダンプ + receive 値、`integration.md` 実行時） |
 | graceful shutdown 観測 | `daemon-ipc-shutdown.md` | SIGTERM → 完了までのタイムスタンプ差、in-flight add の応答時刻 |
 | バグレポート（発見時） | `daemon-ipc-bugs.md` | ファイル名・行番号・期待動作・実際動作・再現手順 |
 

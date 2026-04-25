@@ -76,7 +76,7 @@
 | TC-UT-030 | 正常（List 0 件） | `IpcRequest::ListRecords` | 空 Vault | `Records(vec![])` |
 | TC-UT-031 | 正常（List 複数） | 同上 | Text 1, Secret 1 | `Records(vec![RecordSummary{value_preview: Some,...}, RecordSummary{value_preview: None, value_masked: true}])`（順序は `Vault::records()` の挙動に従う） |
 | TC-UT-032 | 正常（Add Text） | `AddRecord { kind: Text, label: "L", value: SerializableSecretBytes("v".bytes()), now: T }` | 空 | `Added { id }` + repo.save 経由で vault に 1 件追加（mock repo が save 呼出を記録） |
-| TC-UT-033 | 異常（Add 重複ラベル） | 同上 | 既存に同 label が `vault.add_record` で reject される前提 | `Error(IpcErrorCode::Domain { reason })`（reason は英語短文、secret 非含有） |
+| TC-UT-033 | 異常（Add 重複ラベル） | 同上 | 既存に同 label が `vault.add_record` で reject される前提 | `Error(IpcErrorCode::Domain { reason })`（reason は**固定文言**「服部 review 後改訂」、secret / 絶対パス / PID 非含有） |
 | TC-UT-034 | 異常（Edit NotFound） | `EditRecord { id: 存在しないUUID, ... }` | 空 | `Error(IpcErrorCode::NotFound { id })` |
 | TC-UT-035 | 正常（Edit label のみ） | `EditRecord { id: 既存id, label: Some("NEW"), value: None, now: T }` | Text 1 件 | `Edited { id }` + mock repo.save が呼ばれる |
 | TC-UT-036 | 異常（Remove NotFound） | `RemoveRecord { id: 存在しないUUID }` | 空 | `Error(IpcErrorCode::NotFound { id })` |
@@ -106,13 +106,15 @@
 
 配置: `crates/shikomi-cli/src/error.rs` の `#[cfg(test)] mod tests`。
 
+**採番注記**: §2.5 handler pure 写像（TC-UT-030〜039）との重複を避けるため本節は **TC-UT-090 系**で採番（ペテルギウス review 指摘 ① 対応、2026-04-25 renumber）。
+
 | TC-ID | 入力 `PersistenceError` | 期待 `CliError` |
 |-------|---------------------|----------------|
-| TC-UT-030 | `DaemonNotRunning(PathBuf::from("/tmp/daemon.sock"))` | `CliError::DaemonNotRunning(same_path)` |
-| TC-UT-031 | `ProtocolVersionMismatch { server: V1, client: V1 }`（同値でも型として可能） | `CliError::ProtocolVersionMismatch { server: V1, client: V1 }` |
-| TC-UT-032 | `IpcDecode { reason: "bad format".into() }` | `CliError::Persistence(_)`（既存 `From` 経由、reason 保持） |
-| TC-UT-033 | `IpcEncode { reason: "encode failed".into() }` | `CliError::Persistence(_)`（同上） |
-| TC-UT-034 | `IpcIo { reason: "eof".into() }` | `CliError::Persistence(_)`（同上） |
+| TC-UT-090 | `DaemonNotRunning(PathBuf::from("/tmp/daemon.sock"))` | `CliError::DaemonNotRunning(same_path)` |
+| TC-UT-091 | `ProtocolVersionMismatch { server: V1, client: V1 }`（同値でも型として可能） | `CliError::ProtocolVersionMismatch { server: V1, client: V1 }` |
+| TC-UT-092 | `IpcDecode { reason: "bad format".into() }` | `CliError::Persistence(_)`（既存 `From` 経由、reason 保持） |
+| TC-UT-093 | `IpcEncode { reason: "encode failed".into() }` | `CliError::Persistence(_)`（同上） |
+| TC-UT-094 | `IpcIo { reason: "eof".into() }` | `CliError::Persistence(_)`（同上） |
 
 ### 2.8 `shikomi_cli::error::ExitCode::from(&CliError)` — 追加バリアント写像
 
@@ -190,7 +192,7 @@
 
 ### 3.5 `IpcErrorCode::InvalidLabel { reason }` の reason 内容規約
 
-UT では `reason` の secret 非含有を assert（TC-UT-033 の補強）。`reason = format!("{}", domain_error)` が**既存 `DomainError::Display` が secret を含まないことを `cli-vault-commands` で証明済み**の前提に依存。実装担当は `DomainError::Display` が将来変更されないよう**既存 UT の網羅**を維持する。
+UT では `reason` の**固定文言**性を assert（TC-UT-033 の補強、服部 review 後改訂）。詳細設計 `../detailed-design/daemon-runtime.md §Result→IpcErrorCode 写像` の改訂で `format!("{}", err)` ではなく固定リテラル（例: `"invalid label"` / `"persistence error"` / `"domain error"`）を返す方針に変更。`DomainError::Display` / `PersistenceError::Display` の secret / 絶対パス / lock holder PID 内容は **IPC 経路には一切出さず**、詳細は daemon 側 `tracing::warn!` で運用者向けに出す（クライアント向け wire には漏らさない）。
 
 ### 3.6 `RecordSummary::from_record` の `text_preview` 呼出集約
 

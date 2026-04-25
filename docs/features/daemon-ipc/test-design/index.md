@@ -55,32 +55,32 @@
 
 | 受入基準 # | 要約 | 関連 REQ | 関連クラス／メソッド | TC-ID（主） | TC-ID（補助） |
 |----------|------|---------|------------------|-----------|------------|
-| 1 | 3 OS で IPC エンドポイントに listen できる | REQ-DAEMON-004 | `SingleInstanceLock::acquire_{unix,windows}`, `IpcServer::start` | TC-E2E-001, TC-E2E-002 | TC-IT-001, TC-CI-020 (3 OS matrix) |
-| 2 | `shikomi --ipc list` と `shikomi list` が bit 同一 | REQ-DAEMON-015, 016, 007 | `IpcVaultRepository::load`, `handle_request(ListRecords)`, `presenter::list::render_list` | TC-E2E-010 | TC-IT-020 |
-| 3 | daemon 二重起動が exit 非 0 | REQ-DAEMON-002, 003 | `SingleInstanceLock::acquire_*` の `flock EWOULDBLOCK` / `FILE_FLAG_FIRST_PIPE_INSTANCE` | TC-E2E-020 | TC-IT-002, TC-UT-040 |
-| 4 | stale socket があっても次起動成功 | REQ-DAEMON-002 | `SingleInstanceLock::acquire_unix` の `flock → unlink → bind` 3 段 | TC-E2E-021 | TC-IT-003 |
-| 5 | `SIGTERM` / `Ctrl+C` / `CTRL_CLOSE_EVENT` で graceful shutdown | REQ-DAEMON-014 | `lifecycle::shutdown`, `IpcServer::shutdown_notify`, `JoinSet::join_all` | TC-E2E-030 | TC-IT-010 |
-| 6 | プロトコル不一致で `ProtocolVersionMismatch` + 終了コード非 0 | REQ-DAEMON-006, 019 | `handshake::negotiate`, `IpcClient::connect` の判定 | TC-E2E-040 | TC-IT-030, TC-UT-010, TC-UT-050 |
-| 7 | MessagePack ペイロード破損で当該接続のみ切断、daemon 継続 | REQ-DAEMON-012 | `handle_connection` 内 `rmp_serde::from_slice` エラー分岐 | TC-IT-011 | TC-IT-012（多重接続の独立性） |
-| 8 | UDS `0600` / 親ディレクトリ `0700` | REQ-DAEMON-004 | `SingleInstanceLock::acquire_unix` の `set_permissions` + 事前 `stat` | TC-E2E-050 | TC-IT-004 |
-| 9 | Named Pipe DACL owner-only | REQ-DAEMON-003, 004 | `SingleInstanceLock::acquire_windows` + SDDL 適用 | TC-E2E-051 | TC-CI-021（Windows job） |
-| 10 | ピア UID/SID 不一致の接続が即切断 | REQ-DAEMON-005 | `peer_credential::verify_{unix,windows}` | TC-E2E-060（Linux 版、`#[ignore]`）| TC-UT-020〜022 |
-| 11 | 暗号化 vault → 全 IPC 操作で `EncryptionUnsupported` → CLI exit 3 | REQ-DAEMON-013 | daemon 起動時 `vault.protection_mode()` 判定 + ハンドラ防御的 | TC-E2E-070, TC-E2E-071 | TC-IT-015 |
+| 1 | 3 OS で IPC エンドポイントに listen できる | REQ-DAEMON-004 | `SingleInstanceLock::acquire_{unix,windows}`, `IpcServer::start` | TC-E2E-001, TC-E2E-002 | TC-IT-060, TC-IT-070, TC-CI-020〜022 (3 OS matrix) |
+| 2 | `shikomi --ipc list` と `shikomi list` が bit 同一 | REQ-DAEMON-015, 016, 007 | `IpcVaultRepository::load`, `handle_request(ListRecords)`, `presenter::list::render_list` | TC-E2E-010 | TC-IT-010, TC-IT-050 |
+| 3 | daemon 二重起動が exit 非 0 | REQ-DAEMON-002, 003 | `SingleInstanceLock::acquire_*` の `flock EWOULDBLOCK` / `FILE_FLAG_FIRST_PIPE_INSTANCE` | TC-E2E-020 | TC-IT-061, TC-IT-071 |
+| 4 | stale socket があっても次起動成功 | REQ-DAEMON-002 | `SingleInstanceLock::acquire_unix` の `flock → unlink → bind` 3 段 | TC-E2E-021 | TC-IT-062, TC-IT-064 |
+| 5 | `SIGTERM` / `Ctrl+C` / `CTRL_CLOSE_EVENT` で graceful shutdown | REQ-DAEMON-014 | `lifecycle::shutdown`, `IpcServer::shutdown_notify`, `JoinSet::join_all` | TC-E2E-030, TC-E2E-031 | TC-IT-030, TC-IT-031, TC-IT-032 |
+| 6 | プロトコル不一致で `ProtocolVersionMismatch` + 終了コード非 0 | REQ-DAEMON-006, 019 | `handshake::negotiate`, `IpcClient::connect` の判定 | TC-IT-020（server-side）, TC-IT-041（client-side） | TC-UT-010, TC-UT-040, TC-UT-072, TC-UT-073（render_error 英日）、TC-UT-091（`From<PersistenceError>` 写像） |
+| 7 | MessagePack ペイロード破損で当該接続のみ切断、daemon 継続 | REQ-DAEMON-012 | `handle_connection` 内 `rmp_serde::from_slice` エラー分岐 | TC-IT-023 | TC-IT-025（多重接続の独立性） |
+| 8 | UDS `0600` / 親ディレクトリ `0700` | REQ-DAEMON-004 | `SingleInstanceLock::acquire_unix` の `set_permissions` + 事前 `stat` | TC-E2E-050 | TC-IT-063 |
+| 9 | Named Pipe DACL owner-only | REQ-DAEMON-003, 004 | `SingleInstanceLock::acquire_windows` + SDDL 適用 | TC-E2E-051 | TC-CI-022（Windows job） |
+| 10 | ピア UID/SID 不一致の接続が即切断 | REQ-DAEMON-005 | `peer_credential::verify_{unix,windows}`（`PeerCredentialSource` trait） | TC-E2E-060（Linux、`#[ignore]`、第 1 層 OS 拒否） | TC-UT-020〜024（trait 経由第 2 層バックアップ） |
+| 11 | 暗号化 vault → 全 IPC 操作で `EncryptionUnsupported` → CLI exit 3 | REQ-DAEMON-013 | daemon 起動時 `vault.protection_mode()` 判定 + ハンドラ防御的 | TC-E2E-070 | TC-IT-014（ハンドラ防御的）、TC-UT-039 |
 | 12 | `cargo test --workspace` / `clippy` / `cargo deny` pass | — | workspace 全体 | TC-CI-001〜004 | — |
-| 13 | 3 OS matrix CI で daemon 結合テスト pass | — | `.github/workflows/test-daemon.yml`（新設 or 拡張） | TC-CI-020〜022 | — |
+| 13 | 3 OS matrix CI で daemon 結合テスト pass | — | `.github/workflows/test-daemon.yml`（新設 or 拡張） | TC-CI-020〜022, TC-CI-025 | — |
 | 14 | arch ドキュメント変更が発生しない（工程 0 完結） | — | `docs/architecture/` 差分 0 | TC-CI-011 | — |
 | 15 | `shikomi-core::ipc` が `tokio` / `rmp-serde` 非依存 | REQ-DAEMON-018 | `crates/shikomi-core/Cargo.toml` + grep | TC-CI-012, TC-CI-013 | — |
 | 16 | `--ipc` 差替 1 行でコンポジションルート切替可能 | REQ-DAEMON-015, 016 | `shikomi-cli::run()` 内 `args.ipc` 分岐 | TC-E2E-080 | TC-CI-014（grep `IpcVaultRepository`／`SqliteVaultRepository` が `lib.rs` のみ） |
-| 17 | `expose_secret` 呼出 0 件（3 領域） | REQ-DAEMON-020 | `crates/shikomi-core/src/ipc/` / `crates/shikomi-cli/src/io/` / `crates/shikomi-daemon/src/` | TC-CI-015〜017 | TC-UT-060 |
+| 17 | `expose_secret` 呼出 0 件（3 領域） | REQ-DAEMON-020 | `crates/shikomi-core/src/ipc/` / `crates/shikomi-cli/src/io/` / `crates/shikomi-daemon/src/` | TC-CI-015〜017 | TC-UT-018 |
 | 18 | `rmp_serde::Raw` / `RawRef` 0 件（`shikomi-core::ipc`） | — | RUSTSEC-2022-0092 不使用契約 | TC-CI-018 | — |
 
 ### 4.2 `IpcErrorCode` 全 6 バリアント × `IpcResponse::Error` 横断検証
 
-`IpcErrorCode` の `EncryptionUnsupported` / `NotFound` / `InvalidLabel` / `Persistence` / `Domain` / `Internal` が全て少なくとも 1 件の結合テストで `IpcResponse::Error(code)` 経路を通過する（TC-IT-015〜019）。`reason` フィールドが secret / 絶対パス / ピア UID を含まないことを `predicates::str::contains` で **not** 検証（TC-IT-018、横串）。
+`IpcErrorCode` の `EncryptionUnsupported` / `NotFound` / `InvalidLabel` / `Persistence` / `Domain` が全て少なくとも 1 件の結合テストで `IpcResponse::Error(code)` 経路を通過する（TC-IT-014〜018）。`Internal` は防御的バリアントで発火困難なため dedicated TC なし（他 TC で observed 0 回を確認）。`reason` フィールドが**固定文言**（服部 review 後改訂）で secret / 絶対パス / ピア UID / lock holder PID を含まないことを `predicates::str::contains` で **not** 検証（TC-IT-017、横串）。
 
 ### 4.3 `PersistenceError` 追加バリアント横断検証
 
-`DaemonNotRunning` / `ProtocolVersionMismatch` / `IpcDecode` / `IpcEncode` / `IpcIo` の 5 バリアントが UT（`From` 実装写像、TC-UT-030〜034）+ IT（実フレーム往復、TC-IT-030〜034）で経由する。
+`DaemonNotRunning` / `ProtocolVersionMismatch` / `IpcDecode` / `IpcEncode` / `IpcIo` の 5 バリアントが UT（`From` 実装写像、TC-UT-090〜094）+ IT（実フレーム往復、TC-IT-040〜044）で経由する。
 
 ### 4.4 静的監査（CI grep）の契約一覧
 
