@@ -116,6 +116,71 @@ enum RepositoryHandle {
 }
 
 // -------------------------------------------------------------------
+// `run_edit` fail-secure 経路の純粋関数（Issue #33 / Phase 1.5-ε）
+// -------------------------------------------------------------------
+
+/// `RepositoryHandle` の判別タグ。
+///
+/// `decide_kind_for_input` を **`IpcVaultRepository` 構築不要**（実 daemon spawn 不要）
+/// な単体テスト可能な形に保つための補助型。本 enum は `RepositoryHandle` の各
+/// バリアントが内包する重い値（`SqliteVaultRepository` / `IpcVaultRepository`）を
+/// 剥がした「判別だけのタグ」であり、`#[derive(Clone, Copy, PartialEq, Eq)]` で
+/// テスト時に `assert_eq!` 可能。
+///
+/// 設計根拠: docs/features/daemon-ipc/test-design/unit.md §3.10 ①（案 1）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepositoryHandleDiscriminant {
+    Sqlite,
+    Ipc,
+}
+
+/// `RepositoryHandle` を判別タグへ落とす射影。
+///
+/// 設計根拠: docs/features/daemon-ipc/test-design/unit.md §3.10 ①
+fn discriminant(handle: &RepositoryHandle) -> RepositoryHandleDiscriminant {
+    match handle {
+        RepositoryHandle::Sqlite(_) => RepositoryHandleDiscriminant::Sqlite,
+        RepositoryHandle::Ipc(_) => RepositoryHandleDiscriminant::Ipc,
+    }
+}
+
+/// `run_edit` の値入力 kind を決定する純粋関数。
+///
+/// PR #32 の方針 B（`composition-root.md §run_edit IPC 経路の方針 B`）を
+/// **型レベルで強制**する: IPC 経路で既存 kind が判明できないとき
+/// 戻り値は `RecordKind::Secret` に**確定**し、後段の `read_value_from_stdin(kind)`
+/// が TTY 上で `read_password`（非エコー）経路を選択する——この決定論を
+/// 単体テスト可能な形で封じ込める。
+///
+/// 決定表:
+///
+/// | 入力 | 戻り値 | 備考 |
+/// |------|--------|------|
+/// | `Some(k), _` | `k` | 既存 kind を尊重（Sqlite + load 成功） |
+/// | `None, Ipc` | `RecordKind::Secret` | **fail-secure**（方針 B の核） |
+/// | `None, Sqlite` | `RecordKind::Text` | dummy。`needs_value_input == false` 経路でのみ到達、`resolve_secret_value` の `--value` 経路は kind 非参照 |
+///
+/// 副次契約（IPC アーム不変条件）: `handle == Ipc` の任意の `existing_kind` で
+/// 戻り値が **`RecordKind::Text` を一切返さない**こと。実装上、
+/// `(Some(Text), Ipc)` が起こるのは Sqlite 経路から既存 kind が引き渡された場合
+/// のみ（呼出側の `existing_kind` 算出が `Sqlite` アームでしか `Some(_)` を返さない
+/// ため、`(Some(_), Ipc)` 自体が論理的に到達不能）。
+///
+/// 設計根拠:
+/// - docs/features/daemon-ipc/test-design/unit.md §2.17（TC-UT-130〜134）/ §3.10 ①
+/// - docs/features/daemon-ipc/composition-root.md `§run_edit` IPC 経路の方針 B
+fn decide_kind_for_input(
+    existing_kind: Option<RecordKind>,
+    handle: RepositoryHandleDiscriminant,
+) -> RecordKind {
+    match (existing_kind, handle) {
+        (Some(k), _) => k,
+        (None, RepositoryHandleDiscriminant::Ipc) => RecordKind::Secret,
+        (None, RepositoryHandleDiscriminant::Sqlite) => RecordKind::Text,
+    }
+}
+
+// -------------------------------------------------------------------
 // run() — コンポジションルート
 // -------------------------------------------------------------------
 
@@ -357,7 +422,7 @@ fn run_edit(
         _ => None,
     };
 
-    // value 入力 kind の決定:
+    // value 入力 kind の決定（Issue #33 / Phase 1.5-ε で `decide_kind_for_input` に抽出）:
     // - 既存 kind が判明（Sqlite + load 成功）→ それを使う
     // - IPC 経路で既存 kind 不明 → **fail-secure で `Secret` 強制**。TTY からの value
     //   入力は `read_password`（非エコー）経路を通る。既存が Text であっても画面
@@ -365,11 +430,7 @@ fn run_edit(
     //   （`composition-root.md §run_edit IPC 経路の方針 B`）。
     // - Sqlite で needs_value_input == false → 入力しないので `Text` dummy で十分
     //   （`resolve_secret_value` は `--value` 経路で kind を参照しない）。
-    let kind_for_input = match (existing_kind, handle) {
-        (Some(k), _) => k,
-        (None, RepositoryHandle::Ipc(_)) => RecordKind::Secret,
-        (None, RepositoryHandle::Sqlite(_)) => RecordKind::Text,
-    };
+    let kind_for_input = decide_kind_for_input(existing_kind, discriminant(handle));
 
     let value = if needs_value_input {
         Some(resolve_secret_value(
