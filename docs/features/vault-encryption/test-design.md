@@ -17,7 +17,7 @@
 | 対象成果物 | `docs/features/vault-encryption/requirements-analysis.md` / `requirements.md` の 2 ファイル |
 | 設計根拠 | `requirements-analysis.md` §受入基準 1〜9、`requirements.md` 機能要件 REQ-S01〜S17 採番 |
 | テスト実行タイミング | `feature/issue-38-threat-model` → `develop` へのマージ前（外部レビュー承認前ゲート） |
-| **本テスト設計の TC 総数** | **25 件**（ユニット相当 TC-DOC-U01〜U10: 10 件 + 結合相当 TC-DOC-I01〜I08: 8 件 + E2E 相当 TC-DOC-E01〜E07: 7 件） |
+| **本テスト設計の TC 総数** | **26 件**（ユニット相当 TC-DOC-U01〜U10: 10 件 + 結合相当 TC-DOC-I01〜I08: 8 件 + E2E 相当 TC-DOC-E01〜E08: 8 件） |
 
 ### 1.1 テストレベルの読み替え（重要）
 
@@ -55,7 +55,7 @@
 
 ## 3. テストマトリクス（トレーサビリティ）
 
-**TC 総数: 25 件**（内訳: ユニット相当 10 件 [TC-DOC-U01〜U10] + 結合相当 8 件 [TC-DOC-I01〜I08] + E2E 相当 7 件 [TC-DOC-E01〜E07]）。本表の行数と末尾 ID 番号の整合は §6 末尾「自己整合チェック」で機械検証する。
+**TC 総数: 26 件**（内訳: ユニット相当 10 件 [TC-DOC-U01〜U10] + 結合相当 8 件 [TC-DOC-I01〜I08] + E2E 相当 8 件 [TC-DOC-E01〜E08]）。本表の行数と末尾 ID 番号の整合は §6 末尾「自己整合チェック」で機械検証する。
 
 | テストID | 受入基準ID / REQ-S* | 検証内容 | テストレベル（読み替え） | 種別 |
 |---------|--------------------|---------|-----------------------|------|
@@ -63,7 +63,7 @@
 | TC-DOC-U02 | AC-01 | L1〜L4 各層の「対策」セルに最低 3 個以上の具体的対策（記号 (a)(b)(c)... 形式）が列挙されている | ユニット | 網羅性 |
 | TC-DOC-U03 | AC-01 / AC-09 | L4 の「対策」が**明示的に「対象外」**と書かれている（防御不能の受容を曖昧化していない） | ユニット | 過小評価防止 |
 | TC-DOC-U04 | AC-02 | 保護資産表で全 13 資産に Tier 1〜3 のいずれかが付与されている | ユニット | 構造完全性 |
-| TC-DOC-U05 | AC-02 | Tier-1 資産（マスターパスワード / リカバリ / VEK / KEK_pw / KEK_recovery / 平文レコード）の「寿命」欄に**ゼロ化トリガ**（KDF 完了 / unlock-lock / 30 秒後 等）が明記されている | ユニット | 過信防止 |
+| TC-DOC-U05 | AC-02 | Tier-1 資産（マスターパスワード / リカバリ / VEK / KEK_pw / KEK_recovery / 平文レコード）の「**所在**」または「寿命」欄に**ゼロ化トリガ**（zeroize / KDF 完了 / unlock-lock / Drop / 30 秒 / 15min / アイドル / 保持しない 等）が明記されている。**寿命列は時間メトリクス、所在列はゼロ化契約**という意味論分業を尊重する | ユニット | 過信防止 |
 | TC-DOC-U06 | AC-03 | 信頼境界表が 5 種（プロセス / ユーザ / 永続化 / 表示 / 入力）以上、各行に「内側 / 外側 / 横断ポイント」3 列が埋まっている | ユニット | 構造完全性 |
 | TC-DOC-U07 | AC-04 | スコープ外表に 10 カテゴリ以上、各行に「受容根拠」が記載されている（空セル無し） | ユニット | 構造完全性 |
 | TC-DOC-U08 | AC-05 | Fail-Secure 型レベル強制パターン表に 5 種以上のパターン（match / Verified newtype / NonceCounter::increment / MasterPassword::new / Drop 連鎖）が記載されている | ユニット | 構造完全性 |
@@ -71,7 +71,7 @@
 | TC-DOC-U10 | AC-06 | REQ-S01〜S17 の「関連脅威 ID」欄に L1〜L4 のいずれか（または `—` で意図的不適用）が必ず記載されている | ユニット | トレーサビリティ |
 | TC-DOC-I01 | AC-08 | `requirements-analysis.md` で参照される `threat-model.md` の節番号（§7.0 / §7.1 / §7.2 / §8 / §A07）が実在する | 結合 | 参照整合性 |
 | TC-DOC-I02 | AC-08 | `requirements-analysis.md` で参照される `tech-stack.md` の節番号（§2.4 / §4.7 / §4.3.2）が実在する | 結合 | 参照整合性 |
-| TC-DOC-I03 | AC-08 | `requirements-analysis.md` の凍結値（KDF `m=19456, t=2, p=1` / nonce 12B / AAD 26B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B / アイドル 15min）が `tech-stack.md` §2.4 / §4.7 と完全一致 | 結合 | 矛盾検出 |
+| TC-DOC-I03 | AC-08 | 凍結値の二段検証: **(a) tech-stack 凍結値**（KDF `m=19456, t=2, p=1` / nonce 12B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B）が `requirements-analysis.md` と `tech-stack.md` §2.4 / §4.7 で**両方に出現**、**(b) feature 局所凍結値**（AAD 26B / アイドル 15min）は `requirements-analysis.md` 内のみで定義され `tech-stack.md` に書かないことを確認（Bug-DOC-003: 当初「全 7 値が両文書一致」と書いていたが、AAD サイズとキャッシュ idle は feature 局所のため tech-stack 不在が正常） | 結合 | 矛盾検出 + 責務分離 |
 | TC-DOC-I04 | AC-08 | `requirements-analysis.md` 機能一覧 REQ-S01〜S17 の Sub マッピングと、Sub-issue 分割計画 §（DAG 0→A→{B,C}→D→E→F）が**1:1 で整合**している | 結合 | DAG 整合性 |
 | TC-DOC-I05 | AC-08 | `requirements.md` REQ-S* の「担当 Sub」欄と `requirements-analysis.md` 機能一覧の「担当 Sub」欄が**全 17 行で一致** | 結合 | 双方向参照整合 |
 | TC-DOC-I06 | AC-06 / AC-08 | `requirements.md` データモデル表のエンティティ（VaultEncryptedHeader / WrappedVek / KdfSalt / KdfParams / NonceCounter / EncryptedRecord / MasterPassword / RecoveryMnemonic / Vek）が `requirements-analysis.md` §保護資産インベントリと**過不足なく対応**している | 結合 | エンティティ網羅 |
@@ -81,9 +81,10 @@
 | TC-DOC-E02 | AC-07 | **野木ペルソナ**が「Sub-E で VEK を 15min で zeroize する理由はどの脅威 ID？」を本書のみで回答できる | E2E | 逆引き可能性 |
 | TC-DOC-E03 | AC-07 | **涅マユリペルソナ（テスト担当）**が REQ-S05 (AEAD) のテスト観点を本書から抽出し、L1（改竄注入 / ロールバック / nonce 衝突）と L3（VEK 不在時の平文化阻止）の 2 軸で網羅できる | E2E | テスト観点導出 |
 | TC-DOC-E04 | AC-07 | **服部ペルソナ（外部レビュアー）**が「同特権デバッガアタッチを対策しない理由」を本書スコープ外表から即座に提示できる（口頭審問形式） | E2E | スコープ外受容根拠 |
-| TC-DOC-E05 | AC-09 | **田中ペルソナ（エンドユーザー）**が SECURITY.md / `vault encrypt --help` 草稿（本書 §脅威モデル §4 L4 の「ユーザ向け約束」を引用）を読み、「侵害された端末では使えない」と理解できる | E2E | 過信防止 UX |
-| TC-DOC-E06 | AC-09 | **田中ペルソナ**が「BIP-39 24 語を失くしたらパスワード忘却時に回復できない」と理解し、紙保管の必要性を認識できる | E2E | 過小評価防止 UX |
+| TC-DOC-E05 | AC-09 | **田中ペルソナ（CLI 不可エンドユーザー）**が **GUI モーダル MSG-S16** 草稿（暗号化モード初回切替時、本書 §脅威モデル §4 L4 の「ユーザ向け約束」を引用）を読み、「侵害された端末・root マルウェアからは保護されない」を理解。`--help` を読まずに GUI のみで完結する経路を検証 | E2E | 過信防止 UX（GUI 経路） |
+| TC-DOC-E06 | AC-09 | **田中ペルソナ**が **GUI モーダル MSG-S16 + recovery-show 警告 MSG-S06** 経由で「BIP-39 24 語を失くしたらパスワード忘却時に回復できない」を理解し、紙保管の必要性を認識できる | E2E | 過小評価防止 UX（GUI 経路） |
 | TC-DOC-E07 | AC-07 / AC-09 | レビュアー 3 名（ペテルギウス / ペガサス / 服部）の合格判定 + 外部レビュー（まこちゃん）の承認が揃う | E2E | 統合受入 |
+| TC-DOC-E08 | AC-09 | **田中ペルソナ**が **GUI モーダル MSG-S16 の 3 点目「画面共有時の表示回避」**を読み、Zoom/Meet/TeamViewer 中に vault 操作を避ける運用を理解。CLI 経路を持たないペルソナへの GUI-first 伝達を検証 | E2E | 画面共有リスク回避 UX |
 
 ## 4. E2Eテストケース（読み替え：ペルソナシナリオ検証）
 
@@ -96,9 +97,10 @@
 | TC-DOC-E02 | 野木 拓海（Sub-E 実装者） | VEK 15min ゼロ化根拠を逆引きする | (1) §脅威モデル §3 保護資産で VEK 行を読む (2) §4 L2 メモリスナップショット §対策 (b) を確認 | 「L2（メモリスナップショット）対策、過去メモリ抽出時の VEK 滞留時間最小化のため」と回答できる |
 | TC-DOC-E03 | 涅 マユリ（テスト担当） | REQ-S05 (AEAD) のテスト観点導出 | (1) `requirements.md` REQ-S05 の関連脅威 ID（L1 / L3）を確認 (2) `requirements-analysis.md` §4 L1 §テスト観点 (a)(b)(c) と L3 §テスト観点 (a)(b) を引く | テスト観点 5 軸（改竄注入で `AeadTagMismatch` / AAD ロールバック検出 / random nonce 衝突理論ベンチ / NIST CAVP / `wrapped_VEK` 復号路網羅）を抽出できる |
 | TC-DOC-E04 | 服部 平次（外部レビュアー、口頭審問） | 同特権デバッガ非対策の理由提示 | 「なぜ稼働中 daemon への gdb attach を対策しないのか？」と問う | §脅威モデル §5 スコープ外表から「OS 信頼境界の問題、`PR_SET_DUMPABLE(0)` / `PROCESS_VM_READ` 拒否は OS により無視可能 / バイパス可能」を即座に引用できる |
-| TC-DOC-E05 | 田中 俊介（エンドユーザー） | 「侵害された端末で使えない」を理解 | (1) §脅威モデル §4 L4 の「ユーザ向け約束」段落を読む（SECURITY.md / `vault encrypt --help` の文言の根拠） (2) §5 スコープ外 L4 全般行を読む | 「root 権限を持つマルウェアからは保護できない」「侵害された端末での使用は想定外」を自分の言葉で言い換えられる。**「shikomi なら絶対安全」と誤認しない** |
-| TC-DOC-E06 | 田中 俊介（エンドユーザー） | BIP-39 24 語紛失リスクを理解 | (1) §3 保護資産でリカバリニーモニック行を読む (2) §4 L3 §残存リスク (c) と §5 スコープ外「BIP-39 24 語の盗難」「マスターパスワード失念」を読む | 「24 語を紛失したらパスワード忘却時に回復不能」「24 語の保管はユーザ責任」「金庫保管・写真禁止・クラウド禁止」を理解できる |
+| TC-DOC-E05 | 田中 俊介（CLI 不可エンドユーザー） | 「侵害された端末で使えない」を **GUI モーダル経路**で理解 | (1) `vault encrypt` 初回 GUI モーダル MSG-S16 草稿を表示 — 3 点（侵害端末 / BIP-39 漏洩 / 画面共有）を文 + アイコン併記 (2) 「**理解しました**」ボタンを押さないと先に進めない（明示合意取得） (3) 田中がモーダル内容を自分の言葉で言い換える | CLI を一切使わずに「**root 権限を持つマルウェアからは保護できない**」「**侵害された端末での使用は想定外**」を自分の言葉で言い換えられる。`--help` を読む必要が無い |
+| TC-DOC-E06 | 田中 俊介（CLI 不可エンドユーザー） | BIP-39 24 語紛失リスクを **GUI モーダル経路**で理解 | (1) `vault encrypt` 初回 GUI モーダル MSG-S16 を表示（リカバリ生成前の警告） (2) `vault recovery-show` 直前に再警告 MSG-S06（**写真撮影禁止 / 金庫保管 / クラウド保管禁止**）を表示 (3) 「**理解しました**」と「**書き写し完了**」の二段階確認を経て初めて 24 語表示 | CLI を一切使わずに「24 語を紛失したらパスワード忘却時に回復不能」「24 語の保管はユーザ責任」「金庫保管・写真禁止・クラウド禁止」を理解、二段階確認で**消え去り型表示**を許容 |
 | TC-DOC-E07 | レビュアー統合 | 統合受入（人手レビュー + 外部レビュー） | レビュアー 3 名（ペテルギウス / ペガサス / 服部）が並列レビュー → 全員 `[合格]` → 外部レビュー（まこちゃん）承認 | 4 名全員の合格判定が揃う。1 名でも `[却下]` あれば差し戻し |
+| TC-DOC-E08 | 田中 俊介（CLI 不可エンドユーザー） | **画面共有時の表示回避**運用を MSG-S16 経由で理解 | (1) `vault encrypt` 初回 GUI モーダル MSG-S16 の 3 点目「**画面共有 / リモートデスクトップ中の表示漏洩**」段落を読む (2) §5 スコープ外「画面共有 / リモートデスクトップ」行を裏付けとして MSG-S16 詳細リンクから参照 (3) 田中が運用ルールを言語化する | 「Zoom / Meet / TeamViewer / 画面録画 中は vault unlock / recovery-show を実行しない」「OS / 配信ツール側の責務であり shikomi は防御不能、運用で回避」を理解。**MSG-S16 のみが田中への伝達経路**であり、`--help` や SECURITY.md は補足扱い |
 
 **E2E 証跡**: 各 TC-DOC-E0x の検証結果を Markdown レポート（`/app/shared/attachments/マユリ/sub-0-doc-test-report.md`）に記録し Discord 添付。
 
@@ -111,7 +113,7 @@
 |---------|---------|------------------|---------|------|---------|
 | TC-DOC-I01 | requirements-analysis.md → threat-model.md | `grep -E "threat-model.md (§7\.0\|§7\.1\|§7\.2\|§7\|§8\|§A07)" docs/features/vault-encryption/requirements-analysis.md` で抽出した節番号を `docs/architecture/context/threat-model.md` 内で `grep -E "^### 7\.0\|^## 7\|^## 8"` で実在確認 | `develop` ブランチに最新 threat-model.md がマージ済 | 抽出 → 突合 → 不一致一覧を出力 | 全節番号が threat-model.md 内に実在（不一致 0 件） |
 | TC-DOC-I02 | requirements-analysis.md → tech-stack.md | 同上方式で `tech-stack.md §2.4 / §4.7 / §4.3.2` を実在確認 | tech-stack.md PR #45 マージ済 | 抽出 → 突合 | 全節番号実在 |
-| TC-DOC-I03 | 凍結値の 2 文書間一致 | 凍結値を 1 ファイル（`/tmp/frozen-values.txt`）に書き出し、両文書から `grep` で抽出して `diff` | requirements-analysis.md / tech-stack.md がローカル | 7 値（KDF `m=19456, t=2, p=1` / nonce 12B / AAD 26B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B / アイドル 15min）を grep で抽出 → diff | 全 7 値が両文書で完全一致（diff 出力 0 行） |
+| TC-DOC-I03 | 凍結値の責務分離検証 | 二段 grep: (a) tech-stack 凍結値が RA + TS 両方に出現 (b) feature 局所凍結値が RA 内のみ定義 | RA / TS / REQ がローカル | (a) 5 値（KDF `m=19456, t=2, p=1` / nonce 12B / 上限 $2^{32}$ / VEK 32B / kdf_salt 16B）grep → 両文書出現確認、(b) 2 値（AAD 26B / アイドル 15min）grep → RA のみ出現確認 | (a) 全 5 値が両文書出現、(b) 全 2 値が RA に最低 1 回出現。tech-stack 越境した feature 局所値は責務違反として検出 |
 | TC-DOC-I04 | DAG 整合性 | requirements-analysis.md §機能一覧の Sub マッピング表 vs §Sub-issue分割計画 表 | 同一文書内の 2 表 | 17 行の Sub マッピングを抽出 → DAG 表（7 行）の依存先と整合チェック | Sub-A 依存 = Sub-0、Sub-B/C 依存 = Sub-A、Sub-D 依存 = Sub-B+C、Sub-E 依存 = Sub-D、Sub-F 依存 = Sub-E が崩れていない |
 | TC-DOC-I05 | requirements-analysis ↔ requirements の Sub マッピング双方向 | 両文書から「REQ-S* / 担当 Sub」を抽出して join | 両ファイル存在 | REQ-S01〜S17 の 17 行を両文書から抽出 → join | 17 行全て担当 Sub が一致（不一致 0 件） |
 | TC-DOC-I06 | データモデル ↔ 保護資産インベントリ | requirements.md §データモデルの 9 エンティティ vs requirements-analysis.md §3 の 13 資産 | 両文書存在 | エンティティ名と資産名を突合 | 9 エンティティが資産インベントリのいずれかに対応する（VaultEncryptedHeader = ヘッダ複合資産 / Vek = VEK / MasterPassword = マスターパスワード …） |
@@ -131,7 +133,7 @@
 | TC-DOC-U02 | 同上 §対策セル | 網羅性 | L1〜L4 の対策セル本文 | L1 / L2 / L3 各層で**最低 3 個以上**の対策（記号 (a)(b)(c)... 形式）。L4 のみ「対象外」明示で例外 |
 | TC-DOC-U03 | §4 L4 §対策 | 過小評価防止 | L4 §対策 セル | 文字列 `**対象外**` が含まれる（曖昧な「考慮中」「将来検討」を禁止） |
 | TC-DOC-U04 | §3 保護資産インベントリ表 | 構造完全性 | 13 資産行 | 全 13 行に Tier 1 / 2 / 3 のいずれかが付与（空 Tier 0 件） |
-| TC-DOC-U05 | §3 Tier-1 資産行（6 資産） | 過信防止 | Tier-1 各行の「寿命」セル | 各行に**ゼロ化トリガ語**（`zeroize` / `KDF 完了` / `unlock-lock` / `Drop` / `30 秒` / `15min` 等）が含まれる |
+| TC-DOC-U05 | §3 Tier-1 資産行（6 資産） | 過信防止 | Tier-1 各行の「所在」または「寿命」セル | 各行の**所在 or 寿命のいずれか**に**ゼロ化トリガ語**（`zeroize` / `KDF 完了` / `unlock` / `Drop` / `30 秒` / `15min` / `アイドル` / `保持しない` 等）が含まれる。**寿命列は時間メトリクス、所在列はゼロ化契約という意味論分業**を尊重（Sub-0 テスト実行時に発見、Boy Scout Rule で TC 文言を実態に同期、Bug-DOC-001 参照） |
 | TC-DOC-U06 | §2 信頼境界表 | 構造完全性 | 5 行（プロセス / ユーザ / 永続化 / 表示 / 入力） | 5 行以上、各行 「内側 / 外側 / 横断ポイント」3 列が非空 |
 | TC-DOC-U07 | §5 スコープ外表 | 構造完全性 | スコープ外行 | 10 カテゴリ以上、各行に「受容根拠」セルが非空 |
 | TC-DOC-U08 | §6 Fail-Secure 型レベル強制パターン表 | 構造完全性 | パターン表 | 5 行以上、各行「適用 / 効果」セルが非空 |
@@ -146,12 +148,12 @@
 
 | サブチェックID | 検証対象 | 期待結果 |
 |--------------|---------|---------|
-| META-01 | §1 概要表「TC 総数」セルの宣言値 | `25` と一致 |
-| META-02 | §3 マトリクス見出しの宣言値 | `25` と一致 |
-| META-03 | §3 マトリクス表の `TC-DOC-` プレフィクス行数 | 10 (U) + 8 (I) + 7 (E) = 25 行 |
-| META-04 | TC-DOC-U / I / E 各シリーズの末尾 ID | U10 / I08 / E07（連番欠番無し） |
+| META-01 | §1 概要表「TC 総数」セルの宣言値 | `26` と一致 |
+| META-02 | §3 マトリクス見出しの宣言値 | `26` と一致 |
+| META-03 | §3 マトリクス表の `TC-DOC-` プレフィクス行数 | 10 (U) + 8 (I) + 8 (E) = 26 行 |
+| META-04 | TC-DOC-U / I / E 各シリーズの末尾 ID | U10 / I08 / E08（連番欠番無し） |
 
-**実装**: `sub-0-structure-lint.py` 末尾で `grep -oE "TC-DOC-(U\|I\|E)[0-9]+" docs/features/vault-encryption/test-design.md | sort -u | wc -l` を呼び、25 と等しいことを assert（プレースホルダ `TC-DOC-E0x` は末尾に数字が無いためマッチしない設計）。
+**実装**: `sub-0-structure-lint.py` 末尾で `grep -oE "TC-DOC-(U\|I\|E)[0-9]+" docs/features/vault-encryption/test-design.md | sort -u | wc -l` を呼び、26 と等しいことを assert（プレースホルダ `TC-DOC-E0x` は末尾に数字が無いためマッチしない設計）。**TC を増減した時はこの数値・META-01〜04 の期待値・lint 実装の 3 箇所を同期更新する型レベル契約**。
 
 ## 7. テスト実行手順
 
@@ -197,8 +199,8 @@ bash tests/docs/sub-0-cross-ref.sh
 | Sub-A (#39) | ユニット | 暗号ドメイン型（VEK / KEK / WrappedVek / MasterPassword / RecoveryMnemonic / KdfSalt / NonceCounter）の `secrecy` + `zeroize` 契約検証、`Clone` 禁止コンパイルテスト、`Drop` 後メモリパターン検証 |
 | Sub-B (#40) | ユニット + 結合 | RFC 9106 Argon2id KAT、BIP-39 trezor 公式ベクトル、RFC 5869 HKDF KAT、CI criterion ベンチで p95 1 秒継続検証 |
 | Sub-C (#41) | ユニット + 結合 | NIST CAVP AES-GCM テストベクトル、AAD ロールバック検出、random nonce 衝突確率ベンチ、`NonceLimitExceeded` rekey 強制 |
-| Sub-D (#42) | ユニット + 結合 + E2E | 平文⇄暗号化双方向マイグレーション（atomic write 失敗ロールバック）、zxcvbn 強度ゲート（弱パスワード `Feedback` 出力）、ヘッダ AEAD 改竄検出、REQ-P11 解禁の整合 |
+| Sub-D (#42) | ユニット + 結合 + E2E | 平文⇄暗号化双方向マイグレーション（atomic write 失敗ロールバック）、zxcvbn 強度ゲート（弱パスワード `Feedback` 出力）、ヘッダ AEAD 改竄検出、REQ-P11 解禁の整合、**MSG-S16 限界説明 3 点（侵害端末 / BIP-39 漏洩 / 画面共有）+ 明示合意取得 UX**（CLI フラグ `--accept-limits` ＋ GUI モーダル「理解しました」二択、CLI / GUI 両経路）、**MSG-S18 アクセシビリティ 4 経路**（ARIA + `--print` PDF + `--braille` .brf + `--audio` TTS）、**REQ-S13 WCAG 2.1 AA 準拠**（recovery 24 語表示時のスクリーンリーダー読み上げ・OS 読み上げ拒否時の代替経路） |
 | Sub-E (#43) | ユニット + 結合 + E2E | VEK アイドル 15min ゼロ化観測、サスペンド signal ゼロ化、IPC V2 拡張の V1 互換、アンロック失敗指数バックオフのホットキー継続 |
-| Sub-F (#44) | E2E（CLI） | `shikomi vault {encrypt/decrypt/unlock/lock/change-password/recovery-show/rekey}` の bash + curl/IPC E2E、保護モード可視化、recovery 初回 1 度表示 |
+| Sub-F (#44) | E2E（CLI + GUI） | `shikomi vault {encrypt/decrypt/unlock/lock/change-password/recovery-show/rekey}` の bash + curl/IPC E2E、**REQ-S16 保護モード可視化（CLI ヘッダ `[plaintext]` / `[encrypted]` ＋ GUI 常駐バッジ MSG-S17 — 色覚多様性対応で色＋文字の二重符号化）**、recovery 初回 1 度表示、**MSG-S16 / MSG-S17 / MSG-S18 の文言確定と CLI / GUI 両経路の表示テスト**、**REQ-S13 アクセシビリティ 4 経路の Sub-F 側統合テスト**（Tauri WebView ARIA 属性、Playwright スクリーンリーダー検証） |
 
 **characterization fixture** の起票は Sub-A〜F の各 Sub の本ファイル拡張時に「§1.2 外部I/O依存マップ」に追記する。本 Sub-0 では該当なし。
