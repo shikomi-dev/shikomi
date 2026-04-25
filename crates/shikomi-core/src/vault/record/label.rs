@@ -1,5 +1,6 @@
 //! レコード表示名。
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::error::{DomainError, InvalidRecordLabelReason};
@@ -17,9 +18,30 @@ const LABEL_MAX_GRAPHEMES: usize = 255;
 /// - 非空
 /// - 禁止制御文字なし（U+0000〜U+001F のうち `\t`/`\n`/`\r` は許可、U+007F は禁止）
 /// - grapheme cluster 数 ≤ 255
+///
+/// IPC 経路では内部 `String` を `serialize` し、`deserialize` 時は `try_new` で再検証する。
 #[derive(Debug, Clone)]
 pub struct RecordLabel {
     inner: String,
+}
+
+impl Serialize for RecordLabel {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.inner)
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordLabel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::try_new(raw).map_err(serde::de::Error::custom)
+    }
 }
 
 impl RecordLabel {

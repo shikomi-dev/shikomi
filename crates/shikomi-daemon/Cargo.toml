@@ -6,9 +6,44 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# lib + bin の 2 ターゲット構成（cli-vault-commands と同型）
+# - lib: run() / 内部公開 API を結合テスト（tests/）から呼び出すため
+# - bin: `#[tokio::main(flavor = "multi_thread")]` で run() を呼ぶ薄ラッパ
+[lib]
+name = "shikomi_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shikomi-daemon"
 path = "src/main.rs"
+
+[dependencies]
+shikomi-core       = { workspace = true }
+shikomi-infra      = { workspace = true }
+serde              = { workspace = true }
+thiserror          = { workspace = true }
+time               = { workspace = true }
+uuid               = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs               = { workspace = true }
+tokio              = { workspace = true }
+tokio-util         = { workspace = true }
+rmp-serde          = { workspace = true }
+bytes              = { workspace = true }
+futures-util       = { workspace = true }
+fs4                = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix                = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys        = { workspace = true }
+
+[dev-dependencies]
+tempfile           = { workspace = true }
+assert_cmd         = { workspace = true }
+predicates         = { workspace = true }
 
 [lints]
 workspace = true

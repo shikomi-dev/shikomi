@@ -3,6 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 use crate::error::{DomainError, InvalidRecordIdReason};
@@ -14,9 +15,33 @@ use crate::error::{DomainError, InvalidRecordIdReason};
 /// レコードを一意に識別する `UUIDv7` newtype。
 ///
 /// `UUIDv7` 以外のバージョン・nil UUID は構築時に拒否される（Fail Fast）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// IPC 経路では `String`（UUIDv7 表記）として送受信する（`Display` / `FromStr` 整合）。
+///
+/// `Hash` は `IpcVaultRepository` の差分検出（`HashSet` / `HashMap` キー利用）で
+/// 必要となる。Newtype 内部の `Uuid` は既に `Hash` 実装済みのため、derive で完結する。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecordId {
     inner: Uuid,
+}
+
+impl Serialize for RecordId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(&self.inner)
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::try_from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl RecordId {

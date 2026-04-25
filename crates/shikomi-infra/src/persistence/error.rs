@@ -267,6 +267,42 @@ pub enum PersistenceError {
         /// ロック保持プロセスの PID ヒント（分かる場合）。
         holder_hint: Option<u32>,
     },
+
+    /// IPC: daemon プロセスへ接続できない（`shikomi-daemon` 未起動）。
+    ///
+    /// daemon-ipc feature で追加。`--ipc` 指定で `IpcVaultRepository::connect` 失敗時に返る。
+    #[error("daemon is not running (socket {0} unreachable)")]
+    DaemonNotRunning(PathBuf),
+
+    /// IPC: ハンドシェイクで daemon とプロトコルバージョンが一致しない。
+    #[error("ipc protocol version mismatch (server={server}, client={client})")]
+    ProtocolVersionMismatch {
+        /// daemon 側バージョン。
+        server: shikomi_core::ipc::IpcProtocolVersion,
+        /// クライアント側バージョン。
+        client: shikomi_core::ipc::IpcProtocolVersion,
+    },
+
+    /// IPC: MessagePack デコード失敗（CLI 受信側）。
+    #[error("ipc decode error: {reason}")]
+    IpcDecode {
+        /// 失敗の人間可読理由（固定文言、絶対パス等を含めない）。
+        reason: String,
+    },
+
+    /// IPC: MessagePack エンコード失敗（CLI 送信側）。
+    #[error("ipc encode error: {reason}")]
+    IpcEncode {
+        /// 失敗の人間可読理由（固定文言）。
+        reason: String,
+    },
+
+    /// IPC: I/O 失敗（接続切断・送受信エラー）。
+    #[error("ipc io error: {reason}")]
+    IpcIo {
+        /// 失敗の人間可読理由（固定文言、絶対パス等を含めない）。
+        reason: String,
+    },
 }
 
 // -------------------------------------------------------------------

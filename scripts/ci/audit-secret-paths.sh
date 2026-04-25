@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# CI audit script — cli-vault-commands feature の secret 経路契約を静的に検証する。
+# CI audit script — secret 経路契約を静的に検証する。
 #
 # 対応 TC:
 # - TC-CI-013: `crates/shikomi-cli/src/` 配下で `expose_secret` 呼び出しが 0 件
 # - TC-CI-014: panic hook 内で `tracing::*` マクロを呼ばない
-# - TC-CI-015: panic hook 内で `info.payload()` / `info.message()` 等を参照しない
+# - TC-CI-015: `crates/shikomi-core/src/ipc/` 配下で `expose_secret` が 0 件（daemon-ipc）
+# - TC-CI-016: `crates/shikomi-cli/src/io/` 配下で `expose_secret` が 0 件（daemon-ipc 拡張）
+# - TC-CI-017: `crates/shikomi-daemon/src/` 配下で `expose_secret` が 0 件（daemon-ipc）
+# - TC-CI-018: `crates/shikomi-core/src/ipc/` 配下で `rmp_serde::Raw` / `RawRef` が 0 件
+# - TC-CI-019: `crates/shikomi-daemon/src/` 配下の `unsafe {` が `permission/{unix,windows,windows_acl}.rs` 限定
+# - TC-CI-023/024: daemon panic hook 内で tracing / payload 参照禁止
+# - TC-CI-026: `crates/shikomi-cli/src/` 配下の `unsafe {` が `io/windows_sid.rs` 限定
+# - TC-CI-027: `SHIKOMI_DAEMON_SKIP_*` env 読取コードが本番 src/ に 0 件
 #
-# 設計根拠: docs/features/cli-vault-commands/test-design/ci.md §1.1
+# 設計根拠:
+# - docs/features/cli-vault-commands/test-design/ci.md §1.1
+# - docs/features/daemon-ipc/test-design/ci.md §1〜2
 
 set -euo pipefail
 
@@ -71,5 +80,94 @@ for target in "${leak_dirs[@]}" "${leak_files[@]}"; do
     fi
 done
 echo "[TC-CI-012] PASS"
+
+# --- TC-CI-015 ------------------------------------------------------
+echo "[TC-CI-015] expose_secret in shikomi-core/src/ipc/"
+if matches="$(grep -rn 'expose_secret' crates/shikomi-core/src/ipc/ 2>/dev/null)"; then
+    echo "$matches"
+    fail "TC-CI-015 FAIL: crates/shikomi-core/src/ipc/ 配下に expose_secret 呼び出しが存在します"
+fi
+echo "[TC-CI-015] PASS"
+
+# --- TC-CI-016 ------------------------------------------------------
+echo "[TC-CI-016] expose_secret in shikomi-cli/src/io/"
+if matches="$(grep -rn 'expose_secret' crates/shikomi-cli/src/io/ 2>/dev/null)"; then
+    echo "$matches"
+    fail "TC-CI-016 FAIL: crates/shikomi-cli/src/io/ 配下に expose_secret 呼び出しが存在します"
+fi
+echo "[TC-CI-016] PASS"
+
+# --- TC-CI-017 ------------------------------------------------------
+echo "[TC-CI-017] expose_secret in shikomi-daemon/src/"
+if matches="$(grep -rn 'expose_secret' crates/shikomi-daemon/src/ 2>/dev/null)"; then
+    echo "$matches"
+    fail "TC-CI-017 FAIL: crates/shikomi-daemon/src/ 配下に expose_secret 呼び出しが存在します"
+fi
+echo "[TC-CI-017] PASS"
+
+# --- TC-CI-018 ------------------------------------------------------
+echo "[TC-CI-018] rmp_serde::Raw / RawRef in shikomi-core/src/ipc/"
+if matches="$(grep -rnE 'rmp_serde::(Raw|RawRef)|::Raw\b|::RawRef\b' crates/shikomi-core/src/ipc/ 2>/dev/null)"; then
+    echo "$matches"
+    fail "TC-CI-018 FAIL: crates/shikomi-core/src/ipc/ 配下で rmp_serde::Raw/RawRef が使われています"
+fi
+echo "[TC-CI-018] PASS"
+
+# --- TC-CI-019 ------------------------------------------------------
+echo "[TC-CI-019] unsafe blocks outside permission/ (shikomi-daemon)"
+if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-daemon/src/ \
+    --include='*.rs' \
+    | grep -v 'crates/shikomi-daemon/src/permission/unix.rs' \
+    | grep -v 'crates/shikomi-daemon/src/permission/windows.rs' \
+    | grep -v 'crates/shikomi-daemon/src/permission/windows_acl.rs' \
+    || true)"; then
+    if [[ -n "$matches" ]]; then
+        echo "$matches"
+        fail "TC-CI-019 FAIL: crates/shikomi-daemon/src/permission/{unix,windows,windows_acl}.rs 以外で unsafe ブロックが存在します"
+    fi
+fi
+echo "[TC-CI-019] PASS"
+
+# --- TC-CI-023 / 024 ------------------------------------------------
+echo "[TC-CI-023/024] daemon panic hook audit"
+panic_hook_body="$(awk '/fn panic_hook\(/,/^}$/' \
+    crates/shikomi-daemon/src/lib.rs \
+    crates/shikomi-daemon/src/main.rs \
+    crates/shikomi-daemon/src/panic_hook.rs 2>/dev/null || true)"
+if [[ -n "$panic_hook_body" ]]; then
+    if echo "$panic_hook_body" | grep -qE 'tracing::'; then
+        echo "$panic_hook_body"
+        fail "TC-CI-023 FAIL: daemon panic hook 内で tracing マクロが呼ばれています"
+    fi
+    if echo "$panic_hook_body" | grep -qE '\.payload\(\)|info\.payload|PanicHookInfo::payload|info\.message|info\.location'; then
+        echo "$panic_hook_body"
+        fail "TC-CI-024 FAIL: daemon panic hook 内で PanicHookInfo::payload/message/location を参照しています"
+    fi
+fi
+echo "[TC-CI-023/024] PASS"
+
+# --- TC-CI-026 ------------------------------------------------------
+echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs (shikomi-cli)"
+if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    | grep -v 'crates/shikomi-cli/src/io/windows_sid.rs' \
+    || true)"; then
+    if [[ -n "$matches" ]]; then
+        echo "$matches"
+        fail "TC-CI-026 FAIL: crates/shikomi-cli/src/io/windows_sid.rs 以外で unsafe ブロックが存在します"
+    fi
+fi
+echo "[TC-CI-026] PASS"
+
+# --- TC-CI-027 ------------------------------------------------------
+echo "[TC-CI-027] SHIKOMI_DAEMON_SKIP_* env read in production src/"
+if matches="$(grep -rnE 'env::var.*SHIKOMI_DAEMON_SKIP|std::env::var.*SHIKOMI_DAEMON_SKIP' \
+    crates/shikomi-daemon/src/ \
+    crates/shikomi-cli/src/ \
+    --include='*.rs' 2>/dev/null)"; then
+    echo "$matches"
+    fail "TC-CI-027 FAIL: SHIKOMI_DAEMON_SKIP_* env 読取コードが本番 src/ に存在します"
+fi
+echo "[TC-CI-027] PASS"
 
 echo "ALL secret-path audits PASS"

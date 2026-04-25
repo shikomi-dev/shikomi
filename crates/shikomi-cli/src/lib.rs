@@ -32,6 +32,7 @@ use time::OffsetDateTime;
 
 use cli::{AddArgs, CliArgs, EditArgs, RemoveArgs, Subcommand};
 use input::{AddInput, ConfirmedRemoveInput, EditInput};
+use io::ipc_vault_repository::IpcVaultRepository;
 use presenter::Locale;
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
 use shikomi_infra::persistence::VaultRepository;
@@ -113,24 +114,71 @@ pub fn run() -> ExitCode {
 
     init_tracing(args.verbose);
 
+    let quiet = args.quiet;
+
+    if args.ipc {
+        // `--ipc` は現状 `list` のみ対応（Phase 2 移行 PR で add/edit/remove の透過化を完成）。
+        // ここで早期 reject することで、IpcVaultRepository が `VaultRepository` trait を
+        // 偽実装する必要がなくなる（旧実装の「嘘の Plaintext(empty) 注入」「嘘 ID 出荷」「常に true な exists()」
+        // を構造的に消滅させる）。
+        if !matches!(args.subcommand, Subcommand::List) {
+            return emit_error_and_exit(
+                &CliError::UsageError(
+                    "--ipc currently supports only the `list` subcommand; \
+                     for add/edit/remove, omit --ipc to use direct vault file access"
+                        .to_owned(),
+                ),
+                locale,
+            );
+        }
+        if !quiet {
+            eprintln!("warning: --ipc is an opt-in preview; only `list` is currently supported");
+        }
+        run_list_via_ipc(locale, quiet)
+    } else {
+        run_with_sqlite_repo(&args, locale, quiet)
+    }
+}
+
+fn run_with_sqlite_repo(args: &CliArgs, locale: Locale, quiet: bool) -> ExitCode {
     let repo = match build_repo(args.vault_dir.as_deref()) {
         Ok(r) => r,
         Err(err) => return emit_error_and_exit(&err, locale),
     };
     let vault_dir = repo.paths().dir().to_path_buf();
-
-    let quiet = args.quiet;
-    let result = match args.subcommand {
+    let result = match &args.subcommand {
         Subcommand::List => run_list(&repo, &vault_dir, locale, quiet),
-        Subcommand::Add(a) => run_add(&repo, &a, &vault_dir, locale, quiet),
-        Subcommand::Edit(a) => run_edit(&repo, &a, &vault_dir, locale, quiet),
-        Subcommand::Remove(a) => run_remove(&repo, &a, &vault_dir, locale, quiet),
+        Subcommand::Add(a) => run_add(&repo, a, &vault_dir, locale, quiet),
+        Subcommand::Edit(a) => run_edit(&repo, a, &vault_dir, locale, quiet),
+        Subcommand::Remove(a) => run_remove(&repo, a, &vault_dir, locale, quiet),
     };
-
     match result {
         Ok(()) => ExitCode::Success,
         Err(err) => emit_error_and_exit(&err, locale),
     }
+}
+
+/// `--ipc list` 専用エントリ。`IpcVaultRepository::list_summaries` で `RecordSummary` 列を
+/// 取得し、`Vault` 集約を経由せずに直接 `RecordView` に射影する。
+fn run_list_via_ipc(locale: Locale, quiet: bool) -> ExitCode {
+    let socket_path = match IpcVaultRepository::default_socket_path() {
+        Ok(p) => p,
+        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
+    };
+    let client = match IpcVaultRepository::connect(&socket_path) {
+        Ok(c) => c,
+        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
+    };
+    let summaries = match client.list_summaries() {
+        Ok(s) => s,
+        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
+    };
+    let views = usecase::list::summaries_to_views(&summaries);
+    if !quiet {
+        let rendered = presenter::list::render_list(&views, locale);
+        print_stdout(&rendered);
+    }
+    ExitCode::Success
 }
 
 // -------------------------------------------------------------------
