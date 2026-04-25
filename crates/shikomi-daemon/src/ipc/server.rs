@@ -174,8 +174,6 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
         connections: &mut JoinSet<()>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), ServerError> {
-        use tokio::net::windows::named_pipe::ServerOptions;
-
         if *shutdown.borrow_and_update() {
             drop(first_server);
             return Ok(());
@@ -194,9 +192,12 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
                     return Ok(());
                 }
                 connect_result = current.connect() => {
-                    let next = ServerOptions::new()
-                        .create(pipe_name)
-                        .map_err(ServerError::Accept)?;
+                    // 後続インスタンスにも owner-only DACL を適用。unsafe は
+                    // permission/windows_acl.rs に閉じる（CI grep TC-CI-019）。
+                    let next = crate::permission::windows_acl::create_next_pipe_instance_owner_only(
+                        pipe_name,
+                    )
+                    .map_err(ServerError::Accept)?;
                     let stream = std::mem::replace(&mut current, next);
                     if let Err(err) = connect_result {
                         tracing::warn!(

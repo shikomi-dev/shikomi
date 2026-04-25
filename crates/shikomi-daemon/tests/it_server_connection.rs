@@ -24,7 +24,7 @@ use shikomi_core::{
 use shikomi_daemon::ipc::server::IpcServer;
 use shikomi_daemon::ipc::transport::ListenerEnum;
 use shikomi_daemon::lifecycle::single_instance::SingleInstanceLock;
-use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultRepository};
+use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::net::UnixStream;
@@ -113,13 +113,12 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
     let (vault_arc, repo_arc) = fresh_vault_and_repo(dir.path());
 
     let mut lock = SingleInstanceLock::acquire_unix(dir.path()).expect("acquire_unix");
+    // `cfg(unix)` 限定テストなので take_listener は必ず `ListenerEnum::Unix` を返す
+    // （irrefutable pattern 警告対応）。
     let ListenerEnum::Unix {
         listener,
         socket_path,
-    } = lock.take_listener().expect("take_listener")
-    else {
-        unreachable!("test only cfg(unix)")
-    };
+    } = lock.take_listener().expect("take_listener");
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut server = IpcServer::new(

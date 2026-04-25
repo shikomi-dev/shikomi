@@ -55,7 +55,7 @@ impl PeerCredentialSource for tokio::net::windows::named_pipe::NamedPipeServer {
 pub fn resolve_self_user_sid() -> Result<String, std::io::Error> {
     resolve_self_user_sid_inner().map_err(|e| match e {
         PeerVerificationError::Lookup(io) => io,
-        other => std::io::Error::new(std::io::ErrorKind::Other, other.to_string()),
+        other => std::io::Error::other(other.to_string()),
     })
 }
 
@@ -166,8 +166,7 @@ fn sid_to_string(sid: PSID) -> Result<String, PeerVerificationError> {
         ));
     }
     if wsid.is_null() {
-        return Err(PeerVerificationError::Lookup(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(PeerVerificationError::Lookup(std::io::Error::other(
             "ConvertSidToStringSidW returned null pointer",
         )));
     }

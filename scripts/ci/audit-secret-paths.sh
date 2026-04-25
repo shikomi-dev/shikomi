@@ -10,7 +10,7 @@
 # - TC-CI-016: `crates/shikomi-cli/src/io/` 配下で `expose_secret` が 0 件（daemon-ipc 拡張）
 # - TC-CI-017: `crates/shikomi-daemon/src/` 配下で `expose_secret` が 0 件（daemon-ipc）
 # - TC-CI-018: `crates/shikomi-core/src/ipc/` 配下で `rmp_serde::Raw` / `RawRef` が 0 件
-# - TC-CI-019: `crates/shikomi-daemon/src/` 配下の `unsafe {` が `permission/{unix,windows}.rs` 限定
+# - TC-CI-019: `crates/shikomi-daemon/src/` 配下の `unsafe {` が `permission/{unix,windows,windows_acl}.rs` 限定
 # - TC-CI-023/024: daemon panic hook 内で tracing / payload 参照禁止
 # - TC-CI-026: `crates/shikomi-cli/src/` 配下の `unsafe {` が `io/windows_sid.rs` 限定
 # - TC-CI-027: `SHIKOMI_DAEMON_SKIP_*` env 読取コードが本番 src/ に 0 件
@@ -119,10 +119,11 @@ if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-daemon/src/ \
     --include='*.rs' \
     | grep -v 'crates/shikomi-daemon/src/permission/unix.rs' \
     | grep -v 'crates/shikomi-daemon/src/permission/windows.rs' \
+    | grep -v 'crates/shikomi-daemon/src/permission/windows_acl.rs' \
     || true)"; then
     if [[ -n "$matches" ]]; then
         echo "$matches"
-        fail "TC-CI-019 FAIL: crates/shikomi-daemon/src/permission/{unix,windows}.rs 以外で unsafe ブロックが存在します"
+        fail "TC-CI-019 FAIL: crates/shikomi-daemon/src/permission/{unix,windows,windows_acl}.rs 以外で unsafe ブロックが存在します"
     fi
 fi
 echo "[TC-CI-019] PASS"

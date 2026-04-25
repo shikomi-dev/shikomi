@@ -223,14 +223,18 @@ fn flock_exclusive_nonblock(file: &std::fs::File) -> std::io::Result<()> {
 #[cfg(windows)]
 impl SingleInstanceLock {
     /// Windows のシングルインスタンス先取り（Named Pipe `FIRST_PIPE_INSTANCE`）。
+    ///
+    /// **Defense in Depth**: kernel ACL を所有者専用に明示設定する
+    /// （`OwnerOnlySecurityAttributes` 経由の SDDL `D:P(A;;GA;;;<SELF_USER_SID>)`）。
+    /// デフォルト DACL は Everyone に Read/Write を付与してしまうため、
+    /// `peer_credential::verify` の単層に縮退して Defense in Depth が崩れる。
+    /// kernel ACL を被せることで、攻撃者が `CreateFile` で pipe を開くこと自体を OS 拒否させる。
+    /// 設計根拠: docs/features/daemon-ipc/basic-design/security.md §Named Pipe SDDL owner-only ACE
     pub fn acquire_windows(pipe_name: &str) -> Result<Self, SingleInstanceError> {
-        use tokio::net::windows::named_pipe::ServerOptions;
-
-        let server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .max_instances(255)
-            .create(pipe_name)
-            .map_err(|err| {
+        // unsafe は permission/windows_acl.rs に閉じる（CI grep TC-CI-019）。
+        let server =
+            crate::permission::windows_acl::create_first_pipe_instance_owner_only(pipe_name, 255)
+                .map_err(|err| {
                 if err.raw_os_error()
                     == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
                     || err.raw_os_error()

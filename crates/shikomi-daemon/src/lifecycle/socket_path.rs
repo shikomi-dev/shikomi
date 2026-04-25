@@ -78,8 +78,10 @@ pub fn resolve_pipe_name() -> Result<String, SocketPathError> {
 }
 
 /// Windows: `resolve_socket_dir` のスタブ（API 揃え用、未使用）。
+///
+/// `Result` は既に `#[must_use]` 型のため、関数本体側 `#[must_use]` は冗長
+/// （clippy::double_must_use）。
 #[cfg(windows)]
-#[must_use]
 pub fn resolve_socket_dir() -> Result<PathBuf, SocketPathError> {
     // Windows では Named Pipe を使うため socket dir 概念がない（実装の都合で `temp_dir` を返す
     // が、この値は `SingleInstanceLock` が `cfg(windows)` で参照しない）。

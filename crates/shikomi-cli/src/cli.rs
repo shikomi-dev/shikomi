@@ -38,9 +38,11 @@ pub struct CliArgs {
     #[arg(long, short, global = true)]
     pub verbose: bool,
 
-    /// daemon 経由（Phase 2）で操作する。デフォルトは false（Phase 1 SQLite 直結維持）。
-    ///
-    /// daemon-ipc feature で追加（Issue #26）。Phase 2 全面切替は本 Issue 対象外。
+    /// Use the running shikomi-daemon over IPC instead of opening the vault file directly.
+    /// Currently supported only with the `list` subcommand; requires shikomi-daemon to be running.
+    // NOTE: 内部メモ — daemon-ipc feature (Issue #26) で追加。`add`/`edit`/`remove` の IPC 経路は
+    // Phase 2 移行 PR で完成させるため、本フラグは現状 `list` 限定の opt-in。
+    // ユーザ向けには上記 doc comment のみ露出する（`--help` 内部用語汚染を避けるため）。
     #[arg(long, global = true)]
     pub ipc: bool,
 

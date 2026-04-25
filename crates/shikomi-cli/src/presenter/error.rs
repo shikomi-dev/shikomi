@@ -2,6 +2,8 @@
 //!
 //! Presenter は pure。出力（stderr への書き出し）は `run()` の責務。
 
+use std::fmt::Write as _;
+
 use shikomi_infra::persistence::PersistenceError;
 
 use crate::error::CliError;
@@ -30,11 +32,11 @@ fn render_default(err: &CliError, locale: Locale) -> String {
     let (error_en, error_ja, hint_en, hint_ja) = lines_for(err);
     let mut out = format!("error: {error_en}\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!("error: {error_ja}\n"));
+        let _ = writeln!(out, "error: {error_ja}");
     }
-    out.push_str(&format!("hint: {hint_en}\n"));
+    let _ = writeln!(out, "hint: {hint_en}");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!("hint: {hint_ja}\n"));
+        let _ = writeln!(out, "hint: {hint_ja}");
     }
     out
 }
@@ -45,9 +47,10 @@ fn render_daemon_not_running(path: &std::path::Path, locale: Locale) -> String {
     let mut out =
         format!("error: shikomi-daemon is not running (socket {path_disp} unreachable)\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!(
-            "error: shikomi-daemon が起動していません（ソケット {path_disp} に接続できません）\n"
-        ));
+        let _ = writeln!(
+            out,
+            "error: shikomi-daemon が起動していません（ソケット {path_disp} に接続できません）"
+        );
     }
     out.push_str("hint: start the daemon in a separate terminal by running one of:\n");
     out.push_str("hint:   Linux/macOS:            'shikomi-daemon &'\n");
@@ -78,9 +81,10 @@ fn render_protocol_version_mismatch(
 ) -> String {
     let mut out = format!("error: protocol version mismatch (server={server}, client={client})\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!(
-            "error: プロトコルバージョン不一致（server={server}, client={client}）\n"
-        ));
+        let _ = writeln!(
+            out,
+            "error: プロトコルバージョン不一致（server={server}, client={client}）"
+        );
     }
     out.push_str("hint: rebuild shikomi-cli and shikomi-daemon to the same version\n");
     if matches!(locale, Locale::JapaneseEn) {
@@ -93,9 +97,22 @@ fn render_protocol_version_mismatch(
 
 /// 4 段（error 英 / error 日 / hint 英 / hint 日）を返す。
 ///
+/// `CliError` は **同一 crate 定義**のため、`#[non_exhaustive]` 属性があっても
+/// 内部からは exhaustive match が可能。新バリアント追加時にコンパイル時で
+/// 網羅漏れを検出するため、wildcard fallback (`_ =>`) は使わない。
+///
 /// `DaemonNotRunning` / `ProtocolVersionMismatch` は `render_error` 側の専用 helper で
-/// 直接処理するため、ここでは到達しない（防御的に default 文言を返す）。
+/// 描画される（本関数には到達しない契約）。万一到達した場合に備え固定の sentinel
+/// 文言を返し、`debug_assertions` ビルドではパニックさせて開発時に検出可能化する。
 fn lines_for(err: &CliError) -> (String, String, String, String) {
+    let lit = |error_en: &str, error_ja: &str, hint_en: &str, hint_ja: &str| {
+        (
+            error_en.to_owned(),
+            error_ja.to_owned(),
+            hint_en.to_owned(),
+            hint_ja.to_owned(),
+        )
+    };
     match err {
         CliError::UsageError(msg) => (
             msg.clone(),
@@ -128,11 +145,11 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "run \"shikomi add\" to create a plaintext vault".to_owned(),
             "\"shikomi add\" で平文 vault を初期化できます".to_owned(),
         ),
-        CliError::NonInteractiveRemove => (
-            "refusing to delete without --yes in non-interactive mode".to_owned(),
-            "非対話モードでは --yes なしの削除を拒否します".to_owned(),
-            "re-run with --yes to confirm deletion".to_owned(),
-            "削除を確認するには --yes を付けて再実行してください".to_owned(),
+        CliError::NonInteractiveRemove => lit(
+            "refusing to delete without --yes in non-interactive mode",
+            "非対話モードでは --yes なしの削除を拒否します",
+            "re-run with --yes to confirm deletion",
+            "削除を確認するには --yes を付けて再実行してください",
         ),
         CliError::Persistence(pe) => render_persistence_lines(pe),
         CliError::Domain(domain) => (
@@ -141,24 +158,25 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "please report this issue to https://github.com/shikomi-dev/shikomi/issues".to_owned(),
             "https://github.com/shikomi-dev/shikomi/issues に報告してください".to_owned(),
         ),
-        CliError::EncryptionUnsupported => (
-            "this vault is encrypted; encryption is not yet supported in this CLI version"
-                .to_owned(),
-            "この vault は暗号化されています。本バージョンの CLI は暗号化モード未対応です"
-                .to_owned(),
-            "future \"shikomi vault decrypt\" will convert it; for now, use a plaintext vault"
-                .to_owned(),
-            "将来の \"shikomi vault decrypt\" で変換可能になります。暫定的には平文 vault をご利用ください"
-                .to_owned(),
+        CliError::EncryptionUnsupported => lit(
+            "this vault is encrypted; encryption is not yet supported in this CLI version",
+            "この vault は暗号化されています。本バージョンの CLI は暗号化モード未対応です",
+            "future \"shikomi vault decrypt\" will convert it; for now, use a plaintext vault",
+            "将来の \"shikomi vault decrypt\" で変換可能になります。暫定的には平文 vault をご利用ください",
         ),
-        // `DaemonNotRunning` / `ProtocolVersionMismatch` は `render_error` 側で先に分岐済み。
-        // `#[non_exhaustive]` 防御的 wildcard も含めて到達しないが、フォールバック文言を返す。
-        _ => (
-            "internal: unhandled error variant".to_owned(),
-            "内部: 未処理のエラーバリアント".to_owned(),
-            "please report this issue to https://github.com/shikomi-dev/shikomi/issues".to_owned(),
-            "https://github.com/shikomi-dev/shikomi/issues に報告してください".to_owned(),
-        ),
+        CliError::DaemonNotRunning(_) | CliError::ProtocolVersionMismatch { .. } => {
+            debug_assert!(
+                false,
+                "lines_for should not be reached for DaemonNotRunning / ProtocolVersionMismatch; \
+                 they are dispatched by render_error to dedicated helpers"
+            );
+            lit(
+                "internal: this variant is rendered by a dedicated helper",
+                "内部: このバリアントは専用のヘルパで描画されます",
+                "please report this issue to https://github.com/shikomi-dev/shikomi/issues",
+                "https://github.com/shikomi-dev/shikomi/issues に報告してください",
+            )
+        }
     }
 }
 
