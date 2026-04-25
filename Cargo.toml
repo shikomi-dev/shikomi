@@ -68,9 +68,9 @@ predicates      = "3"
 expectrl        = "0.8"
 # Sub-B (#40) vault 暗号化 KDF / RNG / 強度ゲート用 crate（tech-stack.md §4.7）。
 # 全て pure Rust、shikomi-infra のみが依存（shikomi-core は no-I/O 制約継承）。
-argon2          = { version = "0.5",  default-features = false, features = ["alloc", "zeroize"] }
-hkdf            = { version = "0.12", default-features = false }
-sha2            = { version = "0.10", default-features = false }
+argon2          = { version = "0.5",  default-features = false, features = ["alloc", "std", "zeroize"] }
+hkdf            = { version = "0.12", default-features = false, features = ["std"] }
+sha2            = { version = "0.10", default-features = false, features = ["std"] }
 bip39           = { version = "2",                              features = ["std", "zeroize"] }
 rand_core       = { version = "0.6",                            features = ["getrandom"] }
 getrandom       = "0.2"

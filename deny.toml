@@ -22,6 +22,13 @@ allow = [
     # hashlink 0.9.x（rusqlite 0.31 の依存）が MPL-2.0 ライセンス。
     # Issue #10 で導入した rusqlite による一時例外。rusqlite バージョン更新時に再評価すること。
     "MPL-2.0",
+    # Sub-B (#40) で導入する暗号 crate チェーンが採用するライセンス。
+    # - `subtle` v2.x (BSD-3-Clause): tech-stack §4.7 凍結、constant-time 比較標準
+    # - `bip39` v2.x / `bitcoin_hashes` / `hex-conservative` (CC0-1.0): rust-bitcoin
+    #   org 配下の BIP-39 24 語実装と依存。tech-stack §4.7 で `tiny-bip39` 不採用根拠と
+    #   セットで凍結済。CC0-1.0 は public domain dedication で OSS 互換。
+    "BSD-3-Clause",
+    "CC0-1.0",
 ]
 
 [bans]
