@@ -381,3 +381,19 @@ grep -rn "rand::\|getrandom::\|OsRng" crates/shikomi-core/src/ --include='*.rs' 
 | Sub-D (#42) | `MasterPassword::new` × `ZxcvbnGate` の Fail Kindly E2E、`WeakPasswordFeedback` の MSG-S08 表示テスト、Sub-0 で凍結した MSG-S16/S18 + REQ-S13 アクセシビリティ |
 | Sub-E (#43) | `Vek` キャッシュ寿命管理（アイドル 15min / サスペンドで `Drop` 強制）、`SecretBox::expose_secret` 呼出箇所の grep 監査 |
 | Sub-F (#44) | CLI / GUI からの `MasterPassword::new` 経路、`RecoveryMnemonic` 初回 1 度表示の Drop 強制、MSG-S16/S17/S18 文言確定 |
+
+### 10.11 Sub-A 工程4 実施実績（2026-04-25、PR #49 / `5373043`）
+
+| 区分 | TC 数 | pass | 検証手段 |
+|---|---|---|---|
+| ユニット（runtime） | 12 | 12 | CI `cargo test -p shikomi-core` で 159 unit pass |
+| ユニット（compile_fail doctest） | 6 | 8 doctest pass（C-2/4/5/6/7 + Plaintext/Mnemonic/HeaderAeadKey 越境） | CI `Doc-tests shikomi_core: 8 passed` + Docker `rust:1.95-slim` 再現一致 |
+| 結合 | 3 | 3 | `tests/docs/sub-a-static-checks.sh` (TC-A-I01 NonceOverflow rename / TC-A-I02 no-I/O purity / TC-A-U13 KdfSalt single-entry) + CI 8 ジョブ全 SUCCESS |
+| E2E | 1 | 1 | compile_fail doctest 8 件全 pass で野木ペルソナの `cargo doc` 対話を間接担保 |
+| **合計** | **22** | **22** | **CI + Docker + 静的 grep の三系で交叉確認** |
+
+**Bug-A-001 顛末（自己反省として残す）**: 本工程開始時、CI ログを `grep -E "Doc-tests|test result"` で抽出した範囲が狭く、Doc-tests セクション直後の `1 passed` を見て「9 個書いた compile_fail doctest が 1 件しか走っていない」と誤認した。Docker `rust:1.95-slim` で `cargo test --doc -p shikomi-core` を再現したところ **8 件全 pass**、CI ログを `grep -cE "test crates/.*compile fail \.\.\. ok"` で件数取得したところ同じく 8 件 pass を確認。**Bug-A-001 は誤認で撤回**。教訓: テストレポート作成時は **CI ログ依存だけでなく Docker で答え合わせ**を必須化し、静的検証スクリプトに件数 assert を組み込む（justfile に `test-doc-core` レシピを Boy Scout で追加済、CI 統合は Sub-B 以降の任意拡張に委ねる）。
+
+**新規補助スクリプト**:
+- `tests/docs/sub-a-static-checks.sh`: TC-A-I01 / I02 / U13 の grep ベース静的検証（cargo 不要、ローカルで即実行可）
+- `justfile test-doc-core`: compile_fail doctest 件数を独立に観測する recipe

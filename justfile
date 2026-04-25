@@ -39,6 +39,12 @@ test:
 test-core:
     cargo test -p shikomi-core
 
+# Sub-A (#39) Issue #39 工程4 で導入。`cargo test -p shikomi-core` に既に
+# doctest は含まれるが、compile_fail doctest の件数のみを独立に確認したい
+# ケース (CI ログ抽出ミスによる Bug-A-001 の再発防止) のための補助レシピ。
+test-doc-core:
+    cargo test --doc -p shikomi-core
+
 test-infra:
     cargo test -p shikomi-infra
 
