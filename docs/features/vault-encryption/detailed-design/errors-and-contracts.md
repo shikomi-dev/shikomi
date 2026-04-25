@@ -97,7 +97,8 @@ classDiagram
         +WeakPassword_WeakPasswordFeedback
         +AeadTagMismatch
         +NonceLimitExceeded
-        +KdfFailed
+        +KdfFailed_KdfErrorKind_source
+        +InvalidMnemonic
         +VerifyRequired
     }
     class KdfErrorKind {
@@ -110,18 +111,42 @@ classDiagram
 
 | variant | `#[error(...)]` 文言 | 説明 |
 |--------|------------------|------|
-| `WeakPassword(WeakPasswordFeedback)` | `#[error("weak password rejected by strength gate")]` | `MasterPassword::new` 構築失敗 |
+| `WeakPassword(Box<WeakPasswordFeedback>)` | `#[error("weak password rejected by strength gate")]` | `MasterPassword::new` 構築失敗（Sub-A 実装で `Box` 化、`clippy::result_large_err` 解消） |
 | `AeadTagMismatch` | `#[error("AEAD authentication tag verification failed")]` | AEAD 復号タグ不一致 |
 | `NonceLimitExceeded` | `#[error("nonce counter exceeded {limit}; rekey required")]` | `NonceCounter::increment` 上限到達（`limit = 1u64 << 32`） |
-| `KdfFailed { kind: KdfErrorKind, source: Box<dyn std::error::Error + Send + Sync> }` | `#[error("KDF computation failed: {kind:?}")]` | Sub-B の Argon2id / PBKDF2 / HKDF 失敗を内包 |
+| `KdfFailed { kind: KdfErrorKind, source: Box<dyn std::error::Error + Send + Sync> }` | `#[error("KDF computation failed: {kind:?}")]` | Sub-B の Argon2id / PBKDF2 / HKDF 失敗を内包（詳細 source 型は本書 §`KdfErrorKind` 各 variant の source 型 参照） |
+| `InvalidMnemonic` | `#[error("invalid BIP-39 mnemonic: wordlist mismatch or checksum failure")]` | **Sub-B 新規 variant**: `bip39::Mnemonic::parse_in` 失敗（wordlist 不一致 / checksum 不一致 / 単語数不正）。Sub-D の `vault unlock --recovery` で MSG-S12 に変換 |
 | `VerifyRequired` | `#[error("Plaintext requires Verified<_> wrapper")]` | テスト経路で `Plaintext` を `Verified` 経由なしで構築しようとした場合の runtime 検出（通常は型レベルで防がれる） |
 
-## `VekProvider` trait（既存、Sub-A での精緻化）
+### `KdfErrorKind` 各 variant の source 型詳細（**Sub-B で確定**）
+
+| variant | 発火条件 | source 型（boxed） |
+|--------|---------|-----------------|
+| `KdfErrorKind::Argon2id` | `argon2::Argon2::hash_password_into` が `Err(argon2::Error)` を返した（Params 構築失敗 / メモリ不足 / 出力長不正等） | `argon2::Error`（`std::error::Error + Send + Sync` を満たす、`Box::new` で内包） |
+| `KdfErrorKind::Pbkdf2` | `bip39::Mnemonic::to_seed` 内部の PBKDF2 失敗（`bip39` crate v2 では実質発生しないが将来の lib 仕様変更に備えて variant 保持） | `bip39::Error` または将来追加の `pbkdf2::Error`（`Box::new` で内包） |
+| `KdfErrorKind::Hkdf` | `hkdf::Hkdf::<Sha256>::expand` が出力長エラー（`okm.len() > 255 * Hash::OutputSize` 超過時） | `hkdf::InvalidLength`（`Box::new` で内包） |
+
+**Sub-B 実装契約**:
+
+- `KdfErrorKind` は `#[derive(Debug, Clone, Copy, PartialEq, Eq)]`（変換用途のため `Clone` / `Copy` 許可、秘密値ではない）
+- `source` は **必ず `Box<dyn std::error::Error + Send + Sync>` で包む**（`thiserror::Error` の `#[source]` attribute と整合、`Display` チェーンで原因辿れる）
+- `KdfFailed` のメッセージは `kind` のみ表示（`source` の details は `error::Error::source()` で別経路取得）— 秘密値が `source` 文字列に滲まない構造保証
+
+## `VekProvider` trait（既存、Sub-A 精緻化 + Sub-B 具象実装）
 
 - 既存の `new_vek` / `reencrypt_all` / `derive_new_wrapped_pw` / `derive_new_wrapped_recovery` は維持
-- ただし、引数型の `&SecretBytes` を **`&Vek` に置き換える**（Sub-A 新規 `Vek` 型導入に伴う精度向上、Boy Scout Rule）
-- 影響範囲: Sub-B 実装時に `VekProvider` の具象実装を新設するため、置換コストはゼロ
-- 詳細な変更後シグネチャは Sub-B 設計時に本分冊へ追記
+- 引数型の `&SecretBytes` を **`&Vek` に置き換える**（Sub-A 新規 `Vek` 型導入に伴う精度向上、Boy Scout Rule）
+- **Sub-B 具象実装の場所**: `shikomi_infra::crypto::vek_provider::Argon2idHkdfVekProvider` として shikomi-infra に新設
+- **Sub-B 具象実装シグネチャ**:
+  - `pub struct Argon2idHkdfVekProvider { argon2: Argon2idAdapter, bip39_hkdf: Bip39Pbkdf2Hkdf, rng: Rng, new_vek: Vek }`
+  - `impl Argon2idHkdfVekProvider { pub fn new(rng: &Rng) -> Self { Self { argon2: Argon2idAdapter::default(), bip39_hkdf: Bip39Pbkdf2Hkdf, rng: *rng, new_vek: rng.generate_vek() } } }`
+  - `impl VekProvider for Argon2idHkdfVekProvider { ... }` — 既存 trait を実装
+- **責務**:
+  - `new_vek(&self) -> &Vek`: 構築時に `Rng::generate_vek` で生成した `Vek` への参照を返す（Sub-A 既存 `Vault::rekey_with` に適合）
+  - `derive_new_wrapped_pw(&self, vek: &Vek, password: &MasterPassword, salt: &KdfSalt) -> Result<WrappedVek, CryptoError>`: Argon2idAdapter で KEK_pw 導出 → Sub-C の AES-GCM wrap で `WrappedVek` 構築（Sub-C 完成後に追記）
+  - `derive_new_wrapped_recovery(&self, vek: &Vek, mnemonic: &RecoveryMnemonic) -> Result<WrappedVek, CryptoError>`: Bip39Pbkdf2Hkdf で KEK_recovery 導出 → AES-GCM wrap（同上）
+  - `reencrypt_all(&mut self, records: &mut [Record], new_vek: &Vek) -> Result<(), CryptoError>`: Sub-C / Sub-D で結合
+- **Sub-C / Sub-D での追記対象**: 上記 `derive_new_wrapped_*` / `reencrypt_all` の `WrappedVek` 構築経路（AES-GCM wrap 部分）は Sub-C 完成後に本書 + `nonce-and-aead.md` で確定
 
 ## 不変条件・契約サマリ補強（C-1〜C-13）
 

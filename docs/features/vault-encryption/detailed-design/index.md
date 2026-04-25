@@ -12,23 +12,27 @@
 詳細設計に**疑似コード・サンプル実装（python/ts/go等の言語コードブロック）を書くな**。
 ソースコードと二重管理になりメンテナンスコストしか生まない。
 
-## 分冊構成（Sub-A 完了時点）
+## 分冊構成（Sub-B 完了時点、**Sub-A の 4 分冊から 6 分冊へ拡張**）
 
 | 分冊 | 主担当範囲 | 主な対象型・契約 |
 |-----|---------|--------------|
-| [`crypto-types.md`](./crypto-types.md) | 鍵階層型 | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey` |
-| [`password.md`](./password.md) | パスワード認証境界 | `MasterPassword` / `PasswordStrengthGate` trait / `WeakPasswordFeedback`（**`warning=None` 契約 + i18n 責務分離**） |
-| [`nonce-and-aead.md`](./nonce-and-aead.md) | nonce / AEAD 境界 | `NonceCounter`（責務再定義） / `NonceBytes::from_random` / `WrappedVek` / `AuthTag` / `Verified<T>` / `Plaintext` / `verify_aead_decrypt`（**呼び出し側主張マーカー契約 + 可視性 `pub(in crate::crypto::verified)`**） |
-| [`errors-and-contracts.md`](./errors-and-contracts.md) | エラー型 / リカバリ / 契約サマリ | `RecoveryMnemonic` / `CryptoOutcome<T>` / `CryptoError` / `DomainError` 拡張 / `VekProvider` / 設計判断の補足（なぜ phantom-typed 等） / **契約 C-1〜C-13 サマリ表** |
+| [`crypto-types.md`](./crypto-types.md) | 鍵階層型（Sub-A） | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey` |
+| [`password.md`](./password.md) | パスワード認証境界（Sub-A trait + Sub-B `ZxcvbnGate` 実装） | `MasterPassword` / `PasswordStrengthGate` trait / `WeakPasswordFeedback`（**`warning=None` 契約 + i18n 責務分離**） / **`ZxcvbnGate`（Sub-B 新規）** |
+| [`nonce-and-aead.md`](./nonce-and-aead.md) | nonce / AEAD 境界（Sub-A 型 + Sub-C 実装結合） | `NonceCounter`（責務再定義） / `NonceBytes::from_random` / `WrappedVek` / `AuthTag` / `Verified<T>` / `Plaintext` / `verify_aead_decrypt`（**呼び出し側主張マーカー契約 + 可視性 `pub(in crate::crypto::verified)`**） |
+| [`errors-and-contracts.md`](./errors-and-contracts.md) | エラー型 / リカバリ / 契約サマリ（Sub-A 型 + Sub-B `KdfErrorKind` 詳細 + `InvalidMnemonic` variant） | `RecoveryMnemonic` / `CryptoOutcome<T>` / `CryptoError` / `DomainError` 拡張 / `VekProvider`（**Sub-B 具象 `Argon2idHkdfVekProvider`**） / 設計判断の補足 / **契約 C-1〜C-13 サマリ表** |
+| **[`kdf.md`](./kdf.md)（Sub-B 新規）** | KDF アダプタ（shikomi-infra） | `Argon2idAdapter`（`m=19456, t=2, p=1`、RFC 9106 KAT、criterion p95 1 秒） / `Bip39Pbkdf2Hkdf`（24 語 → seed → KEK_recovery、HKDF info `b"shikomi-kek-v1"`、trezor + RFC 5869 KAT） / `Argon2idParams::FROZEN_OWASP_2024_05` const |
+| **[`rng.md`](./rng.md)（Sub-B 新規）** | CSPRNG 単一エントリ点（shikomi-infra） | `Rng`（`rand_core::OsRng` + `getrandom` バックエンド） / `generate_kdf_salt` / `generate_vek` / `generate_nonce_bytes` / `generate_mnemonic_entropy`（Sub-0 凍結文言「KdfSalt::generate() 単一コンストラクタ」の Clean Arch 整合的物理実装） |
 
 ```
 ディレクトリ構造:
 docs/features/vault-encryption/detailed-design/
   index.md                   # 本ファイル（分冊索引 + 全 public API クラス図 + データ構造表）
   crypto-types.md            # Vek / Kek<Kind> / HeaderAeadKey
-  password.md                # MasterPassword / PasswordStrengthGate / WeakPasswordFeedback
+  password.md                # MasterPassword / PasswordStrengthGate / WeakPasswordFeedback / ZxcvbnGate
   nonce-and-aead.md          # Verified<T> / Plaintext / NonceCounter / NonceBytes / WrappedVek / AuthTag
-  errors-and-contracts.md    # RecoveryMnemonic / CryptoError / CryptoOutcome / 契約サマリ / 設計判断補足
+  errors-and-contracts.md    # RecoveryMnemonic / CryptoError / CryptoOutcome / VekProvider 具象 / 契約サマリ
+  kdf.md                     # Argon2idAdapter / Bip39Pbkdf2Hkdf / Argon2idParams const  [Sub-B 新規]
+  rng.md                     # Rng (OsRng 単一エントリ点) / generate_*  [Sub-B 新規]
 ```
 
 **分割方針**:
@@ -194,7 +198,7 @@ classDiagram
 
 各 Sub の設計工程で本ディレクトリ内の対応分冊を READ → EDIT で以下を追記する。
 
-- **Sub-B**: KDF アダプタの詳細クラス図（`Argon2idAdapter` / `Bip39Pbkdf2Hkdf` / `RngEntryPoint`）、`PasswordStrengthGate` の `ZxcvbnGate` 実装詳細、KAT データ取得経路 → `password.md` + 新規 `kdf.md`（必要なら追加）
+- **Sub-B（完了、本書 Rev により本項目は履歴）**: KDF アダプタの詳細クラス図（`Argon2idAdapter` / `Bip39Pbkdf2Hkdf`）、`PasswordStrengthGate` の `ZxcvbnGate` 実装詳細、KAT データ取得経路、CSPRNG 単一エントリ点 `Rng` → **新規 `kdf.md` + `rng.md` を追加**、`password.md` に `ZxcvbnGate` 章追加、`errors-and-contracts.md` に `KdfErrorKind` source 型詳細 + `InvalidMnemonic` variant + `Argon2idHkdfVekProvider` 具象 を追加
 - **Sub-C**: AEAD アダプタの詳細クラス図（`AesGcmAdapter`）、`verify_aead_decrypt` ラッパ関数の呼び出し経路の補強、ヘッダ AEAD 検証関数 `unverify_header` → `nonce-and-aead.md` + 新規 `aead-adapter.md`（必要なら追加）
 - **Sub-D**: `EncryptedSqliteVaultRepository` の SQLite スキーマ、平文⇄暗号化マイグレーション手順、`vault encrypt` 入口の `MasterPassword::new` 経路、ヘッダ独立 AEAD タグの永続化フォーマット → 新規 `repository-and-migration.md`
 - **Sub-E**: VEK キャッシュの `tokio::sync::RwLock<Option<Vek>>` 設計、IPC V2 `IpcRequest` variant 追加、アンロック失敗バックオフ実装、`change-password` の `wrapped_VEK_by_pw` 単独更新フロー → 新規 `vek-cache-and-ipc.md`

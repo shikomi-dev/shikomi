@@ -2,13 +2,15 @@
 
 <!-- 親: docs/features/vault-encryption/detailed-design/index.md -->
 <!-- 配置先: docs/features/vault-encryption/detailed-design/password.md -->
-<!-- 主担当: Sub-A (#39) で trait + Feedback 構造体、Sub-D (#42) で zxcvbn 実装。 -->
+<!-- 主担当: Sub-A (#39) で trait + Feedback 構造体、Sub-B (#40) で ZxcvbnGate 具象実装、Sub-D (#42) で `vault encrypt` 入口統合 + MSG-S08 文言。 -->
+<!-- Boy Scout Rule (Sub-B): zxcvbn 実装の担当 Sub を Sub-D → Sub-B に再分配（ZxcvbnGate は shikomi-infra::crypto::password 配下の暗号アダプタ層、Sub-D の vault リポジトリ責務とは独立、Clean Arch 境界整合）。 -->
 
 ## 対象型
 
-- `shikomi_core::crypto::password::MasterPassword`
-- `shikomi_core::crypto::password::PasswordStrengthGate` trait
-- `shikomi_core::crypto::password::WeakPasswordFeedback`
+- `shikomi_core::crypto::password::MasterPassword`（Sub-A）
+- `shikomi_core::crypto::password::PasswordStrengthGate` trait（Sub-A）
+- `shikomi_core::crypto::password::WeakPasswordFeedback`（Sub-A）
+- `shikomi_infra::crypto::password::ZxcvbnGate`（**Sub-B 新規**、Sub-A 段階で「Sub-D 担当」と書いていた経路を再分配）
 
 ## `MasterPassword`
 
@@ -50,10 +52,48 @@ classDiagram
 
 - **唯一のメソッド**: `fn validate(&self, password: &str) -> Result<(), WeakPasswordFeedback>;`
 - **dyn-safe**: `&dyn PasswordStrengthGate` として `MasterPassword::new` に渡せる
-- **実装場所**: shikomi-core では trait シグネチャと `WeakPasswordFeedback` 型のみ定義。**実装（zxcvbn 呼出）は Sub-D の `shikomi-infra::crypto::ZxcvbnGate` 担当**（REQ-S08 の zxcvbn 呼出は Sub-D に残置 — Sub-A は trait のみ）
-- **強度判定基準**: trait 自体は基準を持たない（実装が決定）。Sub-D の `ZxcvbnGate` 実装は zxcvbn 強度 ≥ 3 を採用（`tech-stack.md` §4.7 `zxcvbn` 行 / Sub-0 REQ-S08）
+- **実装場所**: shikomi-core では trait シグネチャと `WeakPasswordFeedback` 型のみ定義。**実装（zxcvbn 呼出）は Sub-B の `shikomi_infra::crypto::password::ZxcvbnGate` 担当**（Boy Scout Rule で Sub-D → Sub-B に再分配、本ファイル §`ZxcvbnGate` 具象実装 を参照）
+- **強度判定基準**: trait 自体は基準を持たない（実装が決定）。Sub-B の `ZxcvbnGate` 実装は zxcvbn 強度 ≥ 3 を採用（`tech-stack.md` §4.7 `zxcvbn` 行 / Sub-0 REQ-S08）
 
-### Sub-D が遵守すべき契約
+### `ZxcvbnGate` 具象実装（Sub-B 新規）
+
+#### 型定義
+
+- `pub struct ZxcvbnGate { min_score: u8 }`（Sub-B、shikomi-infra）
+- `impl Default for ZxcvbnGate { fn default() -> Self { Self { min_score: 3 } } }`
+- 凍結値 `min_score = 3`（`tech-stack.md` §4.7 `zxcvbn` 行 + Sub-0 REQ-S08、`zxcvbn::Score::Three` 以上）
+- `Default` で構築すれば本番実装、テストで `ZxcvbnGate { min_score: 0 }` を作れば `AlwaysAcceptGate` 等価（テスト容易性）
+
+#### `impl PasswordStrengthGate for ZxcvbnGate`
+
+- `validate(&self, password: &str) -> Result<(), WeakPasswordFeedback>` の責務:
+  1. `let result = zxcvbn::zxcvbn(password, &[]);` で強度スコア算定（`user_inputs = &[]` で初期実装、Sub-D で username / vault path 文脈追加検討）
+  2. `if (result.score() as u8) >= self.min_score { return Ok(()); }`
+  3. `Err` ブランチで `result.feedback()` から英語 raw を取り出し `WeakPasswordFeedback { warning: feedback.and_then(|f| f.warning().map(|w| w.to_string())), suggestions: feedback.map(|f| f.suggestions().iter().map(|s| s.to_string()).collect()).unwrap_or_default() }` を構築
+
+#### Sub-B が遵守すべき契約
+
+1. **panic 禁止**: `zxcvbn::zxcvbn` 自体は panic しない設計だが、shikomi-infra 側で `unwrap()` / `expect()` を使わない。`feedback()` が `None` の場合（zxcvbn が改善案を出さないケース）は `warning: None, suggestions: Vec::new()` で Ok（`warning=None` 契約は Sub-D 側のフォールバック責務、本ファイル §`warning=None` 時の代替警告文契約）
+2. **副作用なし**: `validate` は `&self`、内部状態を変更しない
+3. **i18n 層を持たない**: 英語 raw 文字列を `WeakPasswordFeedback.warning` / `suggestions` にそのまま詰める（i18n 翻訳は呼出側 = Sub-D / Sub-F の責務、本ファイル §i18n 戦略責務分離）
+4. **無状態**: `ZxcvbnGate` は内部に zxcvbn インスタンスを保持しない（zxcvbn は呼出毎に内部 fresh、shared state なし）
+5. **タイミング攻撃対策**: 初期実装では定数時間化を**実装しない**（vault encrypt 入口 Fail Fast 用途、L1 の脅威範囲では限定的、`detailed-design/password.md` §Sub-D が遵守すべき契約 第 4 項参照）。Sub-D で `vault unlock` 経路にも流用する場合は再評価
+
+#### モジュール配置
+
+```
+crates/shikomi-infra/src/crypto/
+  password/                    +  本 Sub-B 新規モジュール
+    mod.rs                     +  ZxcvbnGate 再エクスポート
+    zxcvbn_gate.rs             +  ZxcvbnGate 本体実装
+```
+
+#### 後続 Sub への引継ぎ
+
+- **Sub-D**: `vault encrypt` サブコマンドから `let gate = ZxcvbnGate::default(); MasterPassword::new(input, &gate)?;` の経路で呼出。`Err(CryptoError::WeakPassword(feedback))` を MSG-S08 に変換、`warning=None` フォールバック実装
+- **Sub-F**: CLI 出力層で MSG-S08 文言確定（i18n 翻訳辞書方式、本ファイル §i18n 戦略責務分離）
+
+### Sub-B が遵守すべき契約（旧 Sub-D 担当の再記載）
 
 1. **強度判定の合否しか trait シグネチャに表れない**: 内部スコア値 / 内部辞書 / 計算時間など実装詳細は `Result<(), WeakPasswordFeedback>` の外側に漏らさない
 2. **runtime panic 禁止**: `validate` の実装は決して panic しない。zxcvbn の内部例外は `WeakPasswordFeedback` または `Ok(())` のいずれかに収束させる

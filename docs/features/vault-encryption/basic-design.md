@@ -25,8 +25,12 @@
 | REQ-S02 | `shikomi_core::crypto::header_aead` | `crates/shikomi-core/src/crypto/header_aead.rs` | `HeaderAeadKey` 型（Sub-0 凍結のヘッダ AEAD = KEK_pw 流用契約の型表現） | **新規追加** |
 | REQ-S14 | `shikomi_core::vault::nonce` | `crates/shikomi-core/src/vault/nonce.rs` | `NonceCounter` の責務再定義（暗号化回数監視のみ）、`NonceBytes::from_random([u8;12])` 追加 | **既存改訂**（Boy Scout Rule） |
 | REQ-S02 | `shikomi_core::vault::crypto_data` | `crates/shikomi-core/src/vault/crypto_data.rs` | `WrappedVek` 内部構造の分離型化（ciphertext + nonce + tag） | **既存改訂**（Boy Scout Rule） |
-| REQ-S08（trait のみ） | `shikomi_core::crypto::password` | 同上 | `PasswordStrengthGate` trait シグネチャ確定（実装は Sub-D） | **新規追加（trait のみ）** |
+| REQ-S08（trait のみ） | `shikomi_core::crypto::password` | 同上 | `PasswordStrengthGate` trait シグネチャ確定（**実装は Sub-B、Boy Scout Rule で旧 Sub-D 担当を再分配**） | **新規追加（trait のみ）** |
 | 全 Sub | `shikomi_core::crypto` | `crates/shikomi-core/src/crypto/mod.rs` | 暗号ドメイン型のエントリ。`shikomi_core` ルートから再エクスポート | **新規追加** |
+| REQ-S03 | `shikomi_infra::crypto::kdf::argon2id` | `crates/shikomi-infra/src/crypto/kdf/argon2id.rs` | `Argon2idAdapter`（パスワード → KEK_pw、`m=19456, t=2, p=1`、RFC 9106 KAT、criterion p95 1 秒） | **Sub-B 新規追加** |
+| REQ-S04 | `shikomi_infra::crypto::kdf::bip39_pbkdf2_hkdf` | `crates/shikomi-infra/src/crypto/kdf/bip39_pbkdf2_hkdf.rs` | `Bip39Pbkdf2Hkdf`（24 語 → seed → KEK_recovery、HKDF info `b"shikomi-kek-v1"`、trezor + RFC 5869 KAT） | **Sub-B 新規追加** |
+| REQ-S02 / 全 Sub | `shikomi_infra::crypto::rng` | `crates/shikomi-infra/src/crypto/rng.rs` | `Rng`（`rand_core::OsRng` + `getrandom` バックエンド、`generate_kdf_salt` / `generate_vek` / `generate_nonce_bytes` / `generate_mnemonic_entropy` の単一エントリ点、Sub-0 凍結文言「`KdfSalt::generate()` 単一コンストラクタ」の Clean Arch 整合的物理実装） | **Sub-B 新規追加** |
+| REQ-S08（実装） | `shikomi_infra::crypto::password::zxcvbn_gate` | `crates/shikomi-infra/src/crypto/password/zxcvbn_gate.rs` | `ZxcvbnGate`（zxcvbn 強度 ≥ 3、英語 raw `Feedback` をそのまま運ぶ、i18n は呼出側責務） | **Sub-B 新規追加（旧 Sub-D 担当の Boy Scout Rule 再分配）** |
 
 ```
 ディレクトリ構造（Sub-A 完了時点、+ が新規、~ が改訂）:
@@ -47,6 +51,24 @@ crates/shikomi-core/src/
     recovery.rs          +  RecoveryMnemonic（24 語）
     verified.rs          +  Verified<T> / Plaintext Fail-Secure newtype
     header_aead.rs       +  HeaderAeadKey 型（Sub-0 凍結のヘッダ AEAD 鍵経路）
+
+ディレクトリ構造（Sub-B 完了時点、+ が新規）:
+crates/shikomi-infra/src/
+  lib.rs                  ~  pub use crypto::* を追記
+  crypto/                +  本 Sub-B 新規モジュール（暗号アダプタ層）
+    mod.rs               +  rng / kdf / password の再エクスポート
+    rng.rs               +  Rng (OsRng 単一エントリ点) / generate_kdf_salt / generate_vek / generate_nonce_bytes / generate_mnemonic_entropy
+    kdf/                 +  KDF アダプタ
+      mod.rs             +  Argon2idAdapter / Bip39Pbkdf2Hkdf 再エクスポート
+      argon2id.rs        +  Argon2idAdapter + Argon2idParams::FROZEN_OWASP_2024_05 const
+      bip39_pbkdf2_hkdf.rs +  Bip39Pbkdf2Hkdf + HKDF_INFO const (b"shikomi-kek-v1")
+      kat.rs             +  RFC 9106 / trezor / RFC 5869 KAT データ (test cfg)
+    password/            +  パスワード強度ゲート
+      mod.rs             +  ZxcvbnGate 再エクスポート
+      zxcvbn_gate.rs     +  ZxcvbnGate (PasswordStrengthGate 具象実装、min_score = 3)
+    vek_provider.rs      +  Argon2idHkdfVekProvider (shikomi_core::VekProvider 具象実装、Sub-C/D で wrap 経路を結合)
+  benches/                + 
+    argon2id.rs          +  criterion benchmark (p95 ≤ 1.0 秒、CI bench-kdf job で必須 pass)
 ```
 
 **モジュール設計方針**:
@@ -184,11 +206,46 @@ classDiagram
 4. **vault save 時**: `NonceCounter::current()` で現在のカウント値を取り出しヘッダに保存
 5. **上限到達時**: 呼び出し側（Sub-D / Sub-F）は `vault rekey` フローを起動（Vault::rekey_with(VekProvider) 既存メソッド経路、Issue #7 完了済）
 
-### Sub-B〜F の処理フロー
+### REQ-S03 / REQ-S04 / REQ-S08（実装）: KDF + Rng + ZxcvbnGate（Sub-B 主機能）
+
+#### F-B1: パスワード経路 KEK_pw 導出フロー（呼び出し側 = Sub-D の `vault unlock` / `vault encrypt`）
+
+1. CLI / GUI からユーザ入力された生 `String` を受け取る（Sub-D / Sub-F 責務）
+2. `let gate = ZxcvbnGate::default();`（`min_score = 3` 凍結値、shikomi-infra）
+3. `MasterPassword::new(s, &gate)?` で構築（Sub-A `crypto::password`、内部で `gate.validate(&s)` を呼び `zxcvbn::zxcvbn(s, &[]).score() >= 3` を判定、未達なら `Err(CryptoError::WeakPassword(Box::new(WeakPasswordFeedback)))`）
+4. **vault encrypt 初回**: `let salt = rng.generate_kdf_salt();`（shikomi-infra `Rng`、`OsRng::fill_bytes` で 16B を `KdfSalt` にラップ）。**vault unlock**: vault ヘッダから既存 `KdfSalt::try_new(stored_bytes)?` で復元
+5. `let kek_pw = Argon2idAdapter::default().derive_kek_pw(&master_password, &salt)?;`（shikomi-infra `kdf::argon2id`、`Argon2id m=19456 t=2 p=1 → [u8;32]` を `Kek<KekKindPw>` にラップ）
+6. `kek_pw` で AEAD wrap/unwrap（Sub-C で結合）。`master_password` / `kek_pw` / 中間バッファ全て scope 抜けで `Drop` 連鎖 zeroize
+
+#### F-B2: リカバリ経路 KEK_recovery 導出フロー（呼び出し側 = Sub-D の `vault unlock --recovery`）
+
+1. CLI / GUI からユーザ入力 24 語 `[String; 24]` を受け取る（Sub-D / Sub-F 責務）
+2. `RecoveryMnemonic::from_words(words)?` で軽量検証（Sub-A、長さ + ASCII 性のみ）
+3. `let kek_recovery = Bip39Pbkdf2Hkdf.derive_kek_recovery(&mnemonic)?;`（shikomi-infra `kdf::bip39_pbkdf2_hkdf`）
+   - 内部: `bip39::Mnemonic::parse_in(English, joined)` で wordlist + checksum 検証 → 失敗時 `Err(CryptoError::InvalidMnemonic)`
+   - 内部: `mnemonic.to_seed("")` で 64B seed 生成（PBKDF2-HMAC-SHA512 2048iter）
+   - 内部: `Hkdf::<Sha256>::new(None, &seed).expand(b"shikomi-kek-v1", &mut [u8;32])` で KEK_recovery 導出
+4. `kek_recovery` で AEAD unwrap（Sub-C で結合）。中間 seed 64B + KEK 32B 全て `Zeroizing` で囲み `Drop` 時 zeroize
+
+#### F-B3: VEK / Mnemonic Entropy 生成フロー（呼び出し側 = Sub-D の `vault encrypt` 初回）
+
+1. `let rng = Rng::default();`（無状態 struct、構築コストゼロ）
+2. `let vek = rng.generate_vek();`（`OsRng` で 32B 生成 → `Vek::from_array` でラップ）
+3. `let entropy = rng.generate_mnemonic_entropy();`（`OsRng` で 32B `Zeroizing<[u8;32]>` を生成）
+4. `let mnemonic = bip39::Mnemonic::from_entropy(&entropy[..])?;` → `RecoveryMnemonic::from_words(mnemonic.words())?` で型化（Sub-D で結合、初回 1 度きり表示）
+5. 後続: VEK で `wrap_with_kek_pw` / `wrap_with_kek_recovery` の wrap 経路（Sub-C 結合）
+
+#### F-B4: ZxcvbnGate `warning=None` 経路（Sub-D へのフォールバック責務移譲）
+
+1. ユーザ入力パスワードが zxcvbn 強度 < 3 だが、`zxcvbn::Feedback::warning()` が `None` を返した
+2. `ZxcvbnGate::validate` が `Err(WeakPasswordFeedback { warning: None, suggestions: vec![...] })` を返す（Sub-B、英語 raw のまま）
+3. **Sub-D の MSG-S08 文言層**で `warning.is_none()` を検出 → フォールバック警告文（既定文言 / `suggestions[0]` / 強度スコア値のいずれか）を提示（`detailed-design/password.md` §`warning=None` 時の代替警告文契約）
+4. `WeakPasswordFeedback` を IPC 経由で daemon → CLI / GUI に渡し、ユーザ提示まで Fail Kindly 維持
+
+### Sub-C〜F の処理フロー
 
 各 Sub の設計工程で本ファイルを READ → EDIT で追記する。
 
-- F-B*: KDF 経路（Argon2id / BIP-39+PBKDF2+HKDF）— Sub-B
 - F-C*: AEAD 経路（AES-256-GCM per-record + ヘッダ独立 AEAD タグ）— Sub-C
 - F-D*: 暗号化 vault リポジトリ + 平文⇄暗号化マイグレーション — Sub-D
 - F-E*: VEK キャッシュ + IPC V2 — Sub-E
@@ -232,7 +289,7 @@ sequenceDiagram
 
 ## アーキテクチャへの影響
 
-`docs/architecture/` への変更は**なし**（Sub-A スコープでは tech-stack の crate 追加なし、`secrecy` / `zeroize` は §4.3.2 既存登録、`rand_core` / `getrandom` も同様）。
+`docs/architecture/` 本文への変更は**なし**（Sub-B でも tech-stack の version pin / crate 候補は §4.7 で既に確定済、新規 crate 導入なし、`argon2` / `pbkdf2` / `hkdf` / `bip39` / `rand_core` / `getrandom` / `zxcvbn` は §4.3.2 暗号クリティカル登録済）。**`shikomi-infra/Cargo.toml` への dependency 追加のみ**（実装工程で実施）。
 
 ただし、**Clean Architecture 依存方向の追加経路**を明示:
 
