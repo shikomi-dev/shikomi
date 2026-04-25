@@ -1,7 +1,7 @@
 # 基本設計書 — ipc-protocol（IPC プロトコル論理スキーマ / ハンドシェイク仕様 / バージョニングルール）
 
 <!-- 詳細設計書とは別ファイル。統合禁止 -->
-<!-- feature: daemon-ipc / Issue #26 -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
 <!-- 配置先: docs/features/daemon-ipc/basic-design/ipc-protocol.md -->
 <!-- 兄弟: ./index.md, ./flows.md, ./security.md, ./error.md -->
 
@@ -29,7 +29,7 @@
 
 | バリアント | wire 表現 | 意味 |
 |-----------|---------|------|
-| `V1` | `"v1"`（MessagePack string） | 初期バージョン。`Handshake` / `ListRecords` / `AddRecord` / `EditRecord` / `RemoveRecord` の 5 バリアントを `IpcRequest` / `IpcResponse` で扱う |
+| `V1` | `"v1"`（MessagePack string） | 初期バージョン。`Handshake` / `ListRecords` / `AddRecord` / `EditRecord` / `RemoveRecord` の 5 バリアントを `IpcRequest` / `IpcResponse` で扱う。**Phase 1（PR #29）で `Handshake` + `ListRecords` 経路が透過、Phase 1.5（Issue #30）で `AddRecord` / `EditRecord` / `RemoveRecord` 経路が透過**。型定義そのものは Phase 1 で確定済み、Phase 1.5 で wire 仕様の変更なし |
 
 **バージョニングルール**:
 

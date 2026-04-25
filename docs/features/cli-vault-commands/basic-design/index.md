@@ -1,7 +1,7 @@
 # 基本設計書 — index（モジュール / クラス / 処理フロー / シーケンス / 外部連携 / ER）
 
 <!-- 詳細設計書とは別ファイル。統合禁止 -->
-<!-- feature: cli-vault-commands / Issue #TBD -->
+<!-- feature: cli-vault-commands / Issue #TBD (Phase 1) / Issue #26 (daemon-ipc Phase 1) / Issue #30 (daemon-ipc Phase 1.5) -->
 <!-- 配置先: docs/features/cli-vault-commands/basic-design/index.md -->
 <!-- 兄弟: ./security.md（セキュリティ設計）, ./error.md（エラーハンドリング方針） -->
 
@@ -73,7 +73,9 @@ crates/shikomi-cli/src/
 
 **モジュール設計方針**:
 
-- **Composition Root を `lib.rs::run()` 1 箇所に閉じる**: `SqliteVaultRepository` の具体型参照は `run()` のみ。`usecase` / `presenter` からは `&dyn VaultRepository` 経由でしかアクセスしない。**Phase 2（daemon IPC 経由）への移行時は `run()` の 1 行（リポジトリ構築位置）だけを `IpcVaultRepository::connect(...)` に差し替える**。
+- **Composition Root を `lib.rs::run()` 1 箇所に閉じる**: `SqliteVaultRepository` の具体型参照は `run()` のみ。`usecase` / `presenter` からは `&dyn VaultRepository` 経由でしかアクセスしない（Sqlite 経路）。
+- **Phase 1 → Phase 1.5（daemon IPC 経由、Issue #30）の移行**: `run()` 内に `enum RepositoryHandle { Sqlite(SqliteVaultRepository), Ipc(IpcVaultRepository) }` を導入し、`args.ipc` 値で構築バリアントを切替える。`run_list` / `run_add` / `run_edit` / `run_remove` 各サブコマンドハンドラが `match handle` で 2 アーム分岐し、Sqlite 経路は既存 UseCase 関数を呼出、IPC 経路は `IpcVaultRepository` の専用メソッド（`list_summaries` / `add_record` / `edit_record` / `remove_record`）を直接呼出する。
+- **`Box<dyn VaultRepository>` 抽象化を採用しない理由**: `IpcVaultRepository` は `VaultRepository` trait を**実装しない**（旧設計のシャドウ差分案が PR #29 で偽実装の構造的破綻を起こしたため Issue #30 で trait 非実装に確定、`docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md §設計方針の確定` を単一真実源とする）。よって `Box<dyn>` で両者を扱えない。`enum` で表現することで `match` の網羅性検査が経路追加時の修正漏れをコンパイル時に検出できる利点もある。
 - **`usecase` は I/O を持たない**: UseCase 関数は `&dyn VaultRepository` と入力 DTO と `now: OffsetDateTime` を引数に取り、TTY 操作・clap パース・stdout 書き出し・`OffsetDateTime::now_utc()` 呼び出しは一切行わない。これにより UseCase 単位で純粋な結合テストが書ける（モック `VaultRepository` 実装 + 入力 DTO + 固定時刻で完結、再現性 100%）。
 - **`presenter` は副作用を持たない**: `String` を返す pure function のみ。stdout への書き出しは `run()` の責務（`println!("{}", rendered)`）。
 - **`io::terminal` は副作用を持つ**: TTY 判定 / stdin 読取 / secret 入力はここに隔離。UseCase からは呼ばれず、`run()` が薄く wrap して `ConfirmedRemoveInput::new(id)` 等を組み立てる。
@@ -132,6 +134,23 @@ classDiagram
     class SqliteVaultRepository {
         <<concrete, from shikomi-infra>>
         +from_directory
+    }
+
+    class IpcVaultRepository {
+        <<concrete, from shikomi-cli io>>
+        +connect
+        +list_summaries
+        +add_record
+        +edit_record
+        +remove_record
+        note "VaultRepository trait NON-implementation - Issue #30"
+    }
+
+    class RepositoryHandle {
+        <<enum non-public, in lib.rs>>
+        +Sqlite SqliteVaultRepository
+        +Ipc IpcVaultRepository
+        note "Issue #30 - replaces Box dyn VaultRepository"
     }
 
     class AddInput
@@ -196,7 +215,11 @@ classDiagram
     Run --> CliArgs : parses
     Run --> Subcommand
     Run --> PathsResolver : resolves OS default dir
-    Run --> SqliteVaultRepository : constructs (composition root)
+    Run --> RepositoryHandle : constructs by args.ipc
+    RepositoryHandle --> SqliteVaultRepository : Sqlite arm
+    RepositoryHandle --> IpcVaultRepository : Ipc arm
+    Run --> SqliteVaultRepository : constructs (composition root, Sqlite path)
+    Run --> IpcVaultRepository : constructs (Ipc path)
     Run --> TerminalIo : prompts / reads secret
     Run --> ListUseCase
     Run --> AddUseCase
@@ -223,12 +246,15 @@ classDiagram
     ErrorPresenter --> Locale
 
     SqliteVaultRepository ..|> VaultRepository : implements
+    IpcVaultRepository ..> IpcRequest : sends via IpcClient
     CliError --> ExitCode : maps to
 ```
 
+**注記**: `IpcVaultRepository` は `VaultRepository` trait を**実装しない**（破線 `..|>` を引かない）。これは Issue #30 で確定した方針で、PR #29 のシャドウ差分案（旧案 C）が「嘘の Plaintext(empty) / 嘘 ID / 常時 true な exists()」を構造的に発生させる問題を、trait 非実装で解消するもの。詳細は `docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md §設計方針の確定` を参照。
+
 **設計判断メモ**:
 
-- **`Run` が唯一の `SqliteVaultRepository` 参照者**: これが Phase 2 移行のレバレッジポイント。`usecase` / `presenter` は `VaultRepository` trait しか知らない。grep で `SqliteVaultRepository` の使用箇所が `lib.rs` の 1 関数のみであることを CI と設計レビューの両方で検証する（`./security.md §expose_secret 経路監査` 同様の静的チェック方式）。
+- **`Run` が唯一の `SqliteVaultRepository` / `IpcVaultRepository` 参照者**: これが経路移行のレバレッジポイント。`usecase` / `presenter` は `VaultRepository` trait しか知らない（Sqlite 経路）。grep で `SqliteVaultRepository` / `IpcVaultRepository` の使用箇所が `lib.rs` の `run()` 関数のみであることを CI と設計レビューの両方で検証する（`./security.md §expose_secret 経路監査` 同様の静的チェック方式）。`RepositoryHandle` enum も `lib.rs` 内 non-public 型のため、外部 crate からの参照は構造的に不可能。
 - **入力 DTO を Vault 型で構築済みにする**: clap が渡す `String` / `&str` を `run()` 内で `RecordLabel::try_new` / `RecordId::try_from_str` / `SecretString::from_string` に通した**検証済み型**で UseCase へ渡す。UseCase 層で生 `String` を触らせない（Fail Fast を clap 直後に集中、Parse, don't validate）。
 - **`ConfirmedRemoveInput` の型強制**: `bool` フィールドを持たず、型の構築そのものが「確認経由」を意味する。TTY プロンプト or `--yes` の経路を通らなければこの型を作れない設計（`./error.md §確認強制の型レベル実装` 参照）。
 - **`presenter` が `Locale` を受け取る**: `std::env::var("LANG")` を presenter 内部で呼ぶとテスト再現性が落ちるため、`run()` で 1 度決定した `Locale` を引数で渡す。

@@ -1,7 +1,7 @@
 # 詳細設計書 — index（クラス設計 / 分割概要）
 
 <!-- 基本設計書とは別ファイル。統合禁止 -->
-<!-- feature: daemon-ipc / Issue #26 -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
 <!-- 配置先: docs/features/daemon-ipc/detailed-design/index.md -->
 <!-- 兄弟: ./protocol-types.md, ./daemon-runtime.md, ./ipc-vault-repository.md, ./composition-root.md, ./lifecycle.md, ./future-extensions.md -->
 
@@ -142,12 +142,20 @@ classDiagram
     }
 
     class IpcVaultRepository {
-        <<shikomi-cli::io>>
+        <<shikomi-cli::io - VaultRepository NON-impl, Issue #30>>
         +connect socket_path Result
-        +load Result Vault
-        +save vault Result
-        +exists bool
+        +list_summaries Result Vec
+        +add_record Result RecordId
+        +edit_record Result RecordId
+        +remove_record Result RecordId
         -client IpcClient
+        -runtime tokio Runtime
+    }
+
+    class RepositoryHandle {
+        <<shikomi-cli::lib non-public enum, Issue #30>>
+        +Sqlite SqliteVaultRepository
+        +Ipc IpcVaultRepository
     }
 
     class IpcClient {
@@ -216,20 +224,23 @@ classDiagram
     IpcRequestHandler --> IpcResponse
     IpcRequestHandler ..> VaultRepository
 
-    IpcVaultRepository ..|> VaultRepository : implements
     IpcVaultRepository --> IpcClient
+    IpcVaultRepository --> IpcRequest : sends AddRecord/EditRecord/RemoveRecord/ListRecords
     IpcClient --> FramingCodec
     IpcClient --> IpcRequest
     IpcClient --> IpcResponse
     IpcClient ..> PersistenceError : maps IpcResponse::Error
 
     CliRun --> CliArgs : parse with --ipc
-    CliRun --> SqliteVaultRepository : when args.ipc false
-    CliRun --> IpcVaultRepository : when args.ipc true
+    CliRun --> RepositoryHandle : constructs by args.ipc
+    RepositoryHandle --> SqliteVaultRepository : Sqlite arm
+    RepositoryHandle --> IpcVaultRepository : Ipc arm
     CliRun --> CliError : maps
     CliError --> PersistenceError : From
     SqliteVaultRepository ..|> VaultRepository : implements
 ```
+
+**注記（Issue #30 で確定）**: `IpcVaultRepository` は `VaultRepository` trait を**実装しない**（破線 `..|>` を引かない）。CLI Composition Root は `Box<dyn VaultRepository>` ではなく `RepositoryHandle` enum で経路を保持し、`run_*` 各サブコマンドハンドラが `match handle` で 2 アーム分岐する。詳細は `./ipc-vault-repository.md §設計方針の確定` を単一真実源とする。
 
 ## 設計判断の補足
 
@@ -263,20 +274,25 @@ classDiagram
 - ロックを保持したまま `framed.send` を呼ぶと、応答送信中に他接続の vault 操作がブロックされて並行性が低下する。**送信前にロック解放**してから `framed.send` するのが望ましい
 - 注記: ハンドラ pure 化のため `IpcResponse` を返すが、その値の生成には `&mut Vault` が必要。`vault_mutex.lock().await; let response = handler::handle_request(&*repo, &mut vault, req); drop(vault); framed.send(response).await?` の流れ
 
-**7. なぜ `IpcVaultRepository` が `VaultRepository` trait を実装するか（Phase 2 移行契約の実体化）**:
-- `cli-vault-commands` の Phase 2 移行契約「`run()` の 1 行差し替えで Repository 構築のみ変更」を実体化する
-- `IpcVaultRepository::load` / `save` / `exists` は IPC 越しに daemon に問い合わせる実装。CLI の `usecase` / `presenter` / `input` / `view` / `error` レイヤは無変更
-- `args.ipc` 分岐は `lib.rs::run()` の Repository 構築箇所 1 箇所のみ
+**7. なぜ `IpcVaultRepository` が `VaultRepository` trait を実装しないか（Issue #30 で確定、案 D）**:
+- 旧 PR #29（Phase 1）では「list 専用最小実装」として `VaultRepository` trait を**部分実装**する案 A → 「`save` 内で差分計算して IPC 操作を発行する」案 C と段階的に検討された
+- PR #29 で実装してみた結果、案 C は以下の構造的破綻を起こすことが判明:
+  - `load()` で受け取る `Vec<RecordSummary>` から `Vault` を再構築する際、`RecordPayload::Plaintext(SecretString::from_str(""))` のような**「嘘の Plaintext(empty)」を注入**しなければ `Record` を構築できない
+  - `add_record` で daemon が生成する真実 ID と、CLI 側 `Uuid::now_v7()` 生成 ID が**二重発行**される（`save` 時に「嘘 ID で上書き」が起こる）
+  - `exists()` が IPC 経路では本質的に**常に `true`**（接続成功 = vault 存在）となり、Phase 1 直結経路で意味があった `VaultNotInitialized` Fail Fast が崩壊
+  - シャドウと新 `Vault` の `updated_at` timestamp 差分による差分検出は「同 timestamp で payload 変更」のエッジケースで検出漏れする
+- PR #29 ではこれを「`--ipc add/edit/remove` を runtime reject」して先送りすることで Phase 1 を成立させた
+- **Issue #30 で案 D を採用**: `IpcVaultRepository` は `VaultRepository` trait を**実装しない**。代わりに専用メソッド（`list_summaries` / `add_record` / `edit_record` / `remove_record`）を公開する。CLI Composition Root は `enum RepositoryHandle { Sqlite, Ipc }` で経路保持し、各サブコマンドハンドラが `match handle` で 2 アーム分岐する
+- **案 D の利点**: 「嘘の Plaintext(empty) / 嘘 ID / 常時 true な exists()」を**型として持てなくする**（構造的排除）。Tell, Don't Ask / Fail Fast / DRY のいずれにも整合
+- **案 D で失う性質**: 「`run()` の 1 行差し替えで Phase 2 移行」契約は、新設計では「`RepositoryHandle::Sqlite` バリアント削除 + 各 `run_*` の `match` 1 アーム削除」に置き換わる。enum の網羅性検査が修正漏れをコンパイル時に検出するため、保守性は失われない
 
-**8. なぜ `IpcVaultRepository::load` で完全な `Vault` を返すか（List 専用最小実装）**:
-- `VaultRepository` trait の `load` は `Result<Vault, PersistenceError>` を返す既存契約
-- 本 feature では `load` 実装を「`IpcRequest::ListRecords` 送信 → `RecordSummary` 受信 → Secret 値非含有な `Vault` 集約を再構築」とする
-- **trade-off**: Secret 値が必要な操作（`add` / `edit` の既存 vault 取得）は `load` 経由で得られない。本 feature では **`add` / `edit` / `remove` UseCase の Phase 2 経路は別途設計**:
-  - **案 A**: `IpcVaultRepository` が `VaultRepository` trait を「list 用途で部分実装、`save` 経由の add/edit/remove は `IpcRequest::AddRecord` 等を直接送信」する複合実装（本 feature 採用）
-  - **案 B**: `VaultRepository` trait を分割して `LoadVault` / `MutateVault` の 2 trait にする（既存型に大改修、却下）
-- 案 A の具体: `IpcVaultRepository::save(&self, vault: &Vault) -> Result<(), PersistenceError>` は **trait 互換のため受けるが、内部で no-op or panic**（`load` 直後の vault を save しても意味がないため）。実際の add/edit/remove は **CLI 側 UseCase が `IpcVaultRepository::add_record` / `edit_record` / `remove_record` メソッドを直接呼ぶ専用拡張 trait `IpcVaultRepositoryExt`** を `IpcVaultRepository` に実装し、UseCase 側で `if let Some(ipc_repo) = repo.downcast_ref::<IpcVaultRepository>() { ipc_repo.add_record_via_ipc(...) }` の形にする
-- **案 A の問題点**: UseCase が IPC 専用経路を意識する必要があり Clean Arch 違反
-- **案 A の修正案 = 案 C（本 feature 最終採用）**: `IpcVaultRepository::save` は受け取った `Vault` の差分を計算して `IpcRequest::AddRecord` / `EditRecord` / `RemoveRecord` を発行する**実装的に妥当な経路**を取る。詳細は `./ipc-vault-repository.md §load/save 実装方針` で確定する
+**8. なぜ `args.ipc` 分岐を `Box<dyn VaultRepository>` でなく `enum RepositoryHandle` で表現するか（Issue #30 で確定）**:
+- 旧 PR #29 では `Box<dyn VaultRepository>` を採用予定だったが、Issue #30 で `IpcVaultRepository` の trait 非実装が確定したため**構造的に表現不能**となった
+- `enum RepositoryHandle { Sqlite(SqliteVaultRepository), Ipc(IpcVaultRepository) }` で表現することで:
+  - `match handle` の網羅性検査がコンパイル時に経路追加時の修正漏れを検出（dyn 経由ではこれが効かない）
+  - スタック配置でヒープ確保不要（`Box` の間接参照ペナルティ排除）
+  - `IpcVaultRepository` の専用メソッドが**経路毎に異なるシグネチャ**（`add_record(kind, label, value, now) -> Result<RecordId, _>` vs `usecase::add::add_record(repo, input, now) -> Result<RecordId, _>`）を持つことを enum で明示できる
+- 配置: `crates/shikomi-cli/src/lib.rs` 内 non-public enum（外部 crate からの参照は構造的に不可能、CLI 内部実装の隠蔽を維持）
 
 **9. なぜ daemon の panic hook を CLI と同型 fixed-message にするか**:
 - daemon のクラッシュは secret 露出経路を増やす可能性がある（`PanicHookInfo::Debug` での raw 文字列展開）

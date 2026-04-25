@@ -1,7 +1,25 @@
 # 要件定義書
 
-<!-- feature: daemon-ipc / Issue #26 -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
 <!-- 配置先: docs/features/daemon-ipc/requirements.md -->
+
+## Phase 区分（Issue #30 で確定）
+
+本 feature は IPC 経路の**段階的透過化**を行う。Phase 区分は以下:
+
+| Phase | スコープ | 対応 PR / Issue | 状態 |
+|-------|---------|---------------|------|
+| Phase 1 | daemon プロセス骨格 / IPC プロトコル定義 / `--ipc list` 透過 | Issue #26 / PR #29 | ✅ 完了（merged at 2026-04-25 ae4df15） |
+| **Phase 1.5** | **`--ipc add` / `--ipc edit` / `--ipc remove` 透過化、PR #29 の runtime reject 経路撤去** | **Issue #30** | **🚧 本 Issue で対応** |
+| Phase 2 | `--ipc` 既定化（または `--no-ipc` 反転）、daemon 自動起動 | 後続 Issue（未起票） | 後続 |
+
+**Phase 1.5 の限定スコープ（Issue #30）**:
+- daemon ハンドラ（`handler/{add,edit,remove}.rs`）は PR #29 で実装済み（Phase 1 で先行実装、`Vault` 集約に対するドメイン整合は完成）
+- 本 Issue #30 のスコープは **CLI 側の経路接続** に限定:
+  1. PR #29 で `crates/shikomi-cli/src/lib.rs:119-` に存在する「`args.ipc && !matches!(args.subcommand, Subcommand::List)` → runtime reject」分岐の撤去
+  2. `IpcVaultRepository` を `VaultRepository` trait **非実装**に確定し、専用メソッド `add_record` / `edit_record` / `remove_record` を新規追加（PR #29 で `list_summaries` 専用メソッド経路を確立済み、その延長線上に追加）
+  3. CLI Composition Root に `enum RepositoryHandle { Sqlite, Ipc }` を導入し、`run_add` / `run_edit` / `run_remove` で `match handle` 分岐
+  4. `IpcErrorCode → PersistenceError` 写像表に `NotFound` / `InvalidLabel` / `Domain` バリアント写像を追加（PR #29 では list 経路で発生し得なかったため未実装）
 
 ## 機能要件
 
@@ -149,11 +167,21 @@
 
 | 項目 | 内容 |
 |------|------|
-| 入力 | `shikomi --ipc <list \| add \| edit \| remove>` 形式の CLI 起動 |
-| 処理 | clap グローバルフラグ `--ipc`（`bool`、`#[arg(long, global = true)]`）を `CliArgs` に追加。`run()` 内で `args.ipc == true` なら `IpcVaultRepository::connect(default_socket_path())` を構築、`false` なら従来通り `SqliteVaultRepository::from_directory(...)` |
+| 入力 | `shikomi --ipc <list \| add \| edit \| remove>` 形式の CLI 起動（Issue #30 で 4 サブコマンド全て透過化、PR #29 では `list` のみ） |
+| 処理 | clap グローバルフラグ `--ipc`（`bool`、`#[arg(long, global = true)]`）を `CliArgs` に追加。`run()` 内で `args.ipc == true` なら `IpcVaultRepository::connect(default_socket_path())` を構築 → `RepositoryHandle::Ipc(ipc)` で保持、`false` なら従来通り `SqliteVaultRepository::from_directory(...)` → `RepositoryHandle::Sqlite(repo)` で保持。各サブコマンドハンドラ（`run_list` / `run_add` / `run_edit` / `run_remove`）が `match handle` で 2 アーム分岐し、Sqlite 経路は既存 UseCase、IPC 経路は `IpcVaultRepository` 専用メソッドを呼出 |
 | 出力 | 同 `shikomi list` 等の各サブコマンドと bit 同一の出力（vault 真実源は同じ）|
-| エラー時 | daemon 未起動 → `CliError::DaemonNotRunning` → `MSG-CLI-110`（仮、本 feature で追加）→ 終了コード 1 + ヒント「`shikomi-daemon` を起動してください」 / プロトコル不一致 → `CliError::ProtocolVersionMismatch` → 終了コード 1 |
-| 注記 | `--ipc` のソケットパスは**現時点では env / フラグで上書き不可**（OS デフォルトのみ）。将来 `--ipc-socket <PATH>` フラグ追加余地（YAGNI）|
+| エラー時 | daemon 未起動 → `CliError::DaemonNotRunning` → `MSG-CLI-110` → 終了コード 1 + ヒント「`shikomi-daemon` を起動してください」 / プロトコル不一致 → `CliError::ProtocolVersionMismatch` → `MSG-CLI-111` → 終了コード 1 / IPC 経由 NotFound → `MSG-CLI-106`（**Issue #30 で経路追加、edit/remove 用**）|
+| 注記 | `--ipc` のソケットパスは**現時点では env / フラグで上書き不可**（OS デフォルトのみ）。将来 `--ipc-socket <PATH>` フラグ追加余地（YAGNI）。**`IpcVaultRepository` は `VaultRepository` trait を実装しない**（Issue #30 で確定、`docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md §設計方針の確定` を単一真実源とする） |
+
+### REQ-DAEMON-027: PR #29 の runtime reject 経路撤去（Issue #30 新規）
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | PR #29 で `crates/shikomi-cli/src/lib.rs` に導入された runtime reject 分岐: `if args.ipc && !matches!(args.subcommand, Subcommand::List) { return CliError::UsageError("--ipc currently supports only the `list` subcommand; for add/edit/remove, omit --ipc to use direct vault file access") }` |
+| 処理 | 上記 if ブロックを **Issue #30 で完全削除**。サブコマンド網羅は `RepositoryHandle::Ipc` 経路の `match` ディスパッチで型レベル保証 |
+| 出力 | `shikomi --ipc add` / `--ipc edit` / `--ipc remove` が、それぞれ `IpcVaultRepository` の専用メソッドを経由して daemon に到達し、成功時は `added: <id>` / `updated: <id>` / `removed: <id>` を stdout 出力 |
+| エラー時 | 撤去後の経路で発生し得る IPC 由来エラーは `MSG-CLI-106` / `107` / `108` / `109` / `110` / `111` のいずれかに写像。`MSG-CLI-100` 系の usage error は撤去対象外（既存の `--value` / `--stdin` 衝突等は維持） |
+| 検証 | E2E テスト: `shikomi --ipc add --kind text --label L --value V` が daemon 経由で成功（PR #29 では「`--ipc currently supports only the list subcommand`」エラーで終了コード 1 だった挙動が、Issue #30 で**変更される**ことの回帰検証）|
 
 ### REQ-DAEMON-017: daemon 未起動時の Fail Fast
 
@@ -276,13 +304,17 @@ shikomi list                    # 既定（Phase 1、SQLite 直結、本 feature
 | `shikomi_core::ipc` | `pub enum IpcErrorCode { EncryptionUnsupported, NotFound { id }, InvalidLabel { reason }, Persistence { reason }, Domain { reason }, Internal { reason } }`（`#[non_exhaustive]`）| 構造化エラー |
 | `shikomi_core::ipc` | `pub struct SerializableSecretBytes(pub SecretBytes)` | secret 値の MessagePack 経路専用ラッパ（`Serialize` / `Deserialize` を `expose_secret` 不使用で実装）|
 
-**`shikomi-cli::io::ipc_vault_repository` モジュールの公開型**:
+**`shikomi-cli::io::ipc_vault_repository` モジュールの公開型**（Issue #30 で `VaultRepository` trait 非実装に確定、専用メソッド 4 種を公開）:
 
 | モジュール | 公開型 / 関数 | 用途 |
 |----------|-------------|------|
-| `shikomi_cli::io::ipc_vault_repository` | `pub struct IpcVaultRepository` | `VaultRepository` trait 実装（IPC クライアント） |
+| `shikomi_cli::io::ipc_vault_repository` | `pub struct IpcVaultRepository` | IPC 専用クライアント（**`VaultRepository` trait は実装しない**） |
 | 〃 | `pub fn IpcVaultRepository::connect(socket_path: &Path) -> Result<Self, PersistenceError>` | daemon 接続 + ハンドシェイク |
 | 〃 | `pub fn default_socket_path() -> Result<PathBuf, PersistenceError>` | OS 既定のソケットパス解決 |
+| 〃 | `pub fn list_summaries(&self) -> Result<Vec<RecordSummary>, PersistenceError>` | `IpcRequest::ListRecords` 発行（PR #29 既存） |
+| 〃 | `pub fn add_record(&self, kind: RecordKind, label: RecordLabel, value: SecretString, now: OffsetDateTime) -> Result<RecordId, PersistenceError>` | `IpcRequest::AddRecord` 発行（**Issue #30 新規**）。id は **daemon 側生成**、CLI 側で `Uuid::now_v7()` を呼ばない |
+| 〃 | `pub fn edit_record(&self, id: RecordId, label: Option<RecordLabel>, value: Option<SecretString>, now: OffsetDateTime) -> Result<RecordId, PersistenceError>` | `IpcRequest::EditRecord` 発行（**Issue #30 新規**） |
+| 〃 | `pub fn remove_record(&self, id: RecordId) -> Result<RecordId, PersistenceError>` | `IpcRequest::RemoveRecord` 発行（**Issue #30 新規**） |
 
 **`shikomi-daemon` の内部公開 API**（`#[doc(hidden)]`、`[lib] + [[bin]]` 構成、cli と同型）:
 
@@ -353,7 +385,7 @@ shikomi list                    # 既定（Phase 1、SQLite 直結、本 feature
 
 | ID | メッセージ（英語） | メッセージ（日本語） | 表示条件 |
 |----|----------------|------------------|---------|
-| MSG-CLI-051 | `warning: --ipc is opt-in for Phase 2 migration; default path remains direct SQLite (Phase 1)` | `警告: --ipc は Phase 2 移行のオプトインです。既定経路は引き続き SQLite 直結（Phase 1）です` | `--ipc` 指定時のみ（情報通知、終了コード 0 維持。`--quiet` で抑止）|
+| MSG-CLI-051 | `warning: --ipc routes operations through shikomi-daemon (preview); default path remains direct SQLite` | `警告: --ipc は shikomi-daemon 経由経路（プレビュー）。既定経路は引き続き SQLite 直結です` | `--ipc` 指定時のみ（情報通知、終了コード 0 維持。`--quiet` で抑止）。Issue #30（Phase 1.5）で 4 サブコマンド全て透過 |
 
 ### エラー系（stderr、`error:` 接頭辞 + `hint:` 行、hint は 3 OS 並記の複数行）
 
