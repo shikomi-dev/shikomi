@@ -62,3 +62,7 @@ tracing-test    = "0.2"
 serial_test     = "3"
 assert_cmd      = "2"
 predicates      = "3"
+# pty 経由 E2E（Issue #33 / TC-E2E-017）。Unix 限定の pty allocation で
+# `read_password`（rpassword）の非エコー経路を実観測する。`MIT OR Apache-2.0`、
+# 依存数 < 10、2024+ メンテ。Windows は `cfg(unix)` ガードで skip。
+expectrl        = "0.8"

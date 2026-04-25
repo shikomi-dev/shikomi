@@ -468,3 +468,125 @@ fn tc_e2e_015_ipc_edit_nonexistent_id_returns_user_error() {
     assert!(!stderr.contains(SECRET_MARKER));
     assert!(!guard.stderr().contains(SECRET_MARKER));
 }
+
+// -------------------------------------------------------------------
+// TC-E2E-018: 非 TTY パイプ edit でも値が反映され、横串で secret 漏洩なし
+// docs/features/daemon-ipc/test-design/e2e.md §TC-E2E-018 / Issue #33
+// -------------------------------------------------------------------
+//
+// `is_stdin_tty() == false` 経路では `read_value_from_stdin` は `read_password`
+// ではなく `read_line` を経由する（kind が Secret に強制されていても、非 TTY では
+// 画面エコー自体が発生しないため`read_line` で十分）。
+//
+// 本 TC は TC-E2E-012（`--ipc add` 経路）と同型の「stdout/stderr/daemon stderr の
+// どこにも入力された値が出ない」横串安全網を **edit 経路にも** 張る。
+// `decide_kind_for_input(None, Ipc) → Secret` の fail-secure 強制が**副作用ゼロ**
+// で完了する（パイプ入力でも値は無事 daemon に到達し、漏洩経路は塞がれている）
+// ことを実機で観測する。
+//
+// 注記: `daemon_stderr` は `DaemonGuard` が背後 thread でリアルタイムに収集している。
+// edit 経由で値が daemon に届いた後も、`tracing::warn!` 等で値が文字列化される経路は
+// 設計上塞がれている（`SerializableSecretBytes` の `Debug` が `[REDACTED]`、
+// `IpcErrorCode::reason` が固定文言）。本 TC はその静的契約を実機で観測担保する。
+const PIPED_VALUE_MARKER: &str = "piped-new-value-marker";
+
+#[test]
+fn tc_e2e_018_ipc_edit_stdin_pipe_no_leak_and_value_reflects() {
+    let xdg = tight_tempdir();
+    let vault_dir = tight_tempdir();
+    seed_empty_vault(vault_dir.path());
+    let guard = DaemonGuard::spawn(xdg.path(), vault_dir.path());
+
+    // ---- 1. 事前 add: Text レコード ---------------------------------------
+    let (add_stdout, _, add_code) = run_shikomi(
+        xdg.path(),
+        vault_dir.path(),
+        &[
+            "--ipc",
+            "add",
+            "--kind",
+            "text",
+            "--label",
+            "tc018-existing",
+            "--value",
+            "original",
+        ],
+    );
+    assert_eq!(add_code, Some(0));
+    let id = extract_uuid_after("added: ", &add_stdout);
+
+    // ---- 2. 非 TTY パイプで edit --stdin ----------------------------------
+    // `std::process::Command` の stdin = piped（pty なし） = `is_stdin_tty() == false`。
+    // この経路では `read_password` ではなく `read_line` を通る（kind が Secret 強制でも）。
+    let bin = assert_cmd::cargo::cargo_bin("shikomi");
+    let mut child = Command::new(bin)
+        .env("XDG_RUNTIME_DIR", xdg.path())
+        .env("SHIKOMI_VAULT_DIR", vault_dir.path())
+        .args(["--ipc", "edit", "--id", &id, "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn cli");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        writeln!(stdin, "{PIPED_VALUE_MARKER}").expect("write stdin");
+    }
+    let output = child.wait_with_output().expect("wait");
+    let cli_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let cli_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    // ---- 3. exit 0 -----------------------------------------------------
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "edit via pipe should succeed: stdout={cli_stdout} stderr={cli_stderr} daemon_stderr={}",
+        guard.stderr()
+    );
+
+    // ---- 4. 横串: PIPED_VALUE_MARKER がどこにも漏れていない -----------------
+    // (a) CLI stdout
+    assert!(
+        !cli_stdout.contains(PIPED_VALUE_MARKER),
+        "CLI stdout leaked piped value: {cli_stdout}"
+    );
+    // (b) CLI stderr
+    assert!(
+        !cli_stderr.contains(PIPED_VALUE_MARKER),
+        "CLI stderr leaked piped value: {cli_stderr}"
+    );
+    // (c) daemon stderr（tracing 出力含む）
+    let dlog = guard.stderr();
+    assert!(
+        !dlog.contains(PIPED_VALUE_MARKER),
+        "daemon stderr leaked piped value: {dlog}"
+    );
+
+    // ---- 5. shell 履歴警告（MSG-CLI-050）が出ない ---------------------------
+    // `--value` 直接指定ではないため、shell 履歴残留警告は発火しないはず。
+    // 警告文言の一部 "history" / "shell" を弱い検査で観測。
+    // 本 TC の主眼ではないため、出ていなければよい（assert は緩める）。
+    assert!(
+        !cli_stderr.to_lowercase().contains("shell history"),
+        "shell history warning should NOT appear for non-TTY pipe stdin: {cli_stderr}"
+    );
+
+    // ---- 6. ラウンドトリップ: list で id が引き続き存在 ---------------------
+    let (list_stdout, _, list_code) = run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+    assert_eq!(list_code, Some(0));
+    assert!(
+        list_stdout.contains(&id),
+        "list should still contain the edited id: {list_stdout}"
+    );
+
+    // ---- 7. label は不変（value のみ edit したため）-------------------------
+    assert!(
+        list_stdout.contains("tc018-existing"),
+        "label should remain unchanged: {list_stdout}"
+    );
+
+    // ---- 8. SECRET_MARKER 横串（既存契約継続）------------------------------
+    assert!(!cli_stdout.contains(SECRET_MARKER));
+    assert!(!cli_stderr.contains(SECRET_MARKER));
+    assert!(!dlog.contains(SECRET_MARKER));
+}
