@@ -4,6 +4,7 @@
 //! 外部 API / OS / DB には一切アクセスしない。
 
 pub mod error;
+pub mod ipc;
 pub mod secret;
 pub mod vault;
 

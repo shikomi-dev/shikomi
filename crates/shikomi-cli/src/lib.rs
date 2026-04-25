@@ -25,6 +25,7 @@ pub mod view;
 pub use error::{CliError, ExitCode};
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use shikomi_infra::persistence::SqliteVaultRepository;
@@ -32,6 +33,7 @@ use time::OffsetDateTime;
 
 use cli::{AddArgs, CliArgs, EditArgs, RemoveArgs, Subcommand};
 use input::{AddInput, ConfirmedRemoveInput, EditInput};
+use io::ipc_vault_repository::IpcVaultRepository;
 use presenter::Locale;
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
 use shikomi_infra::persistence::VaultRepository;
@@ -113,24 +115,71 @@ pub fn run() -> ExitCode {
 
     init_tracing(args.verbose);
 
+    let quiet = args.quiet;
+
+    if args.ipc {
+        if !quiet {
+            eprintln!(
+                "warning: --ipc is opt-in for Phase 2 migration; default path remains direct SQLite (Phase 1)"
+            );
+        }
+        run_with_ipc_repo(&args, locale, quiet)
+    } else {
+        run_with_sqlite_repo(&args, locale, quiet)
+    }
+}
+
+fn run_with_sqlite_repo(args: &CliArgs, locale: Locale, quiet: bool) -> ExitCode {
     let repo = match build_repo(args.vault_dir.as_deref()) {
         Ok(r) => r,
         Err(err) => return emit_error_and_exit(&err, locale),
     };
     let vault_dir = repo.paths().dir().to_path_buf();
+    dispatch(&repo, &vault_dir, &args.subcommand, locale, quiet)
+}
 
-    let quiet = args.quiet;
-    let result = match args.subcommand {
-        Subcommand::List => run_list(&repo, &vault_dir, locale, quiet),
-        Subcommand::Add(a) => run_add(&repo, &a, &vault_dir, locale, quiet),
-        Subcommand::Edit(a) => run_edit(&repo, &a, &vault_dir, locale, quiet),
-        Subcommand::Remove(a) => run_remove(&repo, &a, &vault_dir, locale, quiet),
+fn run_with_ipc_repo(args: &CliArgs, locale: Locale, quiet: bool) -> ExitCode {
+    let socket_path = match IpcVaultRepository::default_socket_path() {
+        Ok(p) => p,
+        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
+    };
+    let repo = match IpcVaultRepository::connect(&socket_path) {
+        Ok(r) => r,
+        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
+    };
+    let vault_dir = ipc_vault_dir_hint(args.vault_dir.as_deref());
+    dispatch(&repo, &vault_dir, &args.subcommand, locale, quiet)
+}
+
+fn dispatch(
+    repo: &dyn VaultRepository,
+    vault_dir: &std::path::Path,
+    subcommand: &Subcommand,
+    locale: Locale,
+    quiet: bool,
+) -> ExitCode {
+    let result = match subcommand {
+        Subcommand::List => run_list(repo, vault_dir, locale, quiet),
+        Subcommand::Add(a) => run_add(repo, a, vault_dir, locale, quiet),
+        Subcommand::Edit(a) => run_edit(repo, a, vault_dir, locale, quiet),
+        Subcommand::Remove(a) => run_remove(repo, a, vault_dir, locale, quiet),
     };
 
     match result {
         Ok(()) => ExitCode::Success,
         Err(err) => emit_error_and_exit(&err, locale),
     }
+}
+
+/// `--ipc` 経路の場合、daemon が真実源で CLI 側に物理パスは無い。
+/// presenter がエラー文言で表示する目的で hint だけ返す（`--vault-dir` 上書き優先）。
+fn ipc_vault_dir_hint(vault_dir_arg: Option<&std::path::Path>) -> PathBuf {
+    if let Some(p) = vault_dir_arg {
+        return p.to_path_buf();
+    }
+    dirs::data_dir()
+        .map(|d| d.join("shikomi"))
+        .unwrap_or_else(|| PathBuf::from("/var/empty"))
 }
 
 // -------------------------------------------------------------------

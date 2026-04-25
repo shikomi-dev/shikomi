@@ -9,8 +9,21 @@ use crate::error::CliError;
 use super::Locale;
 
 /// `CliError` を 2 行（English）または 4 行（JapaneseEn）形式で整形する。
+///
+/// 例外: MSG-CLI-110（DaemonNotRunning）は 3 OS 並記の hint で複数行 / MSG-CLI-111
+/// （ProtocolVersionMismatch）は 1 hint 行で構成し、それぞれ専用 helper を呼ぶ。
 #[must_use]
 pub fn render_error(err: &CliError, locale: Locale) -> String {
+    match err {
+        CliError::DaemonNotRunning(path) => render_daemon_not_running(path, locale),
+        CliError::ProtocolVersionMismatch { server, client } => {
+            render_protocol_version_mismatch(server, client, locale)
+        }
+        _ => render_default(err, locale),
+    }
+}
+
+fn render_default(err: &CliError, locale: Locale) -> String {
     // `lines_for` の戻り値は `(error 英, error 日, hint 英, hint 日)` 順。
     // 変数束縛もこの順に揃える（以前は `(error_en, hint_en, error_ja, hint_ja)` と
     // 入れ替えてしまい、LANG=C 環境の hint 行に日本語が漏れていた — BUG-002）。
@@ -26,7 +39,62 @@ pub fn render_error(err: &CliError, locale: Locale) -> String {
     out
 }
 
+/// MSG-CLI-110 確定文面（`basic-design/error.md §MSG-CLI-110 確定文面`）。
+fn render_daemon_not_running(path: &std::path::Path, locale: Locale) -> String {
+    let path_disp = path.display();
+    let mut out =
+        format!("error: shikomi-daemon is not running (socket {path_disp} unreachable)\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!(
+            "error: shikomi-daemon が起動していません（ソケット {path_disp} に接続できません）\n"
+        ));
+    }
+    out.push_str("hint: start the daemon in a separate terminal by running one of:\n");
+    out.push_str("hint:   Linux/macOS:            'shikomi-daemon &'\n");
+    out.push_str("hint:   Linux (systemd user):   'systemctl --user start shikomi-daemon'\n");
+    out.push_str(
+        "hint:   macOS (launchd user):   'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'\n",
+    );
+    out.push_str("hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str("hint: 別のターミナルで以下のいずれかで daemon を起動してください:\n");
+        out.push_str("hint:   Linux/macOS:            'shikomi-daemon &'\n");
+        out.push_str("hint:   Linux (systemd user):   'systemctl --user start shikomi-daemon'\n");
+        out.push_str(
+            "hint:   macOS (launchd user):   'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'\n",
+        );
+        out.push_str(
+            "hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'\n",
+        );
+    }
+    out
+}
+
+/// MSG-CLI-111 確定文面（`basic-design/error.md §MSG-CLI-111 確定文面`）。
+fn render_protocol_version_mismatch(
+    server: &shikomi_core::ipc::IpcProtocolVersion,
+    client: &shikomi_core::ipc::IpcProtocolVersion,
+    locale: Locale,
+) -> String {
+    let mut out = format!("error: protocol version mismatch (server={server}, client={client})\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!(
+            "error: プロトコルバージョン不一致（server={server}, client={client}）\n"
+        ));
+    }
+    out.push_str("hint: rebuild shikomi-cli and shikomi-daemon to the same version\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "hint: shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください\n",
+        );
+    }
+    out
+}
+
 /// 4 段（error 英 / error 日 / hint 英 / hint 日）を返す。
+///
+/// `DaemonNotRunning` / `ProtocolVersionMismatch` は `render_error` 側の専用 helper で
+/// 直接処理するため、ここでは到達しない（防御的に default 文言を返す）。
 fn lines_for(err: &CliError) -> (String, String, String, String) {
     match err {
         CliError::UsageError(msg) => (
@@ -82,6 +150,14 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
                 .to_owned(),
             "将来の \"shikomi vault decrypt\" で変換可能になります。暫定的には平文 vault をご利用ください"
                 .to_owned(),
+        ),
+        // `DaemonNotRunning` / `ProtocolVersionMismatch` は `render_error` 側で先に分岐済み。
+        // `#[non_exhaustive]` 防御的 wildcard も含めて到達しないが、フォールバック文言を返す。
+        _ => (
+            "internal: unhandled error variant".to_owned(),
+            "内部: 未処理のエラーバリアント".to_owned(),
+            "please report this issue to https://github.com/shikomi-dev/shikomi/issues".to_owned(),
+            "https://github.com/shikomi-dev/shikomi/issues に報告してください".to_owned(),
         ),
     }
 }

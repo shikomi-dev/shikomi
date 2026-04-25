@@ -48,6 +48,14 @@ clap            = { version = "4",    features = ["derive", "env", "wrap_help"] 
 anyhow          = "1"
 is-terminal     = "0.4"
 rpassword       = "7"
+# IPC 層の依存（daemon-ipc feature で追加、tech-stack.md §2.1 でピン根拠確定）
+tokio           = { version = "1.44.2", features = ["rt-multi-thread", "net", "io-util", "sync", "signal", "time", "macros"] }
+tokio-util      = { version = "0.7",  default-features = false, features = ["codec"] }
+rmp-serde       = "1.3"
+bytes           = "1"
+futures-util    = { version = "0.3",  default-features = false, features = ["std", "sink"] }
+nix             = { version = "0.29", default-features = false, features = ["socket", "fs", "user"] }
+windows-sys     = { version = "0.59", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Foundation"] }
 # テスト用
 tempfile        = "3"
 tracing-test    = "0.2"

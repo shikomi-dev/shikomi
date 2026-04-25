@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use shikomi_core::ipc::IpcProtocolVersion;
 use shikomi_core::{DomainError, RecordId};
 use shikomi_infra::persistence::PersistenceError;
 use thiserror::Error;
@@ -54,6 +55,19 @@ pub enum CliError {
     /// 暗号化 vault 検出（Phase 1 未対応）
     #[error("this vault is encrypted; encryption is not yet supported in this CLI version")]
     EncryptionUnsupported,
+
+    /// `--ipc` 指定で daemon に接続できない（daemon 未起動）
+    #[error("shikomi-daemon is not running (socket {0} unreachable)")]
+    DaemonNotRunning(PathBuf),
+
+    /// IPC ハンドシェイクで daemon と CLI のプロトコルバージョンが不一致
+    #[error("protocol version mismatch (server={server}, client={client})")]
+    ProtocolVersionMismatch {
+        /// daemon 側バージョン。
+        server: IpcProtocolVersion,
+        /// クライアント側バージョン。
+        client: IpcProtocolVersion,
+    },
 }
 
 impl From<PersistenceError> for CliError {
@@ -68,6 +82,11 @@ impl From<PersistenceError> for CliError {
                 feature: "encrypted vault persistence",
                 ..
             } => Self::EncryptionUnsupported,
+            // IPC 由来の特定バリアントは CLI 専用バリアントへ写像（MSG-CLI-110/111）
+            PersistenceError::DaemonNotRunning(path) => Self::DaemonNotRunning(path),
+            PersistenceError::ProtocolVersionMismatch { server, client } => {
+                Self::ProtocolVersionMismatch { server, client }
+            }
             other => Self::Persistence(other),
         }
     }
@@ -105,7 +124,9 @@ impl From<&CliError> for ExitCode {
             | CliError::InvalidId(_)
             | CliError::RecordNotFound(_)
             | CliError::VaultNotInitialized(_)
-            | CliError::NonInteractiveRemove => Self::UserError,
+            | CliError::NonInteractiveRemove
+            | CliError::DaemonNotRunning(_)
+            | CliError::ProtocolVersionMismatch { .. } => Self::UserError,
             CliError::Persistence(_) | CliError::Domain(_) => Self::SystemError,
             CliError::EncryptionUnsupported => Self::EncryptionUnsupported,
         }
