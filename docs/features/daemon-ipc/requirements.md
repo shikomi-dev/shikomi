@@ -161,8 +161,9 @@
 |------|------|
 | 入力 | `--ipc` 指定で daemon が起動していない状態 |
 | 処理 | `IpcVaultRepository::connect` が即時 `PersistenceError::DaemonNotRunning(socket_path)` を返却 → `CliError::DaemonNotRunning` 経由で `MSG-CLI-110` を stderr に出力 |
-| 出力 | stderr: `error: shikomi-daemon is not running (socket {path} unreachable)` + `hint: start the daemon (e.g., 'shikomi-daemon &' or systemd user service)` |
+| 出力 | stderr: `error: shikomi-daemon is not running (socket {path} unreachable)` + **hint は 3 OS の起動コマンドを並記**（英語例）: `hint: start the daemon — Linux/macOS: 'shikomi-daemon &' (or 'systemctl --user start shikomi-daemon' / 'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'); Windows: 'Start-Process -NoNewWindow shikomi-daemon'`。日本語併記は `basic-design/error.md §MSG-CLI-110 確定文面` を参照 |
 | エラー時 | — |
+| 注記 | hint 文言は `shikomi-daemon` という**実バイナリ名のみ**を案内する。`shikomi daemon start` のようなサブコマンドは本 feature で追加しない（存在しないコマンド案内はユーザを行き止まりにする、ペガサス指摘 ①）。バイナリ名・ PowerShell コマンド名の確定値は `basic-design/error.md §MSG-CLI-110 確定文面` / `basic-design/error.md §MSG-CLI-111 確定文面` が単一真実源 |
 
 ### REQ-DAEMON-018: スキーマ単一真実源（DRY）
 
@@ -354,12 +355,14 @@ shikomi list                    # 既定（Phase 1、SQLite 直結、本 feature
 |----|----------------|------------------|---------|
 | MSG-CLI-051 | `warning: --ipc is opt-in for Phase 2 migration; default path remains direct SQLite (Phase 1)` | `警告: --ipc は Phase 2 移行のオプトインです。既定経路は引き続き SQLite 直結（Phase 1）です` | `--ipc` 指定時のみ（情報通知、終了コード 0 維持。`--quiet` で抑止）|
 
-### エラー系（stderr）
+### エラー系（stderr、`error:` 接頭辞 + `hint:` 行、hint は 3 OS 並記の複数行）
 
-| ID | 原因文（英語） | 原因文（日本語） | ヒント（英語 / 日本語） | 表示条件 | 終了コード |
-|----|-------------|--------------|-------------------|---------|---------|
-| MSG-CLI-110 | `error: shikomi-daemon is not running (socket {path} unreachable)` | `error: shikomi-daemon が起動していません（ソケット {path} に接続できません）` | `hint: start the daemon (e.g., 'shikomi-daemon &' or systemd user service)` / `hint: daemon を起動してください（例: 'shikomi-daemon &' または systemd user service）` | `--ipc` 指定で接続失敗 | 1 |
+| ID | 原因文（英語） | 原因文（日本語） | ヒント構成 | 表示条件 | 終了コード |
+|----|-------------|--------------|---------|---------|---------|
+| MSG-CLI-110 | `error: shikomi-daemon is not running (socket {path} unreachable)` | `error: shikomi-daemon が起動していません（ソケット {path} に接続できません）` | 3 OS の起動コマンドを並記した複数行 hint（`basic-design/error.md §MSG-CLI-110 確定文面`）| `--ipc` 指定で接続失敗 | 1 |
 | MSG-CLI-111 | `error: protocol version mismatch (server={server}, client={client})` | `error: プロトコルバージョン不一致（server={server}, client={client}）` | `hint: rebuild shikomi-cli and shikomi-daemon to the same version` / `hint: shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください` | ハンドシェイク不一致 | 1 |
+
+**MSG-CLI-110 / 111 の確定文面は `basic-design/error.md` を単一真実源とする**。本 `requirements.md` 表は表示条件・終了コードの規約のみ扱い、文面の版ズレを避ける。
 
 ### daemon 側のログメッセージ（`tracing::info!` / `warn!` / `error!`）
 

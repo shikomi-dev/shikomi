@@ -155,11 +155,43 @@ crates/shikomi-daemon/src/
 - `Result<IpcResponse, IpcErrorCode>` 風の構造を内部で組み、最終的に必ず `IpcResponse` を返す（単一の戻り値型でハンドラ呼び出し側を簡潔に）
 
 **`Result` → `IpcErrorCode` 写像の規約**:
-- `PersistenceError` → `IpcErrorCode::Persistence { reason: format!("{}", err) }`（`Display` で文字列化、`Debug` は使わない）
-- `DomainError::InvalidRecordLabel(_)` → `IpcErrorCode::InvalidLabel { reason: format!("{}", err) }`
-- `DomainError::VaultConsistencyError(VaultConsistencyError::RecordNotFound(_))` → `IpcErrorCode::NotFound { id }` （戻し変換）
-- その他の `DomainError` → `IpcErrorCode::Domain { reason: format!("{}", err) }`
-- 想定外（`unwrap` / `expect` 経路、本来到達しないが防御的）→ `IpcErrorCode::Internal { reason: "unexpected error" }`（具体内容は出さない、ログに別途出す）
+
+**絶対規則**: `IpcErrorCode` の `reason` フィールドは**ハードコードされた英語固定文言のみ**を格納する。`format!("{}", err)` / `err.to_string()` / `{:?}` デバッグ出力による動的文字列化を**禁止**する（服部平次指摘への対応）。
+
+根拠: `shikomi-infra::PersistenceError` の `Display` 実装は以下の漏洩経路を含み、IPC 経由で同 UID 悪性プロセスにファイルシステム情報を開示する:
+- `"IO error on {path}: {source}"` — vault 絶対パス漏洩
+- `"invalid permission on {path}: expected ..."` — 絶対パス + 期待 perm 漏洩
+- `"invalid vault dir {path}: {reason}"` — 絶対パス漏洩
+- `"vault is locked at {path}{holder}"` — **lock holder PID 漏洩**（後続攻撃の起点）
+
+これを構造化エラーの `reason` に含めると `basic-design/security.md §IpcErrorCode 設計規約`「secret 値・絶対パス・ピア UID を含めない」契約と正面衝突し、OWASP A07 / A09 違反となる。
+
+**写像規約（固定文言版、本書が単一真実源）**:
+
+| 入力 | 出力 `IpcErrorCode` | reason 固定文言 |
+|-----|-------------------|---------------|
+| `PersistenceError::Io(_)` / `Locked { .. }` / `Permission { .. }` / `InvalidVaultDir { .. }` 等の全パターン | `IpcErrorCode::Persistence { reason: "persistence error" }` | `"persistence error"`（固定）|
+| `PersistenceError::Corrupted { .. }` | `IpcErrorCode::Persistence { reason: "vault corrupted" }` | `"vault corrupted"`（固定、破損検出の分類は許容。path を含めない）|
+| `PersistenceError::CannotResolveVaultDir` | `IpcErrorCode::Persistence { reason: "vault directory not resolvable" }` | 固定 |
+| `DomainError::InvalidRecordLabel(_)` | `IpcErrorCode::InvalidLabel { reason: "invalid label" }` | 固定 |
+| `DomainError::InvalidRecordId(_)` | `IpcErrorCode::InvalidLabel { reason: "invalid record id" }` | 固定（クライアント側で検証済みのはずだが防御的）|
+| `DomainError::VaultConsistencyError(VaultConsistencyError::RecordNotFound(id))` | `IpcErrorCode::NotFound { id }` | id は RecordId（UUIDv7、秘密情報ではない、既に `IpcRequest` で受取済みの値を返すだけ）|
+| `DomainError::VaultConsistencyError(VaultConsistencyError::DuplicateRecordId(_))` | `IpcErrorCode::Domain { reason: "duplicate record id" }` | 固定 |
+| その他の `DomainError` | `IpcErrorCode::Domain { reason: "domain error" }` | 固定 |
+| 想定外（`unwrap` / `expect` 経路、本来到達しないが防御的）| `IpcErrorCode::Internal { reason: "unexpected error" }` | 固定 |
+
+**観測性の確保（詳細は daemon 側 `tracing` のみ）**:
+- daemon 側で `tracing::warn!(target: "shikomi_daemon::ipc::handler", "persistence error: {}", err)` のように `Display` で詳細を出す（path を含む）
+- ただし `tracing::*!` マクロに**`IpcRequest` 全体や `SecretString` / `SerializableSecretBytes` を渡さない**（既存規約、`../basic-design/security.md §脅威モデル`）
+- 運用者は `SHIKOMI_DAEMON_LOG` で詳細ログを有効化し、`journalctl` / `launchctl log` / stderr で観測する。クライアント側には固定文言のみ返す（**運用者はログ特権あり、クライアント（同 UID 別プロセス）は特権なし**、という権限分離）
+
+**CLI 側の体験**:
+- CLI は `IpcResponse::Error(IpcErrorCode::Persistence { reason: "persistence error" })` を受信 → `render_error` で `MSG-CLI-107`（既存、`error: failed to access vault ...`）を出力。`reason` の "persistence error" 文字列は**無視**（i18n / ユーザ向け文面の単一真実源は `presenter::error` 側）
+- daemon 側で `tracing::warn!` に出た詳細は、デバッグ時に運用者が daemon ログを確認する経路で補足
+
+**テスト観点追加**:
+- `handler::handle_request` の各エラーケースで `reason` が**絶対パス文字列・PID 数値・ピア UID を含まないこと**を文字列 assertion で確認（**TC-UT-xxx** にテスト設計担当が追加）
+- 具体検証: `!response.contains("/home/")` / `!response.contains("C:\\Users\\")` / `!response.contains("pid=")` / `!response.contains("uid=")` 等の negative assertion
 
 ## `permission::peer_credential::verify` 関数
 

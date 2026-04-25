@@ -376,9 +376,25 @@ UI 不在のため、エンドユーザ体験ではなく**実装者・後続 fe
 
 ### daemon 運用者向け（手動起動時の体験）
 
-- 起動: `shikomi-daemon` バイナリを直接実行（OS 自動起動は後続 feature で扱う）。stdout に `shikomi-daemon listening on {socket_path}` が出る
-- 停止: `Ctrl+C` で graceful shutdown。in-flight リクエスト完了 → ソケット削除 → exit 0
-- ログ確認: 環境変数 `SHIKOMI_DAEMON_LOG=debug` で詳細ログを得る
+OS 自動起動は後続 feature（`process-model.md` §4.1 ルール 3）で扱う。本 feature 時点では **3 OS いずれも手動起動**が基本。以下は 3 OS 並記の起動例（**`MSG-CLI-110` の hint 文面と同じバイナリ名・コマンドで揃える**、ペガサス指摘 ②）:
+
+| OS | 基本起動 | サービス経由（任意、手動配置必要） |
+|----|---------|--------------------------------|
+| **Linux** | `shikomi-daemon &`（フォアグラウンド shell からバックグラウンド起動）| `systemctl --user start shikomi-daemon`（`~/.config/systemd/user/shikomi-daemon.service` 事前配置、`process-model.md` §4.1 ルール 3 Linux 節）|
+| **macOS** | `shikomi-daemon &`（同上） | `launchctl kickstart gui/$(id -u)/dev.shikomi.daemon`（`~/Library/LaunchAgents/dev.shikomi.daemon.plist` 事前配置）|
+| **Windows** | PowerShell で `Start-Process -NoNewWindow shikomi-daemon`（hidden プロセス起動）| タスクスケジューラへのユーザ領域タスク登録（`process-model.md` §4.1 ルール 3 Windows 節）。本 feature では自動配置なし、手動登録が必要 |
+
+**停止方法**:
+- **Linux / macOS**: `Ctrl+C`（フォアグラウンド起動時）/ `kill <pid>`（バックグラウンド）/ `systemctl --user stop shikomi-daemon` / `launchctl kill TERM gui/$(id -u)/dev.shikomi.daemon`
+- **Windows**: `Stop-Process -Name shikomi-daemon`
+
+いずれも内部的に `SIGTERM` / `SIGINT` / `CTRL_CLOSE_EVENT` を daemon に送り graceful shutdown（`./flows.md §REQ-DAEMON-014`）。
+
+**ログ確認**:
+- 環境変数 `SHIKOMI_DAEMON_LOG` で `tracing` レベル制御（`info` デフォルト）
+- Linux (systemd): `journalctl --user -u shikomi-daemon -f`
+- macOS (launchd): `log stream --predicate 'subsystem == "dev.shikomi.daemon"'`（launchd stdout 経路）or 手動起動時は stderr 直接
+- Windows: PowerShell に起動した場合は当該 window に出力、`Start-Process` hidden 時はログファイル出力が必要（`SHIKOMI_DAEMON_LOG_FILE` 拡張は将来 feature、本 feature では stderr のみ）
 
 ## ER図
 

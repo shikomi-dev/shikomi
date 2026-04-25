@@ -93,7 +93,7 @@
 | REQ-DAEMON-014 | graceful shutdown | `SIGTERM` / `SIGINT`（Unix）/ `CTRL_CLOSE_EVENT`（Windows）受信で in-flight リクエスト完了待機 → `repo` 解放（`VaultLock` 解除）→ ソケット `unlink` / Named Pipe close → exit 0 | 必須 |
 | REQ-DAEMON-015 | `IpcVaultRepository` クライアント | `shikomi-cli::io::IpcVaultRepository` を新設（`VaultRepository` trait 実装）。`connect(socket_path)` で daemon 接続、`load` / `save` / `exists` を IPC 越しに実行 | 必須 |
 | REQ-DAEMON-016 | CLI `--ipc` オプトインフラグ | `shikomi-cli` のグローバルフラグ `--ipc` を追加。指定時のみコンポジションルートで `IpcVaultRepository::connect` を構築（既定は `SqliteVaultRepository::from_directory`） | 必須 |
-| REQ-DAEMON-017 | daemon 未起動時の Fail Fast | `--ipc` 指定で daemon が起動していない（接続不可）なら `CliError::DaemonNotRunning` を返し、`shikomi daemon start` を案内するヒントを stderr に出力（終了コード 1） | 必須 |
+| REQ-DAEMON-017 | daemon 未起動時の Fail Fast | `--ipc` 指定で daemon が起動していない（接続不可）なら `CliError::DaemonNotRunning` を返し、**3 OS の実バイナリ起動コマンドを並記したヒント**を stderr に出力（終了コード 1）。`shikomi daemon start` のような非実在サブコマンドは案内しない（`requirements.md §REQ-DAEMON-017` / `basic-design/error.md §MSG-CLI-110 確定文面`、ペガサス指摘 ①） | 必須 |
 | REQ-DAEMON-018 | スキーマ単一真実源（DRY） | `IpcRequest` / `IpcResponse` / `IpcProtocolVersion` / `RecordSummary` を `shikomi-core::ipc` のみに定義。daemon / cli / gui で再定義しない | 必須 |
 | REQ-DAEMON-019 | プロトコルバージョン管理 | `IpcProtocolVersion::V1` を初期バージョンとして `#[non_exhaustive] enum` で定義。破壊的変更時に `V2` 等のバリアント追加で明示（VaultVersion 前例踏襲） | 必須 |
 | REQ-DAEMON-020 | secret マスキング（IPC 経路） | `IpcRequest::AddRecord` / `IpcResponse::Records` 等の secret フィールドはサーバ・クライアント両側で `expose_secret()` を呼ばずに `SecretBytes` として運搬。`Debug` 経由でログに secret が出ない | 必須 |

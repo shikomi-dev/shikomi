@@ -204,13 +204,23 @@ crates/shikomi-daemon/src/lifecycle/
 
 **Windows の解決**:
 
-1. 自プロセスの SID を `windows-sys` 経由で取得（`GetCurrentProcessToken` → `GetTokenInformation(TokenUser)` → `ConvertSidToStringSidW`）
-2. `format!(r"\\.\pipe\shikomi-daemon-{}", sid_string)` を return
-3. SID 取得失敗 → `Err(SocketPathError::SidLookup(err))`
+1. **自プロセスの SID 取得は `permission::windows::resolve_self_user_sid()` に委譲**（`unsafe` を `permission/windows.rs` に集約、服部平次指摘への対応）:
+   - 配置: `crates/shikomi-daemon/src/permission/windows.rs`（既存 `#![allow(unsafe_code)]` モジュール内）
+   - シグネチャ: `pub fn resolve_self_user_sid() -> Result<String, std::io::Error>`
+   - 内部実装: `GetCurrentProcessToken` → `GetTokenInformation(TokenUser)` → `ConvertSidToStringSidW` を `unsafe` ブロックでラップし、セーフな `String` として返す
+2. `lifecycle::socket_path::resolve_pipe_name` は `permission::windows::resolve_self_user_sid()` を呼び、戻り値の SID 文字列から `format!(r"\\.\pipe\shikomi-daemon-{}", sid_string)` を組み立てるのみ（**`unsafe` を `lifecycle/` 配下に置かない**）
+3. SID 取得失敗 → `resolve_self_user_sid` が返す `std::io::Error` を `SocketPathError::SidLookup(err)` でラップ
+
+**unsafe の局所化原則（再掲）**:
+
+- `crates/shikomi-daemon/src/permission/{unix,windows}.rs` **以外**で `unsafe` ブロックを書かない（CI grep で監査、**TC-CI-019** 対象）
+- `lifecycle/socket_path.rs` は **unsafe を含まない** — `permission/windows` 経由でセーフな `String` / `u32` を取得するのみ
+- `../basic-design/security.md §unsafe_code の扱い` の表と完全整合
 
 **設計判断**:
 - 環境変数による上書きは本 feature では対応しない（YAGNI、将来 `--socket-dir` フラグ追加余地）
 - Windows の SID は CLI / daemon で同じ User SID を使うため、同期不要（同一ユーザ実行が前提、ピア検証で別ユーザを排除）
+- `permission::windows::resolve_self_user_sid` は **daemon 専用**（CLI 側は後述の `crates/shikomi-cli/src/io/windows_sid.rs` で同型関数を用意、両者は**独立実装**で crate 境界を尊重）
 
 ### CLI 側の対応する解決
 

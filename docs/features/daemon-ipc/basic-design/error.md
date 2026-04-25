@@ -36,17 +36,19 @@
 | バリアント | フィールド | 発生箇所 | 設計意図 |
 |-----------|-----------|---------|---------|
 | `EncryptionUnsupported` | なし | 起動時 vault 検証 / 防御的コードでハンドラ内 | クライアント側 `CliError::EncryptionUnsupported` 経由で終了コード 3 |
-| `NotFound { id: RecordId }` | 対象 id | `edit` / `remove` ハンドラで `find_record` が `None` | クライアント側で `MSG-CLI-106` に写像 |
-| `InvalidLabel { reason: String }` | 検証失敗の理由（英語短文）| ハンドラで防御的に再検証（クライアント側で検証済みのはずだが念のため） | クライアント側で `MSG-CLI-101` に写像 |
-| `Persistence { reason: String }` | `PersistenceError::Display` の文字列化 | `repo.save` 失敗 | クライアント側で `MSG-CLI-107` / `108` に写像（reason 内容で分岐は CLI 側 best-effort、本 feature は粒度を維持） |
-| `Domain { reason: String }` | `DomainError::Display` の文字列化 | `vault.add_record` 等の集約整合性エラー | クライアント側で `MSG-CLI-109` に写像 |
-| `Internal { reason: String }` | 想定外バグの原因（debug 用、本番では generic 文字列）| ハンドラで予期せぬ状態を検出 | クライアント側で `MSG-CLI-109` に写像 |
+| `NotFound { id: RecordId }` | 対象 id（秘密情報なし）| `edit` / `remove` ハンドラで `find_record` が `None` | クライアント側で `MSG-CLI-106` に写像 |
+| `InvalidLabel { reason: String }` | ハードコード固定文言 `"invalid label"` / `"invalid record id"` | ハンドラで防御的に再検証（クライアント側で検証済みのはずだが念のため） | クライアント側で `MSG-CLI-101` / `102` に写像 |
+| `Persistence { reason: String }` | ハードコード固定文言 `"persistence error"` / `"vault corrupted"` / `"vault directory not resolvable"` | `repo.save` 等失敗 | クライアント側で `MSG-CLI-107` / `108` に写像 |
+| `Domain { reason: String }` | ハードコード固定文言 `"domain error"` / `"duplicate record id"` | `vault.add_record` 等の集約整合性エラー | クライアント側で `MSG-CLI-109` に写像 |
+| `Internal { reason: String }` | ハードコード固定文言 `"unexpected error"` | ハンドラで予期せぬ状態を検出 | クライアント側で `MSG-CLI-109` に写像 |
 
-**`reason` フィールドの設計規約**:
-- **英語短文のみ**（i18n は CLI 側の `presenter::error` で行う、daemon は英語ログ）
-- **secret 値・絶対パス・ピア UID 等を含めない**（漏洩経路防止）
-- 生成は `format!("{}", err)` で `Display` を呼ぶ。`Debug` は使わない（payload 展開リスク）
-- `PersistenceError::Display` / `DomainError::Display` は既存型として secret を含まないことが `cli-vault-commands` で証明済み（`basic-design/security.md` の表）
+**`reason` フィールドの設計規約（絶対規則、服部平次指摘への対応）**:
+
+- **ハードコードされた英語固定文言のみ**を格納する。`format!("{}", err)` / `err.to_string()` / `{:?}` 等による**動的文字列化を禁止**
+- **secret 値・絶対パス・lock holder PID・ピア UID 等を含めない**（漏洩経路防止、OWASP A07 / A09）
+- 根拠: `shikomi-infra::PersistenceError::Display` は `"IO error on {path}"` / `"vault is locked at {path}{holder}"` 等の経路で絶対パス・PID を展開するため、IPC 経由で同 UID 悪性プロセスに開示される
+- **詳細観測は daemon 側 `tracing::warn!` のみ**（運用者が `journalctl` / `launchctl log` / stderr で確認、クライアント=同 UID 別プロセスには固定文言のみ返す = 権限分離）
+- 写像表の確定値は `../detailed-design/daemon-runtime.md §Result → IpcErrorCode 写像の規約` が単一真実源
 
 ### CLI クライアント側
 
@@ -58,6 +60,56 @@
 | `ProtocolVersionMismatch { server, client }` | プロトコルバージョン両者 | ハンドシェイク不一致 | `UserError (1)` | `MSG-CLI-111` |
 
 既存 `CliError::Persistence(PersistenceError)` 経由でも IPC 由来の `PersistenceError::DaemonNotRunning` / `ProtocolVersionMismatch` を捕捉できる構造とする（詳細設計で `PersistenceError` への variant 追加を確定）。
+
+### MSG-CLI-110 確定文面（本書が単一真実源）
+
+hint は **3 OS（Linux / macOS / Windows）の起動コマンドを並記した複数行**で出す。**`shikomi-daemon` という実バイナリ名のみ**を案内する（`shikomi daemon start` 等の非実在サブコマンドは案内しない、ペガサス指摘 ①）。
+
+**英語（`Locale::English` / `LANG=C` 等の非日本語環境）**:
+
+```
+error: shikomi-daemon is not running (socket {path} unreachable)
+hint: start the daemon in a separate terminal by running one of:
+hint:   Linux/macOS: 'shikomi-daemon &'
+hint:   Linux (systemd user):  'systemctl --user start shikomi-daemon'
+hint:   macOS (launchd user):  'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'
+hint:   Windows (PowerShell):  'Start-Process -NoNewWindow shikomi-daemon'
+```
+
+**日本語併記（`Locale::JapaneseEn`）**: 英語原文をそのまま出力し、直下に以下の日本語訳を出す:
+
+```
+error: shikomi-daemon が起動していません（ソケット {path} に接続できません）
+hint: 別のターミナルで以下のいずれかで daemon を起動してください:
+hint:   Linux/macOS:            'shikomi-daemon &'
+hint:   Linux (systemd user):   'systemctl --user start shikomi-daemon'
+hint:   macOS (launchd user):   'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'
+hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'
+```
+
+**設計規約**:
+- hint 行は複数行出力（`println!` 相当、`render_error` が `\n` 連結で返す）
+- 3 OS 並記の根拠: ペガサス指摘 ② に対応、受入基準 1 / 13 の 3 OS matrix サポートと整合
+- systemd / launchd の起動コマンドは `process-model.md` §4.1 ルール 3 / 4 の規定と整合（将来 feature でサービス定義ファイルを自動配置するが、本 feature 時点では手動配置 + 手動 `systemctl` / `launchctl` 前提）
+- 「存在しないコマンドへの誘導禁止」: `shikomi daemon start` / `shikomi daemon stop` 等のサブコマンドは本 feature でも将来 Issue でも**追加予定はない**（daemon は独立バイナリとして扱う方針、`process-model.md` §4.1）
+
+### MSG-CLI-111 確定文面（本書が単一真実源）
+
+**英語**:
+
+```
+error: protocol version mismatch (server={server}, client={client})
+hint: rebuild shikomi-cli and shikomi-daemon to the same version
+```
+
+**日本語併記**:
+
+```
+error: protocol version mismatch (server={server}, client={client})
+error: プロトコルバージョン不一致（server={server}, client={client}）
+hint: rebuild shikomi-cli and shikomi-daemon to the same version
+hint: shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください
+```
 
 ### `PersistenceError` への variant 追加（IPC 由来）
 
@@ -100,7 +152,7 @@
 
 - `Result<T, String>` / `Result<T, Box<dyn Error>>` をモジュール公開 API で使わない（情報欠損）
 - `unwrap()` / `expect()` を本番コードパスで使わない（テストコードは許容、ただし `expect("reason")` で理由必須）
-- ハンドラ内で `?` で `PersistenceError` を CLI 側まで透過させない。daemon は `IpcResponse::Error(IpcErrorCode::Persistence { reason: format!("{}", e) })` に**明示的に変換**する（reason の secret 含有を制御するため）
+- ハンドラ内で `?` で `PersistenceError` を CLI 側まで透過させない。daemon は **`IpcResponse::Error(IpcErrorCode::Persistence { reason: "persistence error" })` のハードコード固定文言**に変換する（`format!("{}", e)` や `err.to_string()` を**禁止**、絶対パス / lock holder PID 漏洩を構造的に遮断、服部平次指摘への対応）。写像表の確定値は `../detailed-design/daemon-runtime.md §Result → IpcErrorCode 写像の規約`
 - エラーを握り潰さない。`if let Err(_) = ... {}` を無言で通過しない
 - **`tracing` マクロに `IpcRequest` / `IpcResponse` 全体を渡さない**（secret 露出経路）。代わりに variant 名のみ（`request.discriminant_name()` 相当）を出す
 - **`std::env::set_var` / `std::env::remove_var` を本番コードで呼ばない**（thread-unsafe、テストでも `assert_cmd::Command::env()` を使う）

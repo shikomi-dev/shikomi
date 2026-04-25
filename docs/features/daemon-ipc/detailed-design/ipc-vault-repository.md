@@ -56,7 +56,7 @@ pub mod ipc_client;
    - `match response`:
      - `IpcResponse::Handshake { server_version }` if `server_version == IpcProtocolVersion::current()` → `Ok(IpcClient { framed })`
      - `IpcResponse::ProtocolVersionMismatch { server, client }` → `Err(PersistenceError::ProtocolVersionMismatch { server, client })`
-     - その他 → `Err(PersistenceError::IpcDecode { reason: format!("unexpected handshake response: {}", response.variant_name()) })`
+     - その他 → `Err(PersistenceError::IpcDecode { reason: "unexpected handshake response" })`（ハードコード固定文言、`variant_name` 等の動的文字列化を**しない**。動的情報が必要な場合は `tracing::warn!` で別途 CLI 側ログに出す）
 
 ### `send_request` / `recv_response`
 
@@ -89,8 +89,21 @@ pub mod ipc_client;
 
 - **Linux**: `std::env::var("XDG_RUNTIME_DIR").map(|d| PathBuf::from(d).join("shikomi/daemon.sock")).or_else(|_| ...)` で取得 → `XDG_RUNTIME_DIR` 未設定時は `dirs::runtime_dir()` フォールバック → さらに失敗時は `PersistenceError::CannotResolveVaultDir`
 - **macOS**: `dirs::cache_dir().map(|d| d.join("shikomi/daemon.sock"))` → `~/Library/Caches/shikomi/daemon.sock`
-- **Windows**: `format!(r"\\.\pipe\shikomi-daemon-{}", get_user_sid()?)` → SID は `windows-sys` 経由で取得（unsafe ブロックは `permission/windows.rs` 等の既存 OS API モジュールに追加、または専用 `io/windows_sid.rs` を新設）
+- **Windows**: `format!(r"\\.\pipe\shikomi-daemon-{}", crate::io::windows_sid::resolve_self_user_sid()?)`（詳細は下記 §Windows SID 取得モジュール配置）
 - 環境変数 / フラグでの上書きは**本 feature では対応しない**（YAGNI、将来 `--ipc-socket <PATH>` フラグ追加余地）
+
+### Windows SID 取得モジュール配置（CLI 側、服部平次指摘 ③への対応）
+
+- 配置: `crates/shikomi-cli/src/io/windows_sid.rs`（`cfg(windows)` 配下のみコンパイル、新規作成）
+- 冒頭: `#![allow(unsafe_code)]` を明示（`../basic-design/security.md §unsafe_code の扱い` の表と整合、CI 監査範囲に登録）
+- シグネチャ: `pub fn resolve_self_user_sid() -> Result<String, PersistenceError>`
+- 内部実装: `GetCurrentProcessToken` → `GetTokenInformation(TokenUser)` → `ConvertSidToStringSidW` を `unsafe` ブロックでラップし、セーフな `String` を返す（daemon 側 `permission::windows::resolve_self_user_sid` と**同等機能を独立実装**、crate 境界を尊重）
+- 失敗時: `Err(PersistenceError::Io(std::io::Error::last_os_error()))` 相当
+
+**`default_socket_path` 本体は unsafe を含まない**:
+- CLI の `crates/shikomi-cli/src/io/ipc_vault_repository.rs::default_socket_path` は `crate::io::windows_sid::resolve_self_user_sid()?` を呼ぶのみ
+- `io/ipc_vault_repository.rs` / `io/ipc_client.rs` には `unsafe` を書かない（**`io/windows_sid.rs` のみ**が CLI 側 unsafe 許可領域）
+- CI grep（**TC-CI-019 拡張**）で `crates/shikomi-cli/src/` 配下の `unsafe` ブロック出現箇所が `io/windows_sid.rs` のみに限定されることを監査
 
 ### `VaultRepository` trait の実装
 
@@ -201,12 +214,17 @@ pub enum CliError {
 
 ## `presenter::error::render_error` への追加
 
-`crates/shikomi-cli/src/presenter/error.rs`（既存編集）に `MSG-CLI-110` / `MSG-CLI-111` の写像を追加:
+`crates/shikomi-cli/src/presenter/error.rs`（既存編集）に `MSG-CLI-110` / `MSG-CLI-111` の写像を追加する。**出力本文の確定文面は `../basic-design/error.md §MSG-CLI-110 確定文面` / `§MSG-CLI-111 確定文面` を単一真実源として参照**し、本書では責務分担のみ記述:
 
-| `CliError` バリアント | 英語 | 日本語 |
-|------------------|------|------|
-| `DaemonNotRunning(path)` | `error: shikomi-daemon is not running (socket {path} unreachable)\nhint: start the daemon (e.g., 'shikomi-daemon &' or systemd user service)` | `error: shikomi-daemon が起動していません（ソケット {path} に接続できません）\nhint: daemon を起動してください（例: 'shikomi-daemon &' または systemd user service）` |
-| `ProtocolVersionMismatch { server, client }` | `error: protocol version mismatch (server={server}, client={client})\nhint: rebuild shikomi-cli and shikomi-daemon to the same version` | `error: プロトコルバージョン不一致（server={server}, client={client}）\nhint: shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください` |
+| `CliError` バリアント | 写像先 MSG-ID | 文面出典 |
+|------------------|--------------|---------|
+| `DaemonNotRunning(path)` | `MSG-CLI-110`（3 OS 並記の複数行 hint）| `../basic-design/error.md §MSG-CLI-110 確定文面` |
+| `ProtocolVersionMismatch { server, client }` | `MSG-CLI-111` | `../basic-design/error.md §MSG-CLI-111 確定文面` |
+
+**実装注意**:
+- `render_error` 内で `{path}` / `{server}` / `{client}` をフォーマット引数として埋め込む。`shikomi-daemon` / `Start-Process -NoNewWindow shikomi-daemon` 等のコマンド文字列は**ハードコード**（ユーザに case-by-case で変化させない固定案内）
+- `Locale::English` / `Locale::JapaneseEn` の分岐は既存 `render_error` のパターン踏襲
+- `shikomi daemon start` 等の**非実在サブコマンドを hint に絶対に含めない**（ペガサス指摘 ①）
 
 ## テスト観点（テスト設計担当向け）
 
