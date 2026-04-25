@@ -32,12 +32,12 @@
 | 項目 | 内容 |
 |------|------|
 | 担当 Sub | Sub-A (#39) — `feat(shikomi-core)` |
-| 概要 | VEK / KEK / WrappedVek / MasterPassword / RecoveryMnemonic / KdfSalt / NonceCounter の `secrecy` + `zeroize` 型定義、`Clone` 禁止、`Debug` 秘匿、`Drop` 連鎖 |
-| 関連脅威 ID | L1（型レベル fail-secure で改竄検証の bypass 禁止）／ L2（`SecretBox` + `zeroize` で過去メモリ抽出耐性）／ L3（`KdfSalt::generate()` 単一コンストラクタで salt の OsRng 由来契約） |
-| 入力 | TBD by Sub-A |
-| 処理 | TBD by Sub-A |
-| 出力 | TBD by Sub-A |
-| エラー時 | TBD by Sub-A（Fail-Secure 必須: `Verified<Plaintext>` newtype、`NonceCounter::increment` の `Result` 返却、`MasterPassword::new` の構築時強度検証） |
+| 概要 | 鍵階層上位型 `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `Verified<T>` を新規追加、既存 `WrappedVek` / `NonceCounter` の Sub-0 凍結整合改訂、`Clone` 禁止、`Debug` 秘匿（`[REDACTED ...]` 固定）、`Display` 未実装、`serde::Serialize` 未実装、`Drop` 連鎖 |
+| 関連脅威 ID | L1（`Verified<T>` newtype で改竄検証 bypass を**型レベル禁止**、`pub(crate)` コンストラクタで構造的封鎖）／ L2（`SecretBox<Zeroizing<...>>` + `zeroize` で過去メモリ抽出耐性、`Clone` 禁止で誤コピー滞留禁止）／ L3（`MasterPassword::new` で `PasswordStrengthGate` 通過を**型コンストラクタ要件**として強制し弱パスワードを KDF 入力から構造排除、`KdfSalt::generate()` は **`shikomi-infra::crypto::Rng::generate_kdf_salt()` 単一エントリ点**として再解釈し shikomi-core の no-I/O 制約と整合） |
+| 入力 | (a) `[u8; 32]` バイト配列（`Vek::from_array` / `Kek::from_array`）、(b) ユーザ入力 `String` + `&dyn PasswordStrengthGate`（`MasterPassword::new`）、(c) `[String; 24]`（`RecoveryMnemonic::from_words`）、(d) `[u8; 12]`（`NonceBytes::from_random`、CSPRNG 由来）、(e) `(Vec<u8>, NonceBytes, AuthTag)`（`WrappedVek::new`） |
+| 処理 | basic-design.md §処理フロー F-A1〜F-A5 に詳述。各型は構築時に長さ / 強度 / wordlist 検証を行い、内部に `SecretBox<Zeroizing<...>>` / `SecretBytes` で秘密値を保護する。`Kek<Kind>` は phantom-typed + Sealed trait で `KekPw` / `KekRecovery` 取り違えをコンパイルエラー化。`HeaderAeadKey::from_kek_pw(&Kek<KekKindPw>)` で Sub-0 §脅威モデル §4 L1 §対策(c) のヘッダ AEAD 鍵経路（KEK_pw 流用）を型表現 |
+| 出力 | 各 newtype（成功時）/ `Result<T, CryptoError>`（失敗可能経路）。`Debug` 出力は秘密を含まない `[REDACTED ...]` 固定、`Display` / `serde::Serialize` は実装しない |
+| エラー時 | Fail-Secure 必須: (a) `MasterPassword::new` 失敗 → `Err(CryptoError::WeakPassword(WeakPasswordFeedback))`、(b) `WrappedVek::new` 失敗 → `Err(DomainError::InvalidVaultHeader(WrappedVekEmpty / WrappedVekTooShort))`、(c) `NonceBytes::try_new` 失敗 → `Err(DomainError::InvalidRecordPayload(NonceLength))`、(d) `Verified<T>` を `pub(crate)` 経路外から構築しようとする → コンパイルエラー（型レベル禁止）。中途半端な構築（部分初期化型）は型システム上存在しない |
 
 ### REQ-S03: KDF（Argon2id）
 
@@ -103,13 +103,13 @@
 
 | 項目 | 内容 |
 |------|------|
-| 担当 Sub | Sub-D (#42) — `feat(shikomi-infra)` |
-| 概要 | `vault encrypt` 入口で zxcvbn 強度 ≥ 3 を Fail Fast チェック、強度不足時は `Feedback`（warning + suggestions）を CLI/GUI に提示（Fail Kindly） |
+| 担当 Sub | **Sub-A (#39) で trait のみ確定** + Sub-D (#42) で実装 — `feat(shikomi-core)` + `feat(shikomi-infra)` |
+| 概要 | shikomi-core 側で `PasswordStrengthGate` trait と `WeakPasswordFeedback` 型を定義（Sub-A 担当）、shikomi-infra 側で zxcvbn 強度 ≥ 3 の `ZxcvbnGate` 実装と `vault encrypt` 入口の Fail Fast 経路（Sub-D 担当）。強度不足時は `Feedback`（warning + suggestions）を CLI/GUI に提示（Fail Kindly） |
 | 関連脅威 ID | L3（弱パスワード時の Argon2id offline 突破を入口で禁止）／ L1（同上） |
-| 入力 | TBD by Sub-D |
-| 処理 | TBD by Sub-D（`MasterPassword::new` 構築時に zxcvbn 強度判定、強度 < 3 で `WeakPassword { feedback }` を返す） |
-| 出力 | TBD by Sub-D |
-| エラー時 | TBD by Sub-D（Fail-Secure + Fail Kindly: 拒否は早期、`feedback.warning` / `feedback.suggestions` をユーザに渡す。MSG-* 文言は Sub-D で確定） |
+| 入力 | **Sub-A**: trait シグネチャ `validate(&self, password: &str) -> Result<(), WeakPasswordFeedback>` のみ。**Sub-D**: 構造体 `ZxcvbnGate` のコンフィグ（最小強度値、辞書データ） |
+| 処理 | **Sub-A**: `MasterPassword::new(s, gate)` が `gate.validate(&s)` を呼び、`Ok(())` なら `MasterPassword` 構築、`Err(WeakPasswordFeedback)` なら `Err(CryptoError::WeakPassword(_))` で構築失敗。trait 自体は強度基準を持たない（実装が決定）。**Sub-D**: `ZxcvbnGate` が `zxcvbn::zxcvbn(&password, &[]).score() >= 3` を判定し、未達なら `feedback.warning` / `feedback.suggestions` を `WeakPasswordFeedback` に詰めて返す |
+| 出力 | **Sub-A**: trait `Result<(), WeakPasswordFeedback>`。**Sub-D**: 同 trait の具象実装、CLI/GUI への MSG-S08 渡しまで |
+| エラー時 | Fail-Secure + Fail Kindly: 拒否は早期（`MasterPassword` 構築自体が失敗、後続経路に弱鍵を渡さない）、`feedback.warning` / `feedback.suggestions` をユーザにそのまま提示。MSG-S08 文言は Sub-D で確定 |
 
 ### REQ-S09: VEK キャッシュ
 
@@ -176,13 +176,13 @@
 
 | 項目 | 内容 |
 |------|------|
-| 担当 Sub | Sub-C (#41) + Sub-F (#44) |
-| 概要 | 上限 $2^{32}$ 到達時 `NonceLimitExceeded` を返し、Sub-F の `vault rekey` で VEK 再生成 + 全レコード再暗号化 |
-| 関連脅威 ID | L1（random nonce 衝突確率を $\le 2^{-32}$ に維持） |
-| 入力 | TBD by Sub-C / Sub-F |
-| 処理 | TBD by Sub-C / Sub-F（`NonceCounter::increment` で上限到達時 `Result::Err`、CLI 側は rekey フローへ誘導） |
-| 出力 | TBD by Sub-C / Sub-F |
-| エラー時 | TBD by Sub-C / Sub-F（Fail-Secure 必須: 上限到達後の暗号化試行は型レベルで拒否） |
+| 担当 Sub | **Sub-A (#39) で型契約確定**（`NonceCounter::increment` の `Result` 返却 + Boy Scout Rule で責務再定義） + Sub-C (#41) で AEAD 経路統合 + Sub-F (#44) で `vault rekey` フロー |
+| 概要 | shikomi-core 側で `NonceCounter` の責務を「VEK ごとの暗号化回数監視」に再定義し、`increment(&mut self) -> Result<(), DomainError>` が上限 $2^{32}$ 到達時 `NonceLimitExceeded` を返す型契約（Sub-A）。AEAD 経路統合（Sub-C）と `vault rekey` 起動フロー（Sub-F）は後続 |
+| 関連脅威 ID | L1（random nonce 衝突確率を $\le 2^{-32}$ に維持、上限到達後の暗号化を**型レベルで構造禁止**） |
+| 入力 | **Sub-A**: vault ヘッダから読み込む `nonce_counter: u64`（`NonceCounter::resume(count)` 経由）、または新規 vault `NonceCounter::new()` で `count=0`。**Sub-C**: AEAD 暗号化のたびに `NonceCounter::increment` 呼出。**Sub-F**: `NonceLimitExceeded` 検知時の `vault rekey` 起動 |
+| 処理 | **Sub-A**: `count < (1u64 << 32)` なら `count += 1; Ok(())`、上限到達なら `Err(DomainError::NonceLimitExceeded)`。`#[must_use]` 属性で結果無視を clippy lint で検出。既存「8B prefix + 4B counter」設計を**完全廃止**（Boy Scout Rule、per-record nonce は `NonceBytes::from_random([u8;12])` で完全 random 12B に変更）。**Sub-C / Sub-F**: TBD |
+| 出力 | **Sub-A**: `Result<(), DomainError>`（成功時 unit 値、失敗時 variant）、`current(&self) -> u64`（永続化用）。**Sub-C / Sub-F**: TBD |
+| エラー時 | Fail-Secure 必須: (a) 上限到達後の暗号化試行は **`NonceCounter::increment` が `Err` を返すことで構造的に禁止**、(b) `unwrap()` は禁止（`#[must_use]` + clippy lint）、(c) Sub-F の `vault rekey` 完了まで以後のレコード暗号化を全面拒否（Sub-D / Sub-F で詳細化） |
 
 ### REQ-S15: vault 管理サブコマンド
 
@@ -212,13 +212,13 @@
 
 | 項目 | 内容 |
 |------|------|
-| 担当 Sub | Sub-A〜F 全 Sub 共通 |
-| 概要 | `Verified<Plaintext>` newtype、`MasterPassword::new` の強度検証、`NonceCounter::increment` の `Result` 返却、`match` 暗号アーム第一パターン、`Drop` 連鎖 |
-| 関連脅威 ID | L1 / L2 / L3（型レベルで fail-secure を強制し、実装ミスによる脆弱性経路を構造的に閉じる） |
-| 入力 | TBD by Sub-A 起点 |
-| 処理 | TBD by Sub-A〜F 各 Sub（Sub-A で newtype と契約を確定、Sub-B〜F は本文を破らない） |
-| 出力 | TBD |
-| エラー時 | TBD（型システムによる強制であり、違反はコンパイルエラーまたは clippy lint 失敗） |
+| 担当 Sub | **Sub-A (#39) で 5 パターン全契約確定** + Sub-B〜F で契約遵守（破ったら PR レビュー却下） |
+| 概要 | (1) `Verified<T>` newtype（`pub(crate)` コンストラクタ可視性）、(2) `MasterPassword::new` の `&dyn PasswordStrengthGate` 構築時要求、(3) `NonceCounter::increment` の `Result<(), DomainError>` 返却 + `#[must_use]`、(4) `CryptoOutcome<T>` enum で `match` 暗号アーム第一パターン強制（失敗バリアント先頭並び）、(5) `Drop` 連鎖（`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `HeaderAeadKey` 全てに `Drop` 経路、内包する `SecretBox<Zeroizing<...>>` の zeroize が transitive 発火） |
+| 関連脅威 ID | L1（`Verified<T>` で AEAD 検証 bypass 構造禁止、`Kek<Kind>` phantom-typed で鍵経路取り違え禁止）／ L2（`Drop` 連鎖と `Clone` 禁止で滞留時間最小化）／ L3（`MasterPassword` 強度ゲートで弱鍵を KDF 入口排除）— 実装ミスによる脆弱性経路を**型システムで構造封鎖** |
+| 入力 | **Sub-A**: なし（型契約のみ）。**Sub-B〜F**: 各 Sub 本文の入力を本契約の枠内に収める |
+| 処理 | **Sub-A**: detailed-design.md §クラス設計（詳細）参照。`shikomi-core::crypto::verified` モジュールに `Verified<T>` / `Plaintext` / `CryptoOutcome<T>` を実装。`shikomi-core::crypto::password` に `PasswordStrengthGate` trait と `MasterPassword::new`。`shikomi-core::vault::nonce` の `NonceCounter::increment` に `#[must_use]` 付与。**Sub-B〜F**: 契約破りは PR レビューで却下（Boy Scout Rule） |
+| 出力 | **Sub-A**: 上記 5 種の型・trait・enum 定義。**Sub-B〜F**: 契約遵守の実装 |
+| エラー時 | 型システムによる強制（違反はコンパイルエラーまたは clippy lint 失敗）。runtime 検出は `CryptoError::VerifyRequired`（テスト経路でのみ発生想定） |
 
 ## 画面・CLI仕様
 
@@ -230,19 +230,28 @@
 
 ## データモデル
 
-本 Sub-0 段階では暗号メタデータのデータモデルを骨格のみ採番する。属性詳細・型・SQLite カラム制約・関連は **Sub-A (#39)** および **Sub-D (#42)** の設計工程で本ファイルを READ → EDIT して埋める。
+Sub-A (#39) で **shikomi-core 側の型定義を確定**。SQLite カラム制約 / 永続化フォーマット詳細は Sub-D (#42) で本ファイルを READ → EDIT して追記する。
 
 | エンティティ | 属性 | 型 | 制約 | 関連 |
 |-------------|------|---|------|------|
-| `VaultEncryptedHeader` | TBD | TBD by Sub-A | ヘッダ独立 AEAD タグで保護、`vault_format_version` で互換管理 | `Vault` ↔ 1:1 |
-| `WrappedVek` | TBD | TBD by Sub-A | AEAD ciphertext + nonce + tag、`wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` の 2 バリアント | `VaultEncryptedHeader` ↔ N:1 |
-| `KdfSalt` | TBD | TBD by Sub-A | 16B、`KdfSalt::generate()` 単一コンストラクタで OsRng 由来契約 | `VaultEncryptedHeader` ↔ 1:1 |
-| `KdfParams` | TBD | TBD by Sub-A | Argon2id `m, t, p`（凍結値: `m=19456, t=2, p=1`） | `VaultEncryptedHeader` ↔ 1:1 |
-| `NonceCounter` | TBD | TBD by Sub-A | u64、上限 $2^{32}$ 到達で `NonceLimitExceeded` | `VaultEncryptedHeader` ↔ 1:1 |
-| `EncryptedRecord` | TBD | TBD by Sub-C / Sub-D | per-record AEAD ciphertext + AAD（record_id ‖ version ‖ created_at、26B）+ nonce 12B + tag 16B | `Vault` ↔ N:1 |
-| `MasterPassword`（揮発のみ） | TBD | TBD by Sub-A | `SecretBytes`、構築時 zxcvbn 強度 ≥ 3 検証、`Drop` 時 zeroize | 永続化しない |
-| `RecoveryMnemonic`（揮発のみ） | TBD | TBD by Sub-A | BIP-39 24 語、`Drop` 時 zeroize、再表示不可 | 永続化しない |
-| `Vek`（揮発のみ） | TBD | TBD by Sub-A | `secrecy::SecretBox<[u8;32]>`、daemon プロセス内のみ | キャッシュ寿命: アイドル 15min / スクリーンロック / サスペンドで zeroize |
+| `VaultEncryptedHeader` | version / created_at / kdf_salt / wrapped_vek_by_pw / wrapped_vek_by_recovery / nonce_counter / kdf_params | `VaultVersion` / `OffsetDateTime` / `KdfSalt` / `WrappedVek` / `WrappedVek` / `NonceCounter` / `KdfParams`（Sub-D で型確定） | ヘッダ独立 AEAD タグで保護（鍵 = `HeaderAeadKey`、Sub-D 詳細）、`vault_format_version` で互換管理 | `Vault` ↔ 1:1 |
+| `WrappedVek` | ciphertext / nonce / tag | `Vec<u8>` / `NonceBytes` / `AuthTag` | Sub-A で**内部構造分離型化**（Boy Scout Rule）、`new(ct, nonce, tag) -> Result<Self, DomainError>`、ciphertext 空 / 32B 未満は拒否、`wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` の 2 バリアント | `VaultEncryptedHeader` ↔ N:1 |
+| `KdfSalt` | inner | `[u8; 16]` 固定長 | 16B、shikomi-core 側は `try_new(&[u8])` のみ、**`shikomi-infra::crypto::Rng::generate_kdf_salt() -> KdfSalt`** が単一エントリ点（Sub-0 凍結文言を Clean Architecture 整合的に再解釈） | `VaultEncryptedHeader` ↔ 1:1 |
+| `KdfParams` | m / t / p | TBD by Sub-D（`Argon2idParams` struct 想定） | Argon2id `m=19456, t=2, p=1`（`tech-stack.md` §4.7 凍結値）、ヘッダ AEAD タグで改竄検出（直接ではなく KDF 出力変化での間接検出、basic-design.md §セキュリティ設計 §脅威モデル L1 §対策(c)） | `VaultEncryptedHeader` ↔ 1:1 |
+| `NonceCounter` | count | `u64` | Sub-A で**責務再定義**: 既存「8B prefix + 4B counter」設計廃止、新責務は「VEK ごとの暗号化回数監視のみ」。上限 `1u64 << 32` (= $2^{32}$) で `NonceLimitExceeded` | `VaultEncryptedHeader` ↔ 1:1 |
+| `NonceBytes` | inner | `[u8; 12]` 固定長 | per-record AEAD nonce、`from_random([u8;12])`（CSPRNG 由来）と `try_new(&[u8])`（永続化復元）の 2 経路 | `WrappedVek` / `EncryptedRecord` から参照 |
+| `AuthTag` | inner | `[u8; 16]` 固定長 | AES-GCM 認証タグ、`try_new(&[u8])` で長さ検証 | `WrappedVek` / `EncryptedRecord` から参照 |
+| `EncryptedRecord` | ciphertext / nonce / aad / tag | TBD by Sub-C / Sub-D | per-record AEAD ciphertext + AAD（record_id ‖ version ‖ created_at、26B）+ nonce 12B + tag 16B | `Vault` ↔ N:1 |
+| `Vek`（揮発のみ、Sub-A 新規） | inner | `SecretBox<Zeroizing<[u8; 32]>>` | 32B、`from_array([u8;32])`、`Clone` 禁止、`Debug='[REDACTED VEK]'`、`Display`/`Serialize` 未実装、`expose_within_crate` は `pub(crate)` のみ。daemon プロセス内のみ滞留（unlock〜lock、最大アイドル 15min） | キャッシュ寿命: Sub-E |
+| `Kek<KekKindPw>`（揮発のみ、Sub-A 新規） | inner / kind | `(SecretBox<Zeroizing<[u8;32]>>, PhantomData<KekKindPw>)` | 32B、Argon2id 出力をラップ、phantom-typed で `KekKindRecovery` と取り違え不可 | KekPw 由来鍵階層 |
+| `Kek<KekKindRecovery>`（揮発のみ、Sub-A 新規） | inner / kind | `(SecretBox<Zeroizing<[u8;32]>>, PhantomData<KekKindRecovery>)` | 32B、HKDF 出力をラップ | KekRecovery 由来鍵階層 |
+| `HeaderAeadKey`（揮発のみ、Sub-A 新規） | inner | `SecretBox<Zeroizing<[u8;32]>>` | `from_kek_pw(&Kek<KekKindPw>) -> HeaderAeadKey`、Sub-0 凍結のヘッダ AEAD 鍵 = KEK_pw 流用契約を型表現 | ヘッダ AEAD 検証専用 |
+| `MasterPassword`（揮発のみ、Sub-A 新規） | inner | `SecretBytes` | `new(s, &dyn PasswordStrengthGate) -> Result<MasterPassword, CryptoError>`、強度ゲート通過後のみ構築、`Drop` 時 zeroize | 永続化しない |
+| `RecoveryMnemonic`（揮発のみ、Sub-A 新規） | words | `SecretBox<Zeroizing<[String; 24]>>` | BIP-39 24 語、`from_words([String;24])`、`Drop` 時各語 zeroize、再表示不可（Sub-0 REQ-S13）。BIP-39 wordlist 検証は Sub-B 連携 | 永続化しない |
+| `Plaintext`（揮発のみ、Sub-A 新規） | inner | `SecretBytes` | `new_within_crate(Vec<u8>)` で `pub(crate)` 構築、`Verified<Plaintext>::into_inner` 経由でのみ取り出し可 | レコード復号後の平文 |
+| `Verified<T>`（揮発のみ、Sub-A 新規） | inner | `T`（ジェネリクス） | `new_from_aead_decrypt(t: T) -> Verified<T>` を `pub(crate)` 可視性で実装、AEAD 復号成功経路でのみ構築可 | Fail-Secure 型レベル強制 |
+| `WeakPasswordFeedback`（公開構造体、Sub-A 新規） | warning / suggestions | `Option<String>` / `Vec<String>` | zxcvbn の `feedback` 構造をそのまま運ぶ、`Debug`/`Clone`/`Serialize` 派生（フィードバック自体は秘密でない） | `PasswordStrengthGate::validate` の Err |
+| `CryptoOutcome<T>`（Sub-A 新規 enum） | TagMismatch / NonceLimit / KdfFailed / WeakPassword / Verified | enum バリアント | 失敗バリアント先頭並び（`match` 暗号アーム第一強制）、`#[non_exhaustive]` で将来追加に備える | Sub-C / Sub-D 実装で使用 |
 
 ## ユーザー向けメッセージ一覧
 
