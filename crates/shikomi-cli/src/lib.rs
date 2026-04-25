@@ -710,36 +710,34 @@ mod tests {
     // TC-UT-134: 横串（IPC アーム不変条件） — 任意の `existing_kind` 入力 × Ipc で
     // 戻り値が `RecordKind::Text` を一切返さないこと。実装は 3 入力の単純列挙で
     // 網羅し、IPC アームに dummy Text が紛れ込まない構造保証を行う。
-    // unit.md §2.17 / Issue #33（**夢の TC**: 副次契約「IPC アーム不変条件」）
+    // unit.md §2.17 / Issue #33（**副次契約「IPC アーム不変条件」**、`b50e15d`
+    // ペテルギウス review 指摘 → 案 a 対応で 3 入力全網羅 `assert_ne!` に強化）。
+    //
+    // **対応する本番強化（`2798473`）**: `decide_kind_for_input` の `match` を
+    // `(_, Ipc) => Secret` に再構造化し、呼出側 `run_edit::existing_kind` ロジック
+    // への依存を排除。本 TC はその「呼出側非依存・本関数単体で fail-secure」契約を
+    // 純粋関数の I/O だけで構造保証する（Defense in Depth）。
     // ---------------------------------------------------------------
     #[test]
     fn tc_ut_134_ipc_arm_never_returns_text_invariant() {
-        // 3 入力（None / Some(Text) / Some(Secret)）を網羅
+        // 3 入力（None / Some(Text) / Some(Secret)）を全網羅
         let inputs: [Option<RecordKind>; 3] =
             [None, Some(RecordKind::Text), Some(RecordKind::Secret)];
 
         for existing in inputs {
             let result = decide_kind_for_input(existing, RepositoryHandleDiscriminant::Ipc);
-            // 「Text を返さない」ことを `assert_ne` で構造保証
-            // 注記: `(Some(Text), Ipc)` は呼出側 `run_edit` の existing_kind 算出が
-            //       Sqlite アームでしか `Some(_)` を返さないため**論理的に到達不能**だが、
-            //       純粋関数 `decide_kind_for_input` のシグネチャ上は型として可能。
-            //       本 TC はその型レベル可能性を「もし呼ばれたら Text を返す」現状実装
-            //       （existing 尊重）と整合させ、IPC アームの「dummy Text 流入禁止」
-            //       不変条件を `existing == None` のケースで担保している。
-            //       将来 `(Some(Text), Ipc)` を unreachable/Secret 強制に変える場合は
-            //       本アサートを `assert_ne!(result, RecordKind::Text)` 全網羅へ強化する。
-            if existing.is_none() {
-                assert_ne!(
-                    result,
-                    RecordKind::Text,
-                    "IPC アームに dummy Text が紛れ込んではならない: existing={existing:?}"
-                );
-            } else {
-                // existing が Some(_) のケースは現状実装では identity（既存尊重）。
-                // 本 TC はこの挙動の identity も併せて固定する。
-                assert_eq!(result, existing.unwrap());
-            }
+            // 「IPC アームでは何があっても Text を返さない」ことを 3 入力全てで構造保証。
+            // 補強アサート: 同時に Secret に**確定**することも併せて固定（fail-secure 強制）。
+            assert_ne!(
+                result,
+                RecordKind::Text,
+                "IPC アーム不変条件違反: existing={existing:?} で Text が返却された"
+            );
+            assert_eq!(
+                result,
+                RecordKind::Secret,
+                "IPC アームは existing の如何によらず Secret 強制であるべき: existing={existing:?}"
+            );
         }
     }
 
