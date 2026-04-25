@@ -399,6 +399,50 @@ else
 fi
 
 # ======================================================================
+# DRIFT-CHECK-01: split-aware reference drift (Sub-A Rev1 で
+# detailed-design.md → detailed-design/{index,...}.md に分割された後、
+# 兄弟ドキュメント (basic-design.md / requirements.md / test-design.md /
+# requirements-analysis.md) 内で `detailed-design.md` への裸参照が残存
+# していないことを検証する。
+#
+# Bug-DOC-007 (Sub-A Rev1 review): セルがファイル分割時に basic-design /
+# requirements の参照は更新したが、test-design.md TC-A-U18 内 2 箇所の
+# `detailed-design.md` 言及を見落とし、マユリの TC-A-U18 修正もファイル
+# 分割前の表記のままだった。両者がかりの参照ドリフト。
+#
+# このチェックは split が起きた後でないと意味を持たないため、
+# detailed-design/ ディレクトリの存在を前提条件とする。
+# ======================================================================
+SPLIT_DIR="$ROOT/docs/features/vault-encryption/detailed-design"
+if [[ -d "$SPLIT_DIR" ]]; then
+    drift=()
+    for f in "$ROOT/docs/features/vault-encryption/test-design.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design.md" \
+             "$ROOT/docs/features/vault-encryption/requirements.md" \
+             "$ROOT/docs/features/vault-encryption/requirements-analysis.md"; do
+        [[ -f "$f" ]] || continue
+        # Look for `detailed-design.md` token in code blocks / inline backticks /
+        # markdown links. Allow it inside HTML comments (history reference).
+        # Strategy: strip <!-- ... --> blocks then grep.
+        clean=$(python3 -c '
+import re, sys, pathlib
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+sys.stdout.write(text)
+' "$f")
+        if echo "$clean" | grep -qE 'detailed-design\.md'; then
+            count=$(echo "$clean" | grep -cE 'detailed-design\.md' || true)
+            drift+=("$(basename "$f"): $count occurrence(s) of bare detailed-design.md")
+        fi
+    done
+    if [[ ${#drift[@]} -eq 0 ]]; then
+        emit "DRIFT-CHECK-01" "PASS" "no stale 'detailed-design.md' refs in sibling docs (split-aware)"
+    else
+        emit "DRIFT-CHECK-01" "FAIL" "stale 'detailed-design.md' references survive after split: ${drift[*]}"
+    fi
+fi
+
+# ======================================================================
 # Summary
 # ======================================================================
 echo ""

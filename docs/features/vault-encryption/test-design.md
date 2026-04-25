@@ -277,7 +277,7 @@ bash tests/docs/sub-0-cross-ref.sh
 | TC-A-U15 | REQ-S02 / Sub-0 凍結 | `HeaderAeadKey::from_kek_pw(&Kek<KekKindPw>)` のみコンパイル可、`Kek<KekKindRecovery>` 渡しは compile_fail（chicken-and-egg 回避の鍵経路凍結） | ユニット | 型レベル設計判断 |
 | TC-A-U16 | REQ-S08 trait | `PasswordStrengthGate::validate(&self, raw: &str) -> Result<(), WeakPasswordFeedback>` シグネチャが固定。trait は `dyn`-safe（オブジェクト安全） | ユニット | trait 契約 |
 | TC-A-U17 | REQ-S02 | `WeakPasswordFeedback { warning: Option<String>, suggestions: Vec<String> }` 構造、空 `warning` / 空 `suggestions` の両方が許容（zxcvbn 仕様準拠） | ユニット | データ構造 |
-| TC-A-U18 | REQ-S17 | `CryptoOutcome<T>` enum バリアント **5 件**（`detailed-design.md` §CryptoOutcome と完全一致）: `TagMismatch` / `NonceLimit` / `KdfFailed(KdfErrorKind)` / `WeakPassword(WeakPasswordFeedback)` / `Verified(Verified<T>)`。`match` 強制で fall-through なし、`#[non_exhaustive]` で外部 crate からの追加に破壊的変更耐性 | ユニット | enum 網羅 |
+| TC-A-U18 | REQ-S17 | `CryptoOutcome<T>` enum バリアント **5 件**（`detailed-design/errors-and-contracts.md` §CryptoOutcome と完全一致）: `TagMismatch` / `NonceLimit` / `KdfFailed(KdfErrorKind)` / `WeakPassword(WeakPasswordFeedback)` / `Verified(Verified<T>)`。`match` 強制で fall-through なし、`#[non_exhaustive]` で外部 crate からの追加に破壊的変更耐性 | ユニット | enum 網羅 |
 | TC-A-I01 | C-13 / REQ-S14 | `grep -nE "NonceOverflow" --include='*.rs' .` で 0 件、`NonceLimitExceeded` のみ存在。`cargo check -p shikomi-core` でコンパイル成功 | 結合 | rename 整合性 |
 | TC-A-I02 | REQ-S02 / Clean Arch | `shikomi-core` 内に `rand::` / `getrandom::` / `OsRng` 参照が**存在しない**（grep）。CSPRNG 経路は `shikomi-infra::crypto::Rng` の単一エントリ点のみ | 結合 | 依存方向検証 |
 | TC-A-I03 | REQ-S17 | `cargo test -p shikomi-core --doc` で全 doc test（compile_fail 含む）が pass、`cargo clippy -p shikomi-core -- -D warnings` で警告 0 件 | 結合 | CI ゲート |
@@ -328,7 +328,7 @@ bash tests/docs/sub-0-cross-ref.sh
 | TC-A-U15 | `HeaderAeadKey::from_kek_pw(&Kek<KekKindPw>)` | 型レベル | KEK_pw 渡し / KEK_recovery 渡し | 前者のみ `Ok`、後者は compile_fail |
 | TC-A-U16 | `PasswordStrengthGate` trait | trait 契約 | `&dyn PasswordStrengthGate` | dyn-safe、`validate(&self, raw: &str) -> Result<(), WeakPasswordFeedback>` シグネチャ固定 |
 | TC-A-U17 | `WeakPasswordFeedback` 構造 | データ構造 | `{ warning: None, suggestions: vec![] }` / `{ warning: Some, suggestions: non-empty }` | 両方ともコンパイル可、`Debug` で内容透過（feedback 自体は秘密値ではない） |
-| TC-A-U18 | `CryptoOutcome<T>` `match` 網羅 | enum 網羅 | **5 バリアント全列挙**: `TagMismatch` / `NonceLimit` / `KdfFailed(KdfErrorKind)` / `WeakPassword(WeakPasswordFeedback)` / `Verified(Verified<T>)`（`detailed-design.md` §CryptoOutcome と完全一致） | `match` で 5 アーム全網羅、いずれか省略すると `non_exhaustive_patterns` 警告。`#[non_exhaustive]` 属性により外部 crate 側の `match` は wildcard `_` 必須で破壊的変更耐性 |
+| TC-A-U18 | `CryptoOutcome<T>` `match` 網羅 | enum 網羅 | **5 バリアント全列挙**: `TagMismatch` / `NonceLimit` / `KdfFailed(KdfErrorKind)` / `WeakPassword(WeakPasswordFeedback)` / `Verified(Verified<T>)`（`detailed-design/errors-and-contracts.md` §CryptoOutcome と完全一致） | `match` で 5 アーム全網羅、いずれか省略すると `non_exhaustive_patterns` 警告。`#[non_exhaustive]` 属性により外部 crate 側の `match` は wildcard `_` 必須で破壊的変更耐性 |
 
 ### 10.6 Sub-A 結合テストケース
 
