@@ -371,50 +371,64 @@ def check_req_s_sections(report: Report, req_text: str) -> None:
 
 
 def check_self_integrity(report: Report, td_text: str) -> None:
-    # META-01: §1 overview "TC 総数" cell declares 25
+    # ----- TC count contract (single source of truth in this script) -----
+    # When TC are added/removed, update EXPECTED_* below + test-design.md
+    # §1 overview / §3 matrix heading / §6.1 META rows in lockstep.
+    EXPECTED_TOTAL = 26
+    EXPECTED_U = 10
+    EXPECTED_I = 8
+    EXPECTED_E = 8
+
+    # META-01: §1 overview "TC 総数" cell declares EXPECTED_TOTAL
     m1 = re.search(r"TC 総数.*?\|\s*\*\*?(\d+)\s*件", td_text)
-    meta1_ok = bool(m1 and m1.group(1) == "25")
+    meta1_ok = bool(m1 and m1.group(1) == str(EXPECTED_TOTAL))
     report.add(
         "META-01",
         meta1_ok,
-        "§1 overview table declares TC 総数 = 25",
+        f"§1 overview table declares TC 総数 = {EXPECTED_TOTAL}",
         f"found: {m1.group(0) if m1 else 'no match'}" if not meta1_ok else "",
     )
 
-    # META-02: §3 matrix heading declares 25
+    # META-02: §3 matrix heading declares EXPECTED_TOTAL
     m2 = re.search(r"## 3\. テストマトリクス.*?TC 総数:\s*(\d+)\s*件", td_text, flags=re.DOTALL)
-    meta2_ok = bool(m2 and m2.group(1) == "25")
+    meta2_ok = bool(m2 and m2.group(1) == str(EXPECTED_TOTAL))
     report.add(
         "META-02",
         meta2_ok,
-        "§3 matrix heading declares TC 総数 = 25",
+        f"§3 matrix heading declares TC 総数 = {EXPECTED_TOTAL}",
         f"found: {m2.group(1) if m2 else 'no match'}" if not meta2_ok else "",
     )
 
-    # META-03: unique TC-DOC-(U|I|E)NN ids count == 25
+    # META-03: unique TC-DOC-(U|I|E)NN ids count
     ids = sorted(set(re.findall(r"TC-DOC-([UIE])(\d{2})", td_text)))
     series = {"U": [], "I": [], "E": []}
     for letter, num in ids:
         series[letter].append(int(num))
     total = sum(len(v) for v in series.values())
-    meta3_ok = total == 25 and len(series["U"]) == 10 and len(series["I"]) == 8 and len(series["E"]) == 7
+    meta3_ok = (
+        total == EXPECTED_TOTAL
+        and len(series["U"]) == EXPECTED_U
+        and len(series["I"]) == EXPECTED_I
+        and len(series["E"]) == EXPECTED_E
+    )
     report.add(
         "META-03",
         meta3_ok,
-        "Unique TC-DOC ids: 10(U) + 8(I) + 7(E) = 25",
+        f"Unique TC-DOC ids: {EXPECTED_U}(U) + {EXPECTED_I}(I) + {EXPECTED_E}(E) = {EXPECTED_TOTAL}",
         f"got U={len(series['U'])} I={len(series['I'])} E={len(series['E'])} total={total}",
     )
 
     # META-04: contiguous numbering (no gaps)
     bad_runs = []
-    for letter, expected in (("U", 10), ("I", 8), ("E", 7)):
+    for letter, expected in (("U", EXPECTED_U), ("I", EXPECTED_I), ("E", EXPECTED_E)):
         nums = sorted(series[letter])
         if nums != list(range(1, expected + 1)):
             bad_runs.append(f"{letter}: {nums}")
+    last_ids = f"U{EXPECTED_U:02d}/I{EXPECTED_I:02d}/E{EXPECTED_E:02d}"
     report.add(
         "META-04",
         not bad_runs,
-        "Each TC-DOC series is contiguous from 01 (U10/I08/E07 last)",
+        f"Each TC-DOC series is contiguous from 01 ({last_ids} last)",
         f"gaps: {bad_runs}" if bad_runs else "",
     )
 
