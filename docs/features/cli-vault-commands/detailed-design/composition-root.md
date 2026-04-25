@@ -113,15 +113,70 @@
 2. `run()` で「最低 1 つの更新フラグ必須」検証: `(args.label.is_some() || args.value.is_some() || args.stdin) == false` なら `CliError::UsageError("at least one of --label/--value/--stdin is required")`
 3. `RecordId::try_from_str(&args.id)?` → `CliError::InvalidId`
 4. `args.label.as_deref().map(|s| RecordLabel::try_new(s.to_string())).transpose()?` → `CliError::InvalidLabel`
-5. value 取得（`run_add` と同様、ただし `Option<SecretString>` に包む）
-6. `let input = EditInput { id, label, value };`
-7. shell 履歴警告: 既存レコード（まだ load していないので警告判定は `args.value.is_some() && args.stdin == false` だけで済ますか、load 後の既存 kind と照合するかは実装時判断。設計方針は前者（`run_add` と挙動を揃える））
-8. `let now = OffsetDateTime::now_utc();`
-9. `match handle`:
-   - `RepositoryHandle::Sqlite(repo)` → `let id = usecase::edit::edit_record(repo, input, now)?;`
-   - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.edit_record(input.id, input.label, input.value, now)?;`
-10. `println!("{}", render_updated(&id, locale))`
-11. `Ok(())`
+5. **既存 kind の解決（経路別、Issue #30 で方針 B：fail-secure 採用）**:
+   - `RepositoryHandle::Sqlite(repo)` → `repo.load()?` → `find_record(&id)` で既存 `Record::kind()` を取得（既存通り）
+   - `RepositoryHandle::Ipc(ipc)` → **既存 kind 不明**として扱い、value 取得経路を **fail-secure**（`RecordKind::Secret` 相当）に固定する。詳細は §Secret エコーバック対策（方針 B）参照
+6. value 取得（kind 解決結果に応じて分岐）:
+   - `args.value.is_some()` → `SecretString::from_string(args.value.clone().unwrap())`
+   - `args.stdin == true` → 解決済み kind が `Secret` → `read_password`（**非エコー**）／ `Text` → `read_line`（エコーあり）
+   - `args.value.is_none() && args.stdin == false` → `Option<SecretString>::None`
+7. `let input = EditInput { id, label, value };`
+8. shell 履歴警告: `args.value.is_some() && args.stdin == false` で `eprintln!("{}", render_shell_history_warning(locale))`（`run_add` と挙動を揃える）
+9. `let now = OffsetDateTime::now_utc();`
+10. `match handle`:
+    - `RepositoryHandle::Sqlite(repo)` → `let id = usecase::edit::edit_record(repo, input, now)?;`
+    - `RepositoryHandle::Ipc(ipc)` → `let id = ipc.edit_record(input.id, input.label, input.value, now)?;`
+11. `println!("{}", render_updated(&id, locale))`
+12. `Ok(())`
+
+## `run_edit` の Secret エコーバック対策（方針 B：fail-secure、Issue #30 で確定）
+
+### 問題
+
+`run_edit` の value 取得経路（ステップ 6）では、`--stdin` 指定時に既存レコードの `RecordKind` を見て、`Secret` なら `read_password`（非エコー）、`Text` なら `read_line`（エコーあり）を選択する。
+
+- **Sqlite 経路**: `repo.load()?` → `find_record(&id)` で既存 kind を取得可能
+- **IPC 経路**: PR #32 初期実装で「daemon round-trip コスト回避」を理由に既存 kind 取得を省略 → `Text` 既定で `read_line` に落としていた
+
+これは TTY で `shikomi --ipc edit --id <既存 Secret 行> --stdin` を実行した場合、**既存 Secret kind であっても新 value が画面エコーされる**脆弱経路を生む（ペテルギウス指摘）。
+
+### 採用方針: 方針 B — fail-secure（既存 kind 不明時は保守的に Secret 扱い）
+
+リーダー判断により方針 B を採用。実装は以下:
+
+| ステップ | Sqlite 経路 | IPC 経路（方針 B） |
+|---------|-----------|------------------|
+| 既存 kind 取得 | `repo.load()` → `find_record(&id)` で取得 | **取得しない** |
+| 不明扱い | 該当なし（必ず取得成功 / `RecordNotFound` で early return） | **「不明 = Secret 相当」として扱う** |
+| `--stdin` 経路の入力読取 | 既存 kind が `Secret` → `read_password` / `Text` → `read_line` | **常に `read_password`（非エコー）に固定** |
+
+### 採用した方針 A / C を不採用とした理由
+
+| 案 | 内容 | 不採用理由 |
+|----|------|----------|
+| 案 A | IPC 経路でも `list_summaries()` を呼んで既存 kind を取得（`run_remove` の label 取得と同方針、DRY） | `--ipc edit` の通常動作に**毎回 1 IPC 往復**を加算する。vault 規模が大きい場合は 16 MiB フレーム境界に近づく副作用も発生。`run_remove` は label 表示のため必須だが、`edit` は kind 解決のためだけに full-list を取得するのは重い |
+| 案 C | 設計書で「IPC 経路の意図的緩和」を明文化 + テスト追加 | セキュリティ機能を「コスト最適化のため握り潰す」記述になる。Fail Fast / fail-secure 原則に反し、設計書の規律を腐らせる |
+| **案 B（採用）** | **既存 kind 不明時は保守的に Secret 扱いで `read_password` を強制** | 副作用ゼロ（IPC 往復追加なし）、セキュリティ最優先、ユーザ体験への影響は「Text レコードの編集時も非エコー入力になる」軽微な UX 劣化のみ。後続 feature で `IpcRequest::FindRecord { id }` 単体取得バリアントを追加して案 A に移行する余地を残す（YAGNI） |
+
+### 実装契約
+
+- **CLI 側 `run_edit` の IPC 経路**:
+  - `--stdin` 指定時 → `read_password(&prompt)` を**常に**呼ぶ（既存 kind を見ない）
+  - `--value <STR>` 指定時 → 既存通り `SecretString::from_string(args.value.unwrap())`（`SecretString` で運搬するため secret 性は型で保証）
+  - 既存 kind 取得のための `list_summaries()` 呼出は**行わない**（IPC 往復ゼロ追加）
+- **prompt 文言**: `read_password` 経由でも UX 観点で「Enter new value (input hidden):" 等の prompt を表示する。既存 `read_password` の prompt 引数で完結
+- **daemon 側の挙動**: 受信した `IpcRequest::EditRecord { value: Some(SerializableSecretBytes(_)), .. }` を `RecordPayload::Plaintext(SecretString::from_bytes(_))` で書き戻す。既存 `Record::kind()` は `update_record` の closure 内で**変更しない**（Issue #30 では kind 変更スコープ外、`requirements.md` REQ-CLI-003 注記）。daemon は kind を見ずに payload のみ書き換えるため、CLI 側で kind 不明でも整合性は保たれる
+
+### テストへの影響
+
+- **TC-UT-XXX 追加**（テスト担当へ依頼）: `run_edit` の IPC 経路で `--stdin` 指定時に `read_password` 経路が呼ばれる（`read_line` ではない）ことの構造的検証
+- **TC-E2E-XXX 追加**: TTY 模擬環境（`expect`/`pty` 等）で `shikomi --ipc edit --id <id> --stdin` 実行時、stdin への入力が**端末にエコーされない**ことの観測検証
+
+### Phase 2 / 後続 feature での発展
+
+- 後続 feature `daemon-find-record`（仮、未起票）で `IpcRequest::FindRecord { id }` バリアント追加 → `IpcVaultRepository::find_record_summary(id)` で既存 kind をピンポイント取得可能になる
+- その時点で方針 B から方針 A への移行を再検討（`run_edit` で正確な kind 解決 → Text レコード編集時のエコー復活）
+- 本 Issue #30 では方針 B を採用、後続 feature への移行余地を残す（YAGNI）
 
 ## `run_remove` 関数の内部
 

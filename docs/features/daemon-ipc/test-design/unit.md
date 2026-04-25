@@ -214,10 +214,17 @@
 |-------|--------------------|------------------------|
 | TC-UT-110 | `EncryptionUnsupported` | `PersistenceError::EncryptionUnsupported`（既存バリアント） |
 | TC-UT-111 | `NotFound { id }` | `PersistenceError::RecordNotFound(id)`（**Issue #30 新規追加バリアント**） |
-| TC-UT-112 | `InvalidLabel { reason: "invalid label" }` | `PersistenceError::InvalidLabel("invalid label".into())`（既存または新規） |
-| TC-UT-113 | `Persistence { reason: "persistence error" }` | `PersistenceError::Persistence { reason: "persistence error".into() }`（既存または新規、固定文言保持） |
-| TC-UT-114 | `Domain { reason: "domain error" }` | `PersistenceError::Domain { reason }`（既存または新規） |
-| TC-UT-114b | `Internal { reason: "unexpected error" }` | `PersistenceError::Internal { reason }`（**Issue #30 新規追加バリアント**） |
+| TC-UT-112 | `InvalidLabel { reason: "invalid label" }` | **`PersistenceError::Internal { reason: "invalid label".into() }`（方針 X：Internal 集約、固定文言保持）** |
+| TC-UT-113 | `Persistence { reason: "persistence error" }` | **`PersistenceError::Internal { reason: "persistence error".into() }`（方針 X：Internal 集約、固定文言保持）** |
+| TC-UT-114 | `Domain { reason: "domain error" }` | **`PersistenceError::Internal { reason: "domain error".into() }`（方針 X：Internal 集約、固定文言保持）** |
+| TC-UT-114b | `Internal { reason: "unexpected error" }` | `PersistenceError::Internal { reason: "unexpected error".into() }`（**Issue #30 新規追加バリアント**、方針 X 集約先と同一型） |
+
+**方針 X（Internal 集約）採用に伴う TC-UT-112/113/114 期待値変更**:
+- 旧仕様（`PersistenceError::InvalidLabel(_)` / `Persistence { reason }` / `Domain { reason }` の個別バリアント）から、新仕様 **`PersistenceError::Internal { reason }`（集約バリアント）** に変更
+- リーダー指示「`PersistenceError` への新規追加は `RecordNotFound` / `Internal` の 2 バリアントに留める」に整合
+- daemon 側 `IpcErrorCode.reason` がハードコード固定文言（`"invalid label"` / `"persistence error"` / `"domain error"` 等の有限集合）を構築する契約のため、`reason.as_str()` の固定マッチで presenter 段の `MSG-CLI-101/102/107/108/109` 分岐が機能する
+- TC-UT-114b と TC-UT-112/113/114 の出力型は**全て `PersistenceError::Internal { reason }`** に統一されるが、`reason` の文字列値が異なるため後段で区別可能
+- 設計書写像表（`../basic-design/error.md §IpcErrorCode バリアント詳細` / `../detailed-design/ipc-vault-repository.md §エラー写像`）と一致
 
 **横串アサート**: 全 6 写像の出力 `Display` 文字列が secret マーカー `SECRET_TEST_VALUE` / 絶対パス `/home/` / lock holder PID 文字列を**含まない**（`predicates::str::contains(...).not()`）。固定文言契約の構造的検証。
 

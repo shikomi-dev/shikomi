@@ -87,6 +87,10 @@ impl From<PersistenceError> for CliError {
             PersistenceError::ProtocolVersionMismatch { server, client } => {
                 Self::ProtocolVersionMismatch { server, client }
             }
+            // Phase 1.5（Issue #30）: daemon 側 `IpcErrorCode::NotFound { id }` 由来の
+            // `PersistenceError::RecordNotFound(id)` は CLI 既存の同名バリアントへ写像し、
+            // SQLite 経路と同じ presenter 経路（MSG-CLI-103）に着地させる（DRY、UX 同一）。
+            PersistenceError::RecordNotFound(id) => Self::RecordNotFound(id),
             other => Self::Persistence(other),
         }
     }
@@ -200,6 +204,30 @@ mod tests {
         let pe = PersistenceError::UnsupportedYet {
             feature: "some other future feature",
             tracking_issue: None,
+        };
+        let cli_err: CliError = pe.into();
+        assert!(matches!(cli_err, CliError::Persistence(_)));
+        assert_eq!(ExitCode::from(&cli_err), ExitCode::SystemError);
+    }
+
+    /// Phase 1.5（Issue #30）: `PersistenceError::RecordNotFound(id)` は
+    /// CLI 既存 `RecordNotFound(id)` に直結（SQLite 経路と同 UX）。
+    #[test]
+    fn test_from_persistence_record_not_found_maps_to_record_not_found() {
+        let id =
+            RecordId::new(uuid::Uuid::now_v7()).expect("uuid v7 must satisfy RecordId invariant");
+        let pe = PersistenceError::RecordNotFound(id);
+        let cli_err: CliError = pe.into();
+        assert!(matches!(cli_err, CliError::RecordNotFound(_)));
+        assert_eq!(ExitCode::from(&cli_err), ExitCode::UserError);
+    }
+
+    /// Phase 1.5: `PersistenceError::Internal { reason }` は `Persistence` に
+    /// 寄せ、終了コードは `SystemError`（exit 2）。reason 文字列は固定文言のみ。
+    #[test]
+    fn test_from_persistence_internal_maps_to_persistence_system_error() {
+        let pe = PersistenceError::Internal {
+            reason: "persistence error".into(),
         };
         let cli_err: CliError = pe.into();
         assert!(matches!(cli_err, CliError::Persistence(_)));

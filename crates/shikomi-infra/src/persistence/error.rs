@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use shikomi_core::ipc::IpcErrorCode;
+use shikomi_core::RecordId;
 use thiserror::Error;
 
 // -------------------------------------------------------------------
@@ -303,6 +305,33 @@ pub enum PersistenceError {
         /// 失敗の人間可読理由（固定文言、絶対パス等を含めない）。
         reason: String,
     },
+
+    /// IPC: 対象 `RecordId` が daemon 側 vault に存在しない。
+    ///
+    /// daemon-ipc Phase 1.5（Issue #30）で追加。`IpcErrorCode::NotFound { id }` の
+    /// CLI 側写像専用バリアント。`reason` 文字列に id を埋めるのではなく、
+    /// 構造化された `RecordId` を保持して presenter 側で安定整形する。
+    ///
+    /// 設計根拠: docs/features/daemon-ipc/basic-design/error.md
+    /// §`IpcErrorCode` バリアントごとの CLI 写像
+    #[error("record not found: {0}")]
+    RecordNotFound(RecordId),
+
+    /// IPC: daemon 側で想定外バグ。
+    ///
+    /// daemon-ipc Phase 1.5（Issue #30）で追加。`IpcErrorCode::Internal { reason }` の
+    /// CLI 側写像専用バリアント。`InvalidLabel` / `Persistence` / `Domain` 系
+    /// `IpcErrorCode` も Phase 1.5 では本バリアントに寄せる（reason 文字列はそれぞれ
+    /// 固定文言を保持）。`reason` には secret / 絶対パス / PID を含めない契約
+    /// （daemon 側で固定文言化された値のみを格納）。
+    ///
+    /// 設計根拠: docs/features/daemon-ipc/basic-design/error.md
+    /// §`reason` フィールドの設計規約
+    #[error("internal error: {reason}")]
+    Internal {
+        /// 失敗の人間可読理由（固定文言、secret / 絶対パス / PID を含めない）。
+        reason: String,
+    },
 }
 
 // -------------------------------------------------------------------
@@ -325,5 +354,64 @@ impl From<shikomi_core::DomainError> for PersistenceError {
             },
             source: Some(e),
         }
+    }
+}
+
+/// daemon が返した `IpcErrorCode` を `PersistenceError` に写像する。
+///
+/// daemon-ipc Phase 1.5（Issue #30）で追加。`NotFound` のみ専用バリアント
+/// `RecordNotFound(id)` に写像し、`InvalidLabel` / `Persistence` / `Domain` /
+/// `Internal` および unknown variant は `Internal { reason }` に集約する。
+/// `reason` 文字列は **daemon 側で固定文言化された値をそのまま保持**する
+/// （CLI 側で再フォーマットせず、secret / 絶対パス / PID 漏洩経路を構造的に遮断）。
+///
+/// 設計根拠: docs/features/daemon-ipc/basic-design/error.md
+/// §`IpcErrorCode` バリアントごとの CLI 写像
+impl From<IpcErrorCode> for PersistenceError {
+    fn from(code: IpcErrorCode) -> Self {
+        match code {
+            IpcErrorCode::EncryptionUnsupported => Self::UnsupportedYet {
+                feature: "encrypted vault persistence",
+                tracking_issue: None,
+            },
+            IpcErrorCode::NotFound { id } => Self::RecordNotFound(id),
+            IpcErrorCode::InvalidLabel { reason }
+            | IpcErrorCode::Persistence { reason }
+            | IpcErrorCode::Domain { reason }
+            | IpcErrorCode::Internal { reason } => Self::Internal { reason },
+            // `IpcErrorCode` は `#[non_exhaustive]`。cross-crate での将来バリアント
+            // 追加に備えた防御的 wildcard。固定文言で `Internal` に集約する。
+            _ => Self::Internal {
+                reason: "unknown error code".to_owned(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_record_not_found_display_carries_record_id_only() {
+        let id = RecordId::new(Uuid::now_v7()).expect("valid uuid v7");
+        let err = PersistenceError::RecordNotFound(id);
+        let rendered = err.to_string();
+        assert!(rendered.starts_with("record not found:"));
+        // 絶対パス・PID・タイムスタンプ等を含まないことの構造的保証
+        assert!(!rendered.contains('/'));
+        assert!(!rendered.contains("pid"));
+    }
+
+    #[test]
+    fn test_internal_display_carries_reason_only() {
+        let err = PersistenceError::Internal {
+            reason: "persistence error".into(),
+        };
+        let rendered = err.to_string();
+        assert_eq!(rendered, "internal error: persistence error");
+        assert!(!rendered.contains('/'));
+        assert!(!rendered.contains("pid"));
     }
 }

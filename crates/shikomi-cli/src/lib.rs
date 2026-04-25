@@ -27,7 +27,7 @@ pub use error::{CliError, ExitCode};
 use std::io::Write;
 use std::sync::OnceLock;
 
-use shikomi_infra::persistence::SqliteVaultRepository;
+use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use time::OffsetDateTime;
 
 use cli::{AddArgs, CliArgs, EditArgs, RemoveArgs, Subcommand};
@@ -35,7 +35,6 @@ use input::{AddInput, ConfirmedRemoveInput, EditInput};
 use io::ipc_vault_repository::IpcVaultRepository;
 use presenter::Locale;
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
-use shikomi_infra::persistence::VaultRepository;
 
 // -------------------------------------------------------------------
 // グローバル Locale キャッシュ（panic hook から参照される）
@@ -86,6 +85,37 @@ fn panic_hook(_info: &std::panic::PanicInfo<'_>) {
 }
 
 // -------------------------------------------------------------------
+// RepositoryHandle — Sqlite / IPC の Composition over Inheritance
+// -------------------------------------------------------------------
+
+/// vault 操作経路を保持する non-public 値型（Issue #30、案 D）。
+///
+/// `IpcVaultRepository` は `VaultRepository` trait を**実装しない**ため
+/// `Box<dyn VaultRepository>` で抽象化できない。代わりに enum dispatch で経路を
+/// 表現し、各 `run_*` 関数の冒頭で `match` を取って 2 アームに分岐する。
+///
+/// `#[non_exhaustive]` を**付けない**: CLI 内部限定で、新バリアント追加時に
+/// `match` 網羅性検査が変更箇所を漏れなく列挙してくれる方が安全。
+///
+/// 設計根拠:
+/// - docs/features/cli-vault-commands/detailed-design/composition-root.md
+///   §`RepositoryHandle` enum
+/// - docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md
+///   §案 D（VaultRepository trait 非実装 + RepositoryHandle enum）
+//
+// バリアント間サイズ差（Sqlite ~96 B / Ipc ~304 B、`tokio::runtime::Runtime` 込み）は
+// 本 enum を `run()` 寿命中に **唯一 1 個** しか作らない契約のため、heap 1 個分の節約に
+// 価値がない。`Box<IpcVaultRepository>` で alloc を増やすより、stack 配置を維持する方が
+// 設計意図（composition-root.md §`Box` 不要、stack 配置）に沿う。
+#[allow(clippy::large_enum_variant)]
+enum RepositoryHandle {
+    /// 既定の SQLite 直接アクセス経路。
+    Sqlite(SqliteVaultRepository),
+    /// `--ipc` opt-in の daemon 経由経路。
+    Ipc(IpcVaultRepository),
+}
+
+// -------------------------------------------------------------------
 // run() — コンポジションルート
 // -------------------------------------------------------------------
 
@@ -96,7 +126,7 @@ fn panic_hook(_info: &std::panic::PanicInfo<'_>) {
 /// 2. Locale 決定 + `LOCALE_CACHE` 格納
 /// 3. clap パース（失敗時は clap エラー扱い）
 /// 4. `tracing_subscriber` 初期化
-/// 5. Repository 構築（`--vault-dir` > env (clap attribute) > OS デフォルト）
+/// 5. `RepositoryHandle` 構築（`args.ipc` で `Sqlite` / `Ipc` を分岐）
 /// 6. サブコマンド分岐 → `run_*` 関数 → `Result<(), CliError>`
 /// 7. `Err` は `render_error` で stderr 出力 + `ExitCode::from(&err)` 写像
 #[must_use]
@@ -116,74 +146,50 @@ pub fn run() -> ExitCode {
 
     let quiet = args.quiet;
 
-    if args.ipc {
-        // `--ipc` は現状 `list` のみ対応（Phase 2 移行 PR で add/edit/remove の透過化を完成）。
-        // ここで早期 reject することで、IpcVaultRepository が `VaultRepository` trait を
-        // 偽実装する必要がなくなる（旧実装の「嘘の Plaintext(empty) 注入」「嘘 ID 出荷」「常に true な exists()」
-        // を構造的に消滅させる）。
-        if !matches!(args.subcommand, Subcommand::List) {
-            return emit_error_and_exit(
-                &CliError::UsageError(
-                    "--ipc currently supports only the `list` subcommand; \
-                     for add/edit/remove, omit --ipc to use direct vault file access"
-                        .to_owned(),
-                ),
-                locale,
-            );
-        }
-        if !quiet {
-            eprintln!("warning: --ipc is an opt-in preview; only `list` is currently supported");
-        }
-        run_list_via_ipc(locale, quiet)
-    } else {
-        run_with_sqlite_repo(&args, locale, quiet)
-    }
-}
-
-fn run_with_sqlite_repo(args: &CliArgs, locale: Locale, quiet: bool) -> ExitCode {
-    let repo = match build_repo(args.vault_dir.as_deref()) {
-        Ok(r) => r,
+    let handle = match build_handle(&args, locale, quiet) {
+        Ok(h) => h,
         Err(err) => return emit_error_and_exit(&err, locale),
     };
-    let vault_dir = repo.paths().dir().to_path_buf();
+
     let result = match &args.subcommand {
-        Subcommand::List => run_list(&repo, &vault_dir, locale, quiet),
-        Subcommand::Add(a) => run_add(&repo, a, &vault_dir, locale, quiet),
-        Subcommand::Edit(a) => run_edit(&repo, a, &vault_dir, locale, quiet),
-        Subcommand::Remove(a) => run_remove(&repo, a, &vault_dir, locale, quiet),
+        Subcommand::List => run_list(&handle, locale, quiet),
+        Subcommand::Add(a) => run_add(&handle, a, locale, quiet),
+        Subcommand::Edit(a) => run_edit(&handle, a, locale, quiet),
+        Subcommand::Remove(a) => run_remove(&handle, a, locale, quiet),
     };
+
     match result {
         Ok(()) => ExitCode::Success,
         Err(err) => emit_error_and_exit(&err, locale),
     }
 }
 
-/// `--ipc list` 専用エントリ。`IpcVaultRepository::list_summaries` で `RecordSummary` 列を
-/// 取得し、`Vault` 集約を経由せずに直接 `RecordView` に射影する。
-fn run_list_via_ipc(locale: Locale, quiet: bool) -> ExitCode {
-    let socket_path = match IpcVaultRepository::default_socket_path() {
-        Ok(p) => p,
-        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
-    };
-    let client = match IpcVaultRepository::connect(&socket_path) {
-        Ok(c) => c,
-        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
-    };
-    let summaries = match client.list_summaries() {
-        Ok(s) => s,
-        Err(err) => return emit_error_and_exit(&CliError::from(err), locale),
-    };
-    let views = usecase::list::summaries_to_views(&summaries);
-    if !quiet {
-        let rendered = presenter::list::render_list(&views, locale);
-        print_stdout(&rendered);
-    }
-    ExitCode::Success
-}
+// -------------------------------------------------------------------
+// 補助関数 — Repository 構築 / clap / tracing / 出力
+// -------------------------------------------------------------------
 
-// -------------------------------------------------------------------
-// 補助関数
-// -------------------------------------------------------------------
+/// `args.ipc` フラグから `RepositoryHandle` を構築する。
+///
+/// IPC 経路では `MSG-CLI-051`（opt-in 警告）を `quiet` 抑止下を除き先に出力した上で、
+/// daemon に接続してハンドシェイクまで完了させる。
+fn build_handle(args: &CliArgs, locale: Locale, quiet: bool) -> Result<RepositoryHandle, CliError> {
+    if args.ipc {
+        if !quiet {
+            let notice = presenter::warning::render_ipc_opt_in_notice(locale);
+            eprint_stderr(&notice);
+        }
+        let socket_path = IpcVaultRepository::default_socket_path()?;
+        let ipc = IpcVaultRepository::connect(&socket_path)?;
+        Ok(RepositoryHandle::Ipc(ipc))
+    } else {
+        let path = match args.vault_dir.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => io::paths::resolve_os_default_vault_dir()?,
+        };
+        let repo = SqliteVaultRepository::from_directory(&path)?;
+        Ok(RepositoryHandle::Sqlite(repo))
+    }
+}
 
 /// clap エラーを CLI 終了コード方針に合わせて整形する。
 ///
@@ -223,16 +229,6 @@ fn init_tracing(verbose: bool) {
         .try_init();
 }
 
-/// `--vault-dir` フラグ（clap attribute で env `SHIKOMI_VAULT_DIR` も吸収済み）があれば
-/// その path で、なければ OS デフォルトで Repository を構築する。
-fn build_repo(vault_dir: Option<&std::path::Path>) -> Result<SqliteVaultRepository, CliError> {
-    let path = match vault_dir {
-        Some(p) => p.to_path_buf(),
-        None => io::paths::resolve_os_default_vault_dir()?,
-    };
-    SqliteVaultRepository::from_directory(&path).map_err(CliError::from)
-}
-
 fn emit_error_and_exit(err: &CliError, locale: Locale) -> ExitCode {
     let rendered = presenter::error::render_error(err, locale);
     let mut stderr = std::io::stderr().lock();
@@ -241,16 +237,21 @@ fn emit_error_and_exit(err: &CliError, locale: Locale) -> ExitCode {
 }
 
 // -------------------------------------------------------------------
-// サブコマンドごとの dispatcher
+// サブコマンド dispatcher（各関数は `&RepositoryHandle` を受領し
+// 内部で `match handle` の 2 アーム分岐）
 // -------------------------------------------------------------------
 
-fn run_list(
-    repo: &dyn VaultRepository,
-    vault_dir: &std::path::Path,
-    locale: Locale,
-    quiet: bool,
-) -> Result<(), CliError> {
-    let views = usecase::list::list_records(repo, vault_dir)?;
+fn run_list(handle: &RepositoryHandle, locale: Locale, quiet: bool) -> Result<(), CliError> {
+    let views = match handle {
+        RepositoryHandle::Sqlite(repo) => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            usecase::list::list_records(repo, &vault_dir)?
+        }
+        RepositoryHandle::Ipc(ipc) => {
+            let summaries = ipc.list_summaries()?;
+            usecase::list::summaries_to_views(&summaries)
+        }
+    };
     if !quiet {
         let rendered = presenter::list::render_list(&views, locale);
         print_stdout(&rendered);
@@ -259,9 +260,8 @@ fn run_list(
 }
 
 fn run_add(
-    repo: &dyn VaultRepository,
+    handle: &RepositoryHandle,
     args: &AddArgs,
-    vault_dir: &std::path::Path,
     locale: Locale,
     quiet: bool,
 ) -> Result<(), CliError> {
@@ -282,16 +282,29 @@ fn run_add(
         value,
     };
 
-    let initially_existed = repo.exists().map_err(CliError::from)?;
-
     let now = OffsetDateTime::now_utc();
-    let id = usecase::add::add_record(repo, input, now)?;
+
+    let id = match handle {
+        RepositoryHandle::Sqlite(repo) => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            // 初期化メッセージ判定は Sqlite 経路でのみ意味を持つ（IPC 経路では daemon が
+            // vault の存在を保証する前提、composition-root.md §run_add ステップ 6）。
+            let initially_existed = repo.exists().map_err(CliError::from)?;
+            let id = usecase::add::add_record(repo, input, now)?;
+            if !quiet && !initially_existed {
+                let init_msg = presenter::success::render_initialized_vault(&vault_dir, locale);
+                print_stdout(&init_msg);
+            }
+            id
+        }
+        RepositoryHandle::Ipc(ipc) => {
+            // id は **daemon 側で生成**され `IpcResponse::Added { id }` でそのまま返る。
+            // CLI 側で `Uuid::*` を呼ばない契約（CI grep TC-CI-029）。
+            ipc.add_record(input.kind, input.label, input.value, now)?
+        }
+    };
 
     if !quiet {
-        if !initially_existed {
-            let init_msg = presenter::success::render_initialized_vault(vault_dir, locale);
-            print_stdout(&init_msg);
-        }
         let added = presenter::success::render_added(&id, locale);
         print_stdout(&added);
     }
@@ -299,9 +312,8 @@ fn run_add(
 }
 
 fn run_edit(
-    repo: &dyn VaultRepository,
+    handle: &RepositoryHandle,
     args: &EditArgs,
-    vault_dir: &std::path::Path,
     locale: Locale,
     quiet: bool,
 ) -> Result<(), CliError> {
@@ -319,34 +331,47 @@ fn run_edit(
         None => None,
     };
 
-    // 既存 kind を事前 load で取得（value 入力時の非エコー判定 + shell 履歴警告に使う）。
-    // 設計書 composition-root.md §run_edit L59-62: 「値取得は run_add と同様（kind に応じて
-    // `read_password` / `read_line`）」「警告判定は load 後の既存 kind と照合するかは実装時判断」
-    // ここでは load 2 回を許容して既存 kind を参照する（run_remove と同方針、ペテルギウス指摘
-    // ①への対応）。load 失敗は Fail Fast（`?` でユーザに伝搬）。
     let needs_value_input = args.value.is_some() || args.stdin;
-    let existing_kind = if needs_value_input {
-        if !repo.exists()? {
-            return Err(CliError::VaultNotInitialized(vault_dir.to_path_buf()));
+
+    // 既存 kind は **Sqlite 経路かつ value 入力時のみ** load 経由で取得する。
+    // IPC 経路では事前 load を行わず `existing_kind = None` のままにする
+    // （daemon round-trip のコストとレース回避）。後段で fail-secure に Secret
+    // 扱いへ寄せる（composition-root.md §run_edit IPC 経路の方針 B）。
+    let existing_kind = match handle {
+        RepositoryHandle::Sqlite(repo) if needs_value_input => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            if !repo.exists()? {
+                return Err(CliError::VaultNotInitialized(vault_dir));
+            }
+            let vault = repo.load()?;
+            if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
+                return Err(CliError::EncryptionUnsupported);
+            }
+            Some(
+                vault
+                    .find_record(&id)
+                    .map(shikomi_core::Record::kind)
+                    .ok_or_else(|| CliError::RecordNotFound(id.clone()))?,
+            )
         }
-        let vault = repo.load()?;
-        if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
-            return Err(CliError::EncryptionUnsupported);
-        }
-        Some(
-            vault
-                .find_record(&id)
-                .map(shikomi_core::Record::kind)
-                .ok_or_else(|| CliError::RecordNotFound(id.clone()))?,
-        )
-    } else {
-        None
+        _ => None,
+    };
+
+    // value 入力 kind の決定:
+    // - 既存 kind が判明（Sqlite + load 成功）→ それを使う
+    // - IPC 経路で既存 kind 不明 → **fail-secure で `Secret` 強制**。TTY からの value
+    //   入力は `read_password`（非エコー）経路を通る。既存が Text であっても画面
+    //   エコーが出ないだけで機能上は等価、Secret であれば想定通りの保護が成立する
+    //   （`composition-root.md §run_edit IPC 経路の方針 B`）。
+    // - Sqlite で needs_value_input == false → 入力しないので `Text` dummy で十分
+    //   （`resolve_secret_value` は `--value` 経路で kind を参照しない）。
+    let kind_for_input = match (existing_kind, handle) {
+        (Some(k), _) => k,
+        (None, RepositoryHandle::Ipc(_)) => RecordKind::Secret,
+        (None, RepositoryHandle::Sqlite(_)) => RecordKind::Text,
     };
 
     let value = if needs_value_input {
-        // 既存が Secret ならエコーしない、Text なら通常 readline。
-        // `--value` と `--stdin` の相互排他は resolve_secret_value 側で検出。
-        let kind_for_input = existing_kind.unwrap_or(RecordKind::Text);
         Some(resolve_secret_value(
             args.value.as_deref(),
             args.stdin,
@@ -356,8 +381,11 @@ fn run_edit(
         None
     };
 
-    // shell 履歴警告: 既存 kind が Secret で `--value` 直接指定（= shell 履歴残留リスク）なら警告
-    if matches!(existing_kind, Some(RecordKind::Secret)) && args.value.is_some() {
+    // shell 履歴警告: 入力 kind が Secret として扱われる経路で `--value` 直接指定
+    // （= shell 履歴残留リスク）なら警告。IPC 経路の fail-secure（kind 不明 →
+    // Secret 想定）でも同様に警告を出すことで、Sqlite 経路と挙動を揃える（DRY、
+    // セキュリティ機能を経路依存にしない）。
+    if matches!(kind_for_input, RecordKind::Secret) && args.value.is_some() {
         let warning = presenter::warning::render_shell_history_warning(locale);
         eprint_stderr(&warning);
     }
@@ -369,40 +397,38 @@ fn run_edit(
     };
 
     let now = OffsetDateTime::now_utc();
-    let id = usecase::edit::edit_record(repo, input, now, vault_dir)?;
+
+    let new_id = match handle {
+        RepositoryHandle::Sqlite(repo) => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            usecase::edit::edit_record(repo, input, now, &vault_dir)?
+        }
+        RepositoryHandle::Ipc(ipc) => ipc.edit_record(input.id, input.label, input.value, now)?,
+    };
 
     if !quiet {
-        let rendered = presenter::success::render_updated(&id, locale);
+        let rendered = presenter::success::render_updated(&new_id, locale);
         print_stdout(&rendered);
     }
     Ok(())
 }
 
 fn run_remove(
-    repo: &dyn VaultRepository,
+    handle: &RepositoryHandle,
     args: &RemoveArgs,
-    vault_dir: &std::path::Path,
     locale: Locale,
     quiet: bool,
 ) -> Result<(), CliError> {
     let id = RecordId::try_from_str(&args.id).map_err(CliError::InvalidId)?;
 
+    // 確認プロンプト前段で **`--yes` の有無に関わらず** label を取得して id 存在確認を
+    // 行う（composition-root.md §確認プロンプトの label 表示と id 存在確認）。
+    // 非存在時は `RemoveRecord` リクエストを発行する前に Fail Fast で early return。
+    let label = lookup_label_for_remove(handle, &id)?;
+
     let confirmed = if args.yes {
         true
     } else if io::terminal::is_stdin_tty() {
-        // プロンプト表示用の label を取得するために load して find_record。
-        // load 失敗は Fail Fast で return（`.ok()` で握り潰さない — ペテルギウス指摘②）。
-        // これによりユーザは「load に失敗したのに y を押してしまう」欺き構造を踏まない。
-        if !repo.exists()? {
-            return Err(CliError::VaultNotInitialized(vault_dir.to_path_buf()));
-        }
-        let vault = repo.load()?;
-        if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
-            return Err(CliError::EncryptionUnsupported);
-        }
-        let label = vault
-            .find_record(&id)
-            .map(|r| r.label().as_str().to_owned());
         let prompt = presenter::prompt::render_remove_prompt(&id, label.as_deref(), locale);
         match io::terminal::read_line(&prompt) {
             Ok(line) => matches!(line.trim(), "y" | "Y"),
@@ -427,12 +453,58 @@ fn run_remove(
     }
 
     let input = ConfirmedRemoveInput::new(id);
-    let id = usecase::remove::remove_record(repo, input, vault_dir)?;
+    let removed_id = match handle {
+        RepositoryHandle::Sqlite(repo) => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            usecase::remove::remove_record(repo, input, &vault_dir)?
+        }
+        RepositoryHandle::Ipc(ipc) => ipc.remove_record(input.id().clone())?,
+    };
 
     if !quiet {
-        print_stdout(&presenter::success::render_removed(&id, locale));
+        print_stdout(&presenter::success::render_removed(&removed_id, locale));
     }
     Ok(())
+}
+
+/// `run_remove` の確認プロンプト用 label 取得 + id 存在確認。
+///
+/// - `Sqlite` 経路: `repo.load()` → `find_record(&id)` → `label`
+/// - `Ipc` 経路: `ipc.list_summaries()` → `iter().find(|s| s.id == id)` → `s.label`
+///
+/// 両経路ともに **id 非存在は `CliError::RecordNotFound(id)` で early return**。
+/// これにより `--yes` / 非 `--yes` で Fail Fast 経路が完全一致する
+/// （composition-root.md §確認プロンプトの label 表示と id 存在確認）。
+fn lookup_label_for_remove(
+    handle: &RepositoryHandle,
+    id: &RecordId,
+) -> Result<Option<String>, CliError> {
+    match handle {
+        RepositoryHandle::Sqlite(repo) => {
+            let vault_dir = repo.paths().dir().to_path_buf();
+            if !repo.exists()? {
+                return Err(CliError::VaultNotInitialized(vault_dir));
+            }
+            let vault = repo.load()?;
+            if vault.protection_mode() == shikomi_core::ProtectionMode::Encrypted {
+                return Err(CliError::EncryptionUnsupported);
+            }
+            let label = vault
+                .find_record(id)
+                .map(|r| r.label().as_str().to_owned())
+                .ok_or_else(|| CliError::RecordNotFound(id.clone()))?;
+            Ok(Some(label))
+        }
+        RepositoryHandle::Ipc(ipc) => {
+            let summaries = ipc.list_summaries()?;
+            let label = summaries
+                .iter()
+                .find(|s| &s.id == id)
+                .map(|s| s.label.as_str().to_owned())
+                .ok_or_else(|| CliError::RecordNotFound(id.clone()))?;
+            Ok(Some(label))
+        }
+    }
 }
 
 // -------------------------------------------------------------------
