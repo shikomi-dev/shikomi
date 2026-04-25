@@ -92,7 +92,9 @@ impl Vek {
     /// `pub(crate)` 可視性。`shikomi-infra` 等の外部 crate からは呼出不可
     /// (= 外部 crate に VEK 生バイトを渡す API は存在しない)。
     pub(crate) fn expose_within_crate(&self) -> &[u8; KEY_LEN] {
-        self.inner.expose_secret().as_ref()
+        // `expose_secret()` returns `&Zeroizing<[u8; KEY_LEN]>`. Two levels of `Deref` strip
+        // both the SecretBox guard and Zeroizing wrapper to reach the fixed-length array.
+        &**self.inner.expose_secret()
     }
 }
 
@@ -136,7 +138,7 @@ impl<Kind: KekKind> Kek<Kind> {
 
     /// crate 内部からのみ生バイト参照を取り出す。
     pub(crate) fn expose_within_crate(&self) -> &[u8; KEY_LEN] {
-        self.inner.expose_secret().as_ref()
+        &**self.inner.expose_secret()
     }
 }
 

@@ -263,13 +263,15 @@ mod tests {
         // 設計上の禁止は Boy Scout PR レビューで担保 (設計書 §設計意図)。
         let outcome: CryptoOutcome<u32> =
             CryptoOutcome::Verified(Verified::new_from_aead_decrypt(1));
+        // `#[non_exhaustive]` の wildcard arm は外部 crate からの呼出時に必要だが、
+        // 同一 crate 内では全バリアント列挙すれば exhaustive と扱われ、`_` は unreachable。
+        // ここでは Verified 第一パターンが意味的に書けてしまうことを示す例として扱う。
         let _ = match outcome {
             CryptoOutcome::Verified(_) => "ok",
             CryptoOutcome::TagMismatch => "tag",
             CryptoOutcome::NonceLimit => "nonce",
             CryptoOutcome::KdfFailed(_) => "kdf",
             CryptoOutcome::WeakPassword(_) => "weak",
-            _ => "unknown (non_exhaustive)",
         };
     }
 }

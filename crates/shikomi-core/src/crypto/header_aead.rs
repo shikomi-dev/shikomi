@@ -45,7 +45,7 @@ impl HeaderAeadKey {
 
     /// crate 内部からのみ生バイト参照を取り出す (ヘッダ AEAD 検証関数 = Sub-D 用)。
     pub(crate) fn expose_within_crate(&self) -> &[u8; KEY_LEN] {
-        self.inner.expose_secret().as_ref()
+        &**self.inner.expose_secret()
     }
 }
 
