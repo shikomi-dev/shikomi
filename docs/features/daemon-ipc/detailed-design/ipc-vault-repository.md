@@ -244,20 +244,33 @@ PR #29 の方針を維持し、Issue #30 でも変更なし:
 
 ## エラー写像（`IpcErrorCode → PersistenceError`、`PersistenceError → CliError`）
 
-### `IpcErrorCode → PersistenceError`（**Issue #30 で写像表確定**）
+### `IpcErrorCode → PersistenceError`（**Issue #30 で写像表確定、方針 X：Internal 集約**）
 
-`crates/shikomi-cli/src/io/ipc_vault_repository.rs` 内に `From<IpcErrorCode> for PersistenceError` を実装する（`shikomi-infra` 側ではなく `shikomi-cli` 側に配置、IPC 由来コードの写像責務は CLI 側に閉じる）:
+`crates/shikomi-infra/src/persistence/error.rs` 内に `From<IpcErrorCode> for PersistenceError` を実装する（orphan rule 回避のため infra 側に配置、`shikomi-cli` から `From` を再利用）:
 
 | 入力 `IpcErrorCode` | 出力 `PersistenceError` |
 |--------------------|------------------------|
 | `EncryptionUnsupported` | `EncryptionUnsupported`（既存バリアント） |
 | `NotFound { id }` | `RecordNotFound(id)`（**Issue #30 で `PersistenceError` に新規追加**） |
-| `InvalidLabel { reason }` | `InvalidLabel(reason)`（既存または新規追加） |
-| `Persistence { reason }` | `Persistence { reason }`（既存または新規追加、固定文言のみ受け入れ） |
-| `Domain { reason }` | `Domain { reason }`（既存または新規追加） |
+| `InvalidLabel { reason }` | **`Internal { reason }`（方針 X：集約）** |
+| `Persistence { reason }` | **`Internal { reason }`（方針 X：集約）** |
+| `Domain { reason }` | **`Internal { reason }`（方針 X：集約）** |
 | `Internal { reason }` | `Internal { reason }`（**Issue #30 で `PersistenceError` に新規追加**） |
 
-**注記**: PR #29 段階では list 操作で `EncryptionUnsupported` / `Persistence` のみが**実用上発生**し、`Internal` は未到達のため `PersistenceError::IpcDecode` への寄せ集め写像で十分だった。Issue #30 で add/edit/remove が加わることにより `NotFound` / `InvalidLabel` / `Domain` / `Internal` の 4 バリアント写像が**実用上必要**になる。同時に `shikomi-infra::persistence::error::PersistenceError` 側に **`RecordNotFound(RecordId)` / `Internal { reason: String }` の 2 バリアントを Issue #30 で新規追加**する（`InvalidLabel` / `Domain` / `Persistence` は既存バリアントを再利用）。test-design `test-design/unit.md §3.9` および basic-design `../basic-design/error.md §IpcErrorCode バリアント詳細` の記述と整合済み。
+**方針 X（Internal 集約戦略）の採用理由**:
+
+旧設計（Issue #30 の初期案）では `PersistenceError` に `InvalidLabel` / `Domain` 等の個別バリアントを追加して6個別写像を実現する案だった。リーダー指示「`PersistenceError` への新規追加は `RecordNotFound(RecordId)` / `Internal { reason: String }` の 2 バリアントに留める」に従い、以下の**方針 X**を採用:
+
+- **infra crate の API 表面拡大を最小化**: `PersistenceError` 新規バリアントは 2 個（`RecordNotFound` / `Internal`）のみ
+- **CLI 側 `presenter::error::render_error` で文字列マッチ識別**: daemon が `IpcErrorCode.reason` をハードコード固定文言（`"invalid label"` / `"persistence error"` / `"domain error"` 等の有限集合）で構築する契約のため、CLI 側で `match reason.as_str()` の固定マッチによる `MSG-CLI-101/102/107/108/109` 分岐が安定実装可能
+- **`reason` 文字列の動的フォーマット禁止契約は維持**: 比較対象の文字列は daemon 側の固定文言と同一値、`format!` での加工は CLI 側でも一切行わない
+- **`RecordNotFound` のみ独立バリアントの理由**: id を `RecordId` 強型で運搬する必要があり、`reason: String` では型情報が落ちる（`MSG-CLI-106` 表示時に id 値が必要）
+
+**`PersistenceError` への新規バリアント追加（最小 2 個）**:
+- `RecordNotFound(RecordId)` — IPC 経路の `NotFound { id }` 受信時の写像先
+- `Internal { reason: String }` — IPC 経路の `InvalidLabel` / `Persistence` / `Domain` / `Internal` 受信時の写像先（`reason` は固定文言）
+
+詳細整合: test-design `test-design/unit.md §3.9` および basic-design `../basic-design/error.md §IpcErrorCode バリアント詳細` の方針 X 記述と一致。実装は `crates/shikomi-infra/src/persistence/error.rs` の `From<IpcErrorCode>` 実装、PR #32 commit `e41a5a3` の `error.rs:355-372` で確定済み。
 
 ### `PersistenceError → CliError`（既存に追加）
 
