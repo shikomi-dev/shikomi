@@ -1,6 +1,7 @@
 # 基本設計書
 
-<!-- 詳細設計書とは別ファイル。統合禁止 -->
+<!-- 詳細設計書（detailed-design/ ディレクトリ）とは別ファイル。統合禁止 -->
+<!-- 詳細設計は Sub-A Rev1 で 4 分冊化: detailed-design/{index,crypto-types,password,nonce-and-aead,errors-and-contracts}.md -->
 <!-- feature: vault-encryption / Epic #37 -->
 <!-- 配置先: docs/features/vault-encryption/basic-design.md -->
 <!-- 本書は Sub-A (#39) 着手時に新規作成。Sub-A スコープ（shikomi-core 暗号ドメイン型 + ゼロ化契約）の基本設計を確定する。
@@ -58,7 +59,7 @@ crates/shikomi-core/src/
 
 ## クラス設計（概要）
 
-Sub-A 完了時の暗号ドメイン型と既存 vault ドメイン型の関係を Mermaid クラス図で示す。メソッドシグネチャは詳細設計書を参照。
+Sub-A 完了時の暗号ドメイン型と既存 vault ドメイン型の関係を Mermaid クラス図で示す。メソッドシグネチャは詳細設計書（`detailed-design/index.md` および各分冊 `crypto-types.md` / `password.md` / `nonce-and-aead.md` / `errors-and-contracts.md`）を参照。
 
 ```mermaid
 classDiagram
@@ -268,7 +269,7 @@ flowchart LR
 
 ## UX設計
 
-該当なし — 理由: Sub-A は内部型ライブラリで UI 不在。ただし `MasterPassword::new` の構築失敗時に返す `WeakPasswordFeedback { warning, suggestions }` は **Sub-D で MSG-S08 ユーザ提示（Fail Kindly）に直接渡される構造データ**として設計する。詳細設計書 §クラス設計（詳細）参照。
+該当なし — 理由: Sub-A は内部型ライブラリで UI 不在。ただし `MasterPassword::new` の構築失敗時に返す `WeakPasswordFeedback { warning, suggestions }` は **Sub-D で MSG-S08 ユーザ提示（Fail Kindly）に直接渡される構造データ**として設計する。**`warning=None` 時の代替警告文契約 + i18n 戦略責務分離（Sub-A は英語 raw のみ運ぶ、Sub-D が i18n 層を挟む）** は `detailed-design/password.md` §`warning=None` 契約 / §i18n 戦略責務分離 を参照。
 
 ## セキュリティ設計
 
@@ -278,7 +279,7 @@ flowchart LR
 
 | 想定攻撃者 | 攻撃経路 | 保護資産 | Sub-A 型レベル対策 |
 |-----------|---------|---------|------------------|
-| **L1**: 同ユーザ別プロセス | vault.db 改竄、IPC スプーフィング（Sub-E 担当） | `wrapped_VEK_*` / `kdf_params` / records ciphertext | `Verified<T>` newtype で「未検証 ciphertext を `Plaintext` として扱う」事故を**型レベル禁止**。AEAD 復号関数（Sub-C 実装）のみが `Verified::new_from_aead_decrypt` を呼べる `pub(crate)` コンストラクタ可視性で実装ミス経路を**構造的封鎖** |
+| **L1**: 同ユーザ別プロセス | vault.db 改竄、IPC スプーフィング（Sub-E 担当） | `wrapped_VEK_*` / `kdf_params` / records ciphertext | `Verified<T>` newtype で「未検証 ciphertext を `Plaintext` として扱う」事故を**三段防御で構造封鎖**: (1) `Verified::new_from_aead_decrypt` が `pub(crate)` 可視性で外部 crate から構築不可、(2) `Plaintext::new_within_module` が `pub(in crate::crypto::verified)` 可視性で `Verified` を実装する同一モジュール内からのみ構築可、(3) Sub-C PR レビューで `verify_aead_decrypt(\|\| ...)` クロージャ内が AEAD 検証を実装しているか必須確認。**型レベル完全保証ではなく caller-asserted マーカー契約**（`detailed-design/nonce-and-aead.md` §`verify_aead_decrypt` ラッパ関数の契約 参照） |
 | **L2**: メモリスナップショット | コアダンプ / ハイバネーションファイル / スワップから VEK / KEK / MasterPassword / 平文抽出 | `Vek` / `Kek` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` | 全て `secrecy::SecretBox` ベース、`Drop` 連鎖で**派生集約も連動消去**。`Clone` を**意図的に未実装**（誤コピーで滞留時間延長を構造禁止）。`Debug` は `[REDACTED ...]` 固定、`Display` 未実装、`serde::Serialize` 未実装（コンパイル時に誤シリアライズを排除） |
 | **L3**: 物理ディスク奪取 | offline brute force | `wrapped_VEK_*`（KDF 作業証明依存） | Sub-A 型レベル対策**なし**（KDF 計算は Sub-B、AEAD 計算は Sub-C 担当）。ただし `MasterPassword::new` で `PasswordStrengthGate` 通過を**型コンストラクタ要件**として強制し、弱パスワードを構造的に Sub-D の Argon2id 入力から排除（**KDF 強度の前提条件を型で担保**） |
 | **L4**: 同ユーザ root / OS 侵害 | ptrace / kernel keylogger / `/proc/<pid>/mem` 等 | 全て | **対象外**（`requirements-analysis.md` §脅威モデル §4 L4 / §5 スコープ外）。型レベルで防御不能、Sub-A は対策追加せず |
@@ -289,7 +290,7 @@ flowchart LR
 
 | パターン | Sub-A 実装 | 効果 |
 |--------|----------|------|
-| **`Verified<T>` newtype** | `Verified::new_from_aead_decrypt(t: T) -> Verified<T>` を `pub(crate)` 可視性で実装、外部 crate からは構築不可 | AEAD 復号成功経路でのみ `Verified<Plaintext>` が得られる。「未検証 ciphertext を平文として扱う」事故を**型レベル禁止** |
+| **`Verified<T>` newtype** | `Verified::new_from_aead_decrypt(t: T) -> Verified<T>` を `pub(crate)` 可視性で実装 + `Plaintext::new_within_module` を `pub(in crate::crypto::verified)` 可視性で同一モジュール内に閉じる二段防御 | AEAD 復号成功経路でのみ `Verified<Plaintext>` が得られる。「未検証 ciphertext を平文として扱う」事故を**三段防御で構造封鎖**（型レベル可視性 + モジュール内可視性 + Sub-C PR レビュー）。**caller-asserted マーカーであり、AEAD 検証 bypass の完全な型レベル保証ではない**点に注意（`detailed-design/nonce-and-aead.md` §設計判断の補足 参照） |
 | **`MasterPassword::new` の構築時強度検証** | 構築時に `&dyn PasswordStrengthGate` を要求、Sub-D の zxcvbn 実装が `validate(&s) -> Result<(), WeakPasswordFeedback>` を返す | 弱パスワードでの `MasterPassword` 構築を**入口で禁止**、Sub-B Argon2id 入力に到達させない |
 | **`NonceCounter::increment` の `Result` 返却** | 上限 $2^{32}$ 到達時 `Err(DomainError::NonceLimitExceeded)`、`#[must_use]` で結果無視を clippy lint で検出 | 上限到達後の暗号化を**構造的に禁止**、rekey 強制経路（Sub-F）へ誘導 |
 | **`match` 暗号アーム第一パターン** | Sub-A 提供型 `enum CryptoOutcome { TagMismatch, NonceLimit, KdfFailed, Verified(Plaintext) }` で**未検証ケース第一**の網羅 match を Sub-C / Sub-D 実装で強制 | 部分検証で先に進む実装ミスを排除（Issue #33 `(_, Ipc) => Secret` パターン同型） |
@@ -300,7 +301,7 @@ flowchart LR
 | # | カテゴリ | 対応状況 |
 |---|---------|---------|
 | A01 | Broken Access Control | 該当なし — 理由: Sub-A はドメイン型ライブラリで、認可境界は持たない。アクセス制御は IPC（Sub-E）/ OS パーミッション（既存 `vault-persistence`）担当 |
-| A02 | Cryptographic Failures | **主担当**。`Verified<T>` newtype で AEAD 検証 bypass を型禁止、`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` を `secrecy` + `zeroize` で滞留時間最小化、`Clone` 禁止で誤コピー排除、`Debug` 秘匿で誤ログ漏洩排除、`PasswordStrengthGate` で弱鍵禁止 |
+| A02 | Cryptographic Failures | **主担当**。`Verified<T>` newtype + `Plaintext::new_within_module` の二段可視性 + Sub-C PR レビューで AEAD 検証 bypass を**三段防御で構造封鎖**（caller-asserted マーカー契約）、`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `HeaderAeadKey` を `secrecy` + `zeroize` で滞留時間最小化、`Clone` 禁止で誤コピー排除、`Debug` 秘匿で誤ログ漏洩排除、`PasswordStrengthGate` で弱鍵禁止 |
 | A03 | Injection | 該当なし — 理由: shikomi-core は SQL / shell / HTML を扱わない |
 | A04 | Insecure Design | **主担当**。Fail-Secure を**型システムで強制**する設計（`Verified<T>` / `pub(crate)` 可視性 / phantom-typed `Kek<Kind>` 取り違え禁止 / `#[must_use]` 結果無視検出）。Issue #33 の `(_, Ipc) => Secret` 思想を継承し、暗号化境界も型で fail-secure |
 | A05 | Security Misconfiguration | 該当なし — 理由: 設定値は Sub-B（KDF パラメータ）/ Sub-C（nonce 上限）担当 |
@@ -370,7 +371,7 @@ erDiagram
 
 ## エラーハンドリング方針
 
-Sub-A で **`DomainError` の拡張**として暗号特化エラーを追加（`shikomi_core::error::DomainError` の variant 追加、または独立 `CryptoError` 型を `DomainError::Crypto(...)` で内包）。詳細な variant 仕様は詳細設計書参照。
+Sub-A で **`DomainError` の拡張**として暗号特化エラーを追加（`shikomi_core::error::DomainError` の variant 追加、または独立 `CryptoError` 型を `DomainError::Crypto(...)` で内包）。詳細な variant 仕様は `detailed-design/errors-and-contracts.md` を参照。
 
 | 例外種別 | 処理方針 | ユーザーへの通知 |
 |---------|---------|----------------|

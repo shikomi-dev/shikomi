@@ -23,7 +23,7 @@
 | 概要 | `requirements-analysis.md` §脅威モデル の L1〜L4 凍結を後続 Sub の受入条件・テスト基準の唯一根拠とする |
 | 関連脅威 ID | L1 / L2 / L3 / L4（凍結文書として全脅威を扱う） |
 | 入力 | — |
-| 処理 | 本 feature 配下の全設計書（basic-design.md / detailed-design.md / test-design.md）が脅威 ID L1〜L4 を参照可能な状態を維持する。各 Sub の PR レビューで「対策が脅威 ID と紐付いているか」を必須チェック項目とする |
+| 処理 | 本 feature 配下の全設計書（basic-design.md / detailed-design/*.md / test-design.md）が脅威 ID L1〜L4 を参照可能な状態を維持する。各 Sub の PR レビューで「対策が脅威 ID と紐付いているか」を必須チェック項目とする |
 | 出力 | 本 feature 配下の設計書群が L1〜L4 を共通語彙として使用 |
 | エラー時 | 設計書中の「対策」記述に L1〜L4 の参照が無い場合、レビュー却下（Boy Scout Rule） |
 
@@ -216,7 +216,7 @@
 | 概要 | (1) `Verified<T>` newtype（`pub(crate)` コンストラクタ可視性）、(2) `MasterPassword::new` の `&dyn PasswordStrengthGate` 構築時要求、(3) `NonceCounter::increment` の `Result<(), DomainError>` 返却 + `#[must_use]`、(4) `CryptoOutcome<T>` enum で `match` 暗号アーム第一パターン強制（失敗バリアント先頭並び）、(5) `Drop` 連鎖（`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `HeaderAeadKey` 全てに `Drop` 経路、内包する `SecretBox<Zeroizing<...>>` の zeroize が transitive 発火） |
 | 関連脅威 ID | L1（`Verified<T>` で AEAD 検証 bypass 構造禁止、`Kek<Kind>` phantom-typed で鍵経路取り違え禁止）／ L2（`Drop` 連鎖と `Clone` 禁止で滞留時間最小化）／ L3（`MasterPassword` 強度ゲートで弱鍵を KDF 入口排除）— 実装ミスによる脆弱性経路を**型システムで構造封鎖** |
 | 入力 | **Sub-A**: なし（型契約のみ）。**Sub-B〜F**: 各 Sub 本文の入力を本契約の枠内に収める |
-| 処理 | **Sub-A**: detailed-design.md §クラス設計（詳細）参照。`shikomi-core::crypto::verified` モジュールに `Verified<T>` / `Plaintext` / `CryptoOutcome<T>` を実装。`shikomi-core::crypto::password` に `PasswordStrengthGate` trait と `MasterPassword::new`。`shikomi-core::vault::nonce` の `NonceCounter::increment` に `#[must_use]` 付与。**Sub-B〜F**: 契約破りは PR レビューで却下（Boy Scout Rule） |
+| 処理 | **Sub-A**: `detailed-design/index.md` §クラス設計（詳細） + 各分冊（`crypto-types.md` / `password.md` / `nonce-and-aead.md` / `errors-and-contracts.md`）参照。`shikomi-core::crypto::verified` モジュールに `Verified<T>` / `Plaintext` / `CryptoOutcome<T>` を実装。`shikomi-core::crypto::password` に `PasswordStrengthGate` trait と `MasterPassword::new`。`shikomi-core::vault::nonce` の `NonceCounter::increment` に `#[must_use]` 付与。**Sub-B〜F**: 契約破りは PR レビューで却下（Boy Scout Rule） |
 | 出力 | **Sub-A**: 上記 5 種の型・trait・enum 定義。**Sub-B〜F**: 契約遵守の実装 |
 | エラー時 | 型システムによる強制（違反はコンパイルエラーまたは clippy lint 失敗）。runtime 検出は `CryptoError::VerifyRequired`（テスト経路でのみ発生想定） |
 

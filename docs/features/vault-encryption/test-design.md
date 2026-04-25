@@ -14,7 +14,7 @@
 | 本テスト設計のスコープ | **Sub-0 (#38) + Sub-A (#39)** — Sub-0: 脅威モデル文書（§1〜§9）、Sub-A: 暗号ドメイン型 `shikomi-core::crypto`（§10〜§16）。Sub-B〜F は本ファイルを順次 READ → EDIT で拡張 |
 | 対象 Issue | [#38](https://github.com/shikomi-dev/shikomi/issues/38) / [#39](https://github.com/shikomi-dev/shikomi/issues/39) |
 | 対象ブランチ | `feature/issue-38-threat-model`（Sub-0、マージ済）/ `feature/issue-39-crypto-domain-types`（Sub-A） |
-| 対象成果物 | Sub-0: `requirements-analysis.md` / `requirements.md`。Sub-A: `basic-design.md` / `detailed-design.md` / `requirements.md`（REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 確定） |
+| 対象成果物 | Sub-0: `requirements-analysis.md` / `requirements.md`。Sub-A: `basic-design.md` / `detailed-design/{index,crypto-types,password,nonce-and-aead,errors-and-contracts}.md`（Rev1 で 4 分冊化）/ `requirements.md`（REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 確定） |
 | 設計根拠 | Sub-0: §受入基準 1〜9、REQ-S* id 採番。Sub-A: 詳細設計書 §不変条件・契約サマリ C-1〜C-13、REQ-S02/S08 trait/S14/S17 |
 | テスト実行タイミング | Sub-0 は外部レビュー承認前ゲートでマージ済（PR #46/47）。Sub-A は `feature/issue-39-crypto-domain-types` → `develop` マージ前 |
 | **本テスト設計の TC 総数** | **Sub-0: 26 件**（TC-DOC-U01〜U10 / I01〜I08 / E01〜E08）+ **Sub-A: 22 件**（TC-A-U01〜U18 / I01〜I03 / E01）= **合計 48 件**。各 Sub のローカル META チェックは独立に管理（ID prefix で分離） |
@@ -213,8 +213,8 @@ bash tests/docs/sub-0-cross-ref.sh
 |------|------|
 | 対象 Sub-issue | [#39](https://github.com/shikomi-dev/shikomi/issues/39) |
 | 対象 PR | #48（`d28b87f`） |
-| 対象成果物 | `basic-design.md` / `detailed-design.md`（新規）/ `requirements.md`（REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 EDIT） |
-| 設計根拠 | `detailed-design.md` §不変条件・契約サマリ C-1〜C-13、§Sub-A クラス・関数仕様 |
+| 対象成果物 | `basic-design.md` / `detailed-design/{index,crypto-types,password,nonce-and-aead,errors-and-contracts}.md`（Rev1 で 4 分冊化）/ `requirements.md`（REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 EDIT） |
+| 設計根拠 | `detailed-design/index.md` §不変条件・契約サマリ C-1〜C-13、各分冊の §クラス・関数仕様 |
 | 対象 crate | `shikomi-core` — pure Rust / no-I/O、暗号アルゴリズム実装は持たず**型と trait のみ** |
 | **Sub-A TC 総数** | **22 件**（ユニット 18 + 結合 3 + E2E 1） |
 
@@ -238,7 +238,7 @@ bash tests/docs/sub-0-cross-ref.sh
 
 ### 10.3 Sub-A 受入基準（13 契約 + REQ 4 件）
 
-`detailed-design.md` §不変条件・契約サマリの **C-1〜C-13** を**テスト設計の起点**とする。各契約を 1 つ以上の TC で検証。さらに REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 の機能要件もマトリクスに紐付ける。
+`detailed-design/index.md` §不変条件・契約サマリの **C-1〜C-13** を**テスト設計の起点**とする。各契約を 1 つ以上の TC で検証。さらに REQ-S02 / REQ-S08 trait 部分 / REQ-S14 / REQ-S17 の機能要件もマトリクスに紐付ける。
 
 | 受入基準ID | 内容 | 検証レベル |
 |-----------|------|----------|
