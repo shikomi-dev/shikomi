@@ -333,10 +333,10 @@ fn run_edit(
 
     let needs_value_input = args.value.is_some() || args.stdin;
 
-    // 既存 kind を「Sqlite 経路かつ value 入力時」のみ取得（非エコー判定 + shell 履歴警告に使う）。
-    // IPC 経路では事前 load を避け（daemon round-trip のコストとレース）、kind は Text 既定で
-    // resolve（既存 kind と異なっても daemon 側 `update_record` が無修正で許容、
-    // composition-root.md §run_edit の DRY 方針）。
+    // 既存 kind は **Sqlite 経路かつ value 入力時のみ** load 経由で取得する。
+    // IPC 経路では事前 load を行わず `existing_kind = None` のままにする
+    // （daemon round-trip のコストとレース回避）。後段で fail-secure に Secret
+    // 扱いへ寄せる（composition-root.md §run_edit IPC 経路の方針 B）。
     let existing_kind = match handle {
         RepositoryHandle::Sqlite(repo) if needs_value_input => {
             let vault_dir = repo.paths().dir().to_path_buf();
@@ -357,8 +357,21 @@ fn run_edit(
         _ => None,
     };
 
+    // value 入力 kind の決定:
+    // - 既存 kind が判明（Sqlite + load 成功）→ それを使う
+    // - IPC 経路で既存 kind 不明 → **fail-secure で `Secret` 強制**。TTY からの value
+    //   入力は `read_password`（非エコー）経路を通る。既存が Text であっても画面
+    //   エコーが出ないだけで機能上は等価、Secret であれば想定通りの保護が成立する
+    //   （`composition-root.md §run_edit IPC 経路の方針 B`）。
+    // - Sqlite で needs_value_input == false → 入力しないので `Text` dummy で十分
+    //   （`resolve_secret_value` は `--value` 経路で kind を参照しない）。
+    let kind_for_input = match (existing_kind, handle) {
+        (Some(k), _) => k,
+        (None, RepositoryHandle::Ipc(_)) => RecordKind::Secret,
+        (None, RepositoryHandle::Sqlite(_)) => RecordKind::Text,
+    };
+
     let value = if needs_value_input {
-        let kind_for_input = existing_kind.unwrap_or(RecordKind::Text);
         Some(resolve_secret_value(
             args.value.as_deref(),
             args.stdin,
@@ -368,8 +381,11 @@ fn run_edit(
         None
     };
 
-    // shell 履歴警告: 既存 kind が Secret で `--value` 直接指定（= shell 履歴残留リスク）なら警告
-    if matches!(existing_kind, Some(RecordKind::Secret)) && args.value.is_some() {
+    // shell 履歴警告: 入力 kind が Secret として扱われる経路で `--value` 直接指定
+    // （= shell 履歴残留リスク）なら警告。IPC 経路の fail-secure（kind 不明 →
+    // Secret 想定）でも同様に警告を出すことで、Sqlite 経路と挙動を揃える（DRY、
+    // セキュリティ機能を経路依存にしない）。
+    if matches!(kind_for_input, RecordKind::Secret) && args.value.is_some() {
         let warning = presenter::warning::render_shell_history_warning(locale);
         eprint_stderr(&warning);
     }
