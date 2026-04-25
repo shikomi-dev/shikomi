@@ -24,9 +24,11 @@ CLI の外部 I/F（サブコマンド名 / フラグ名 / 終了コード / メ
 
 Phase 2（daemon 経由）・将来 feature への移行パスを明示する。
 
+> **更新履歴**: Issue #26（`daemon-ipc` feature）で **「daemon 経由 IPC（Phase 2）」が実体化された**。下表先頭行の「変更インパクト」は Issue #26 で実際に行われた変更内容を反映。本 feature の Phase 2 移行契約（「`run()` の 1 行差し替えで Repository 構築のみ変更」）は `daemon-ipc` の `IpcVaultRepository::connect` 追加と `--ipc` グローバルフラグ追加により完了している。
+
 | 将来機能 | 本 feature の設計フック | 変更インパクト |
 |---------|------------------|-------------|
-| daemon 経由 IPC（Phase 2） | `UseCase` が `&dyn VaultRepository` にのみ依存、コンポジションルートが `lib.rs::run()` 1 箇所 | `run()` で `SqliteVaultRepository::from_directory(&path)` を `IpcVaultRepository::connect(socket_path)` に差し替え。`UseCase` / `Presenter` は無変更 |
+| daemon 経由 IPC（Phase 2、**Issue #26 で実体化済み**） | `UseCase` が `&dyn VaultRepository` にのみ依存、コンポジションルートが `lib.rs::run()` 1 箇所 | **実体化結果**: `run()` の Repository 構築箇所に `match args.ipc` 分岐を 1 箇所追加。`args.ipc == false`（既定）→ `SqliteVaultRepository::from_directory(&path)`、`args.ipc == true` → `IpcVaultRepository::connect(&socket_path)`。`UseCase` / `Presenter` / `input` / `view` / `error` の各レイヤは**無変更**（Phase 2 移行契約の完全達成）。詳細: `docs/features/daemon-ipc/detailed-design/composition-root.md` |
 | `shikomi vault encrypt` / `decrypt` | `CliError::EncryptionUnsupported` が明示的な誘導先を保持、`MSG-CLI-103` のヒントが `shikomi vault decrypt` に言及済み | `shikomi-infra` 側の暗号化実装 feature とセットで `usecase::vault::encrypt` / `decrypt` を新設。本 feature の `list` / `add` / `edit` / `remove` は暗号化 vault への対応を `Vault::add_record` 等の既存集約 API 経由で追加可能（`RecordPayload::Encrypted` バリアントを扱うだけ） |
 | `shikomi list --json` | `ListPresenter::render_list` が `String` を返す pure function、`presenter::list` に `render_list_json` を追加するだけ | `clap` に `--format json` フラグ追加、`run_list` で分岐。UseCase は無変更 |
 | `shikomi export` / `import` | 本 feature の UseCase パターンを踏襲、`usecase::export` / `import` を新設 | `VaultRepository::load` / `save` を使う。`tempfile` で中間ファイル管理 |
@@ -62,5 +64,7 @@ Phase 2（daemon 経由）・将来 feature への移行パスを明示する。
 ## 結語
 
 本 feature の設計は、Clean Architecture の縦串を初めて通す**骨格テンプレート**としての役割を担う。Phase 2（daemon 経由）への移行時、`usecase` / `presenter` / `input` / `view` / `error` レイヤは**一切変更不要**で、`lib.rs::run()` 内の Repository 構築 1 行のみが差し替わる。この境界設計が本 feature の最大の価値である。
+
+**Issue #26 で実体化を確認**: `daemon-ipc` feature により、Phase 2 移行契約は実際の実装変更（`--ipc` フラグ + `match args.ipc` 分岐 1 箇所のみ）で完了した。本 feature の設計が予言した「1 行差し替え」が文字通り実現され、骨格テンプレートとしての価値が証明された。後続 feature（ホットキー / クリップボード / 暗号化 / GUI）も `IpcRequest` の `#[non_exhaustive] enum` バリアント追加で同パターンを踏襲する。
 
 疑似コードや実装サンプルを書かずに、**型・責務・依存方向・Fail Fast の契約**のみを設計書に残した。実装担当（坂田銀時）は、本設計書の契約を満たす限りにおいて実装詳細を自由に決定できる。
