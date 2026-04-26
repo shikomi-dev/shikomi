@@ -336,7 +336,7 @@ CLI は `shikomi` の最前線攻撃面として shell history / TTY scrollback 
 | **C-38**: パスワード / 24 語入力は `/dev/tty` 経由のみ、stdin パイプ拒否（Sub-F 新規、服部指摘5）| `input::password::prompt` / `input::mnemonic::prompt` が TTY 判定（`is-terminal::IsTerminal::is_terminal`）→ 非 TTY 時に `CliError::NonInteractivePassword` で fail fast | integration test（TC-F-I12、`echo pw \| shikomi vault unlock` → 終了コード 1） |
 | **C-39**: 24 語出力先 `--output` フラグは排他指定、`screen` 既定 + アクセシビリティ自動切替（Sub-F 新規）| `clap::ValueEnum` 派生で 4 値排他、`accessibility::output_target::resolve` で env / OS 判定 → 自動切替 | unit test（TC-F-U03）|
 | **C-40**: env seam は debug ビルド限定 + allowlist sanity check（Sub-F 新規、服部指摘6 + ペテルギウス致命3）| `#[cfg(debug_assertions)]` で env 読込コード自体を release から除外、daemon 起動時に未知の `SHIKOMI_DAEMON_*` env を fail-fast | grep 静的検査（TC-F-S05、`#[cfg(debug_assertions)]` で env 読込が囲まれていることを機械検証）|
-| **C-41**: shikomi-cli プロセスは core dump 抑制（Sub-F 新規、服部指摘 core dump）| 起動時に Linux `prctl(PR_SET_DUMPABLE, 0)` / macOS `setrlimit(RLIMIT_CORE, 0)` / Windows `SetErrorMode` を呼出 | unit test（TC-F-U10、起動関数のシグネチャ存在確認）|
+| **C-41**: shikomi-cli プロセスは core dump 抑制（Sub-F 新規、服部指摘 core dump）| 起動時に Linux `prctl(PR_SET_DUMPABLE, 0)` / macOS `setrlimit(RLIMIT_CORE, 0)` / Windows `SetErrorMode` を呼出。FFI 呼出のため `crates/shikomi-cli/src/hardening/core_dump.rs` のみ `#![allow(unsafe_code)]` を上書き（TC-CI-026 例外、`io/windows_sid.rs` と同等扱い）| unit test（TC-F-U10、起動関数のシグネチャ存在確認）+ grep 静的検査（TC-CI-026 で `unsafe {` ブロックが `hardening/core_dump.rs` と `io/windows_sid.rs` 以外に存在しないこと）|
 
 ## 双方向同期（daemon-ipc feature への横断的変更）
 

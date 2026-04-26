@@ -1,3 +1,11 @@
+// workspace.lints.rust.unsafe_code = "deny" の下で、本ファイルは C-41 実装のため
+// `libc::prctl` / `libc::setrlimit` の FFI 呼出に必要な最小限の `unsafe` ブロックを
+// 含む。`permission/windows_sid.rs` と同様に、ファイル単位で allow(unsafe_code) を
+// 上書きする (workspace 既定 forbid → file local deny → file local allow の優先順)。
+// scripts/ci/audit-secret-paths.sh の TC-CI-026 で本ファイルを例外として明示し、
+// 「unsafe は hardening/core_dump.rs と io/windows_sid.rs のみ」を CI で機械検証する。
+#![allow(unsafe_code)]
+
 //! Core dump 抑制（C-41、Sub-F #44 Phase 5）。
 //!
 //! 設計根拠:

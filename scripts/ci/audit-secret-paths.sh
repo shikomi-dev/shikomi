@@ -150,14 +150,20 @@ fi
 echo "[TC-CI-023/024] PASS"
 
 # --- TC-CI-026 ------------------------------------------------------
-echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs (shikomi-cli)"
+# 例外:
+# - crates/shikomi-cli/src/io/windows_sid.rs: Windows Win32 Security FFI (Phase 1)
+# - crates/shikomi-cli/src/hardening/core_dump.rs: C-41 core dump 抑制 (Sub-F Phase 5)
+#   `libc::prctl(PR_SET_DUMPABLE, 0)` / `libc::setrlimit(RLIMIT_CORE, 0)` の FFI
+#   呼出に必要な最小 unsafe。ファイル単位で `#![allow(unsafe_code)]` を明示。
+echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs and hardening/core_dump.rs (shikomi-cli)"
 if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/ \
     --include='*.rs' \
     | grep -v 'crates/shikomi-cli/src/io/windows_sid.rs' \
+    | grep -v 'crates/shikomi-cli/src/hardening/core_dump.rs' \
     || true)"; then
     if [[ -n "$matches" ]]; then
         echo "$matches"
-        fail "TC-CI-026 FAIL: crates/shikomi-cli/src/io/windows_sid.rs 以外で unsafe ブロックが存在します"
+        fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs) 以外で unsafe ブロックが存在します"
     fi
 fi
 echo "[TC-CI-026] PASS"
