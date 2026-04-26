@@ -341,3 +341,56 @@ Summary: 7/7 static checks passed.
 | **合計** | **373** | **全 PASS** |
 
 Bug-E-001 (HIGH) は構造的に解決、grep gate で回帰防衛確定。Sub-E Rev2 不要。
+
+#### 14.13.3 ペガサス工程5指摘解消 (2026-04-26)
+
+工程5 並列レビューで **ペガサス・J・クロフォード** から致命指摘 3 点 (`[却下]`) を受け、リーダー判断 (即時修正) のもと以下を実装:
+
+##### 致命指摘① 「成功と偽る lock」経路 (Lie-Then-Surprise)
+
+旧実装: `v2_handler/{rotate_recovery,rekey}.rs` の atomic save 成功直後に cache 再 unlock が失敗しても `tracing::warn!` のみで `IpcResponse::{RecoveryRotated,Rekeyed}` を成功として返却 → ユーザは「成功！」を見るが次の `list` で突如 `VaultLocked` で詰む経路。
+
+**銀時修正 `143e8eb`**: `IpcResponse::RecoveryRotated` / `Rekeyed` に **`cache_relocked: bool` フィールド追加**:
+- `true`: atomic save 成功 + cache.unlock(new_vek) 成功 (通常経路)
+- `false`: atomic save 成功 + cache 再 unlock 失敗 (vault.db 正常 / daemon cache のみ Locked、Sub-F が「鍵情報の再キャッシュに失敗、もう一度 unlock してください」を表示)
+
+##### マユリ対応 (テスト書き直し + 新設)
+
+- **TC-E-I06b 新設**: `RotateRecovery` 正常経路で `cache_relocked: true` を含めた構造で返却され、cache が Unlocked 維持されることを機械固定 (Lie-Then-Surprise 経路の構造防衛)
+- **TC-E-I08 修正**: `Rekeyed { cache_relocked, .. }` で `cache_relocked == true` を assert (銀時取り込み)
+- **`shikomi_core::ipc::response::tests::test_variant_*_with_cache_relocked_false`** 銀時追加分: `cache_relocked: false` の variant 構築可能性を unit で担保 → Sub-F 側で false 分岐の pattern match が破綻しないことを保証
+
+##### 致命指摘② `docs/features/vault-encryption/ux-and-msg.md` (セル担当)
+
+Sub-E の MSG-S03/S04/S05/S07/S09(a)/S15 + `cache_relocked: false` 時のユーザ向けメッセージ仕様を SSoT として記載 (セル工程5 修正担当、別 commit)。
+
+##### 致命指摘③ テストファイル 500 行ルール違反 (本マユリ担当)
+
+旧 `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` (693 行) を `tests/sub_e_v2_integration/` 配下の責務別 module に分割:
+
+| ファイル | 責務 | 行数 |
+|---|---|---|
+| `sub_e_v2_integration.rs` (entry) | `mod` 宣言のみ | ~50 |
+| `sub_e_v2_integration/helpers.rs` | 共通ヘルパ (DRY 集約) | ~134 |
+| `sub_e_v2_integration/unlock.rs` | TC-E-I01 | ~50 |
+| `sub_e_v2_integration/backoff.rs` | TC-E-I02 / I02b | ~150 |
+| `sub_e_v2_integration/lock_lifecycle.rs` | TC-E-I04 / I05 | ~100 |
+| `sub_e_v2_integration/handshake.rs` | TC-E-I07 / I09 | ~90 |
+| `sub_e_v2_integration/rekey_rotate.rs` | TC-E-I06 / I06b / I08 | ~210 |
+| `sub_e_v2_integration/sanity.rs` | TempDir lifecycle | ~13 |
+
+各ファイル 250 行以内、Rust の `tests/foo.rs` + `tests/foo/bar.rs` 子モジュール慣習に従い `#[path = ...]` で明示パス指定 (cargo は単一 integration test binary としてビルド、コンパイル時間増加なし)。
+
+##### 工程5 解消後 最終テスト総数
+
+| 階層 | 件数 | 結果 |
+|---|---|---|
+| 静的検査 (TC-E-S01..S08) | 8 | 8/8 PASS |
+| daemon lib unit | 64 | 全 PASS |
+| daemon sub_e_v2_integration (TC-E-I01..I09 + I02b + **I06b**) | **11** | 11/11 PASS |
+| core lib (TC-E-U13 含む + 銀時 `cache_relocked: false` 検証 2 件) | **185** | 全 PASS |
+| infra lib | 103 | 全 PASS |
+| infra vault_migration_integration | 5 | 全 PASS |
+| **合計** | **376** | **全 PASS** |
+
+ペガサス致命指摘①③ 完全解消、②はセル担当で別commit。3名再レビュー準備完了。
