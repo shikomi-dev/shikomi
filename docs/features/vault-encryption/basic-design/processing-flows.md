@@ -223,14 +223,15 @@
 3. 新 mnemonic entropy 生成 → 新 `RecoveryMnemonic` → 新 `kek_recovery` 導出
 4. 既存 VEK を新 kek_recovery で wrap → `wrapped_vek_by_recovery` のみ更新（`wrapped_vek_by_pw` / `nonce_counter` / `kdf_params` は維持）
 5. ヘッダ AEAD envelope 再構築（C-17/C-18 通り）→ atomic write
-6. `IpcResponse::RecoveryRotated { disclosure: RecoveryWords }` で**新 24 語を初回 1 度のみ返却**（C-19 所有権消費を IPC 経路で表現、daemon ログには記録しない）
+6. **再キャッシュ試行**: `cache.lock().await` で旧 VEK 破棄 → `unlock_with_password()` で新パスワードを使い再キャッシュを試行
+7. `IpcResponse::RecoveryRotated { words: RecoveryWords, cache_relocked: bool }` で**新 24 語を初回 1 度のみ返却**（C-19 所有権消費を IPC 経路で表現、daemon ログには記録しない）。**`cache_relocked` フィールド**: step 6 の再キャッシュが成功したかを示す（C-30/C-31/C-32、`basic-design/ux-and-msg.md` §cache_relocked: false の UX 設計判断 / `detailed-design/vek-cache-and-ipc.md` §不変条件参照）。`false` 時は MSG-S20 を連結表示するため Sub-F が応答を解釈、`true` 時は通常通り次操作可能
 
 #### F-E5: `rekey`（IPC `Rekey` 受信、nonce overflow / 明示 rekey）
 
 1. `cache.state()` を確認、`Locked` なら `Err(IpcError::VaultLocked)` で拒否
-2. Sub-D `vault_migration.rekey(&master_password)?`（§F-D4）— 旧 VEK で全レコード復号 → 新 VEK で全件再暗号化、`wrapped_vek_by_pw` 再 wrap、`nonce_counter` リセット
-3. **キャッシュ更新**: `cache.lock()` で旧 VEK 破棄 → `cache.unlock(new_vek)` で新 VEK 格納
-4. `IpcResponse::Rekeyed { records_count }` 応答 + MSG-S07（Sub-F 文言確定）
+2. Sub-D `vault_migration.rekey_with_recovery_rotation(&master_password)?`（`detailed-design/vek-cache-and-ipc.md` §F-E5 atomic 化採用案）— 旧 VEK で全レコード復号 → 新 VEK で全件再暗号化、`wrapped_vek_by_pw` 再 wrap、新 mnemonic 生成 + `wrapped_vek_by_recovery` 再 wrap、`nonce_counter` リセット、atomic write 1 回
+3. **キャッシュ更新**: `cache.lock().await` で旧 VEK を破棄 → `unlock_with_password()` で新パスワードを使い再キャッシュを試行
+4. `IpcResponse::Rekeyed { records_count, words: RecoveryWords, cache_relocked: bool }` 応答 + MSG-S07。**`cache_relocked` フィールド**: step 3 の再キャッシュが成功したかを示す（C-30/C-31/C-32、`basic-design/ux-and-msg.md` §cache_relocked: false の UX 設計判断参照）。`false` 時は MSG-S20 を連結表示し Sub-F が再 unlock 経路を能動的に提示する責務
 
 ### Sub-F の処理フロー
 
