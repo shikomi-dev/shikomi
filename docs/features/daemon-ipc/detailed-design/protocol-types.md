@@ -252,3 +252,72 @@ pub use secret_bytes::SerializableSecretBytes;
 - `crates/shikomi-core/src/ipc/` 配下で `tokio::` / `rmp_serde::` import 0 件 grep（純粋性監査、**TC-CI-024** 相当、テスト設計担当が確定）
 
 テストケース番号の割当は `test-design/` が担当する。本書は設計側からの**要件の明示**に留める。
+
+---
+
+## Sub-E (#43) IPC V2 拡張（横断的変更、`vault-encryption` feature 双方向同期）
+
+<!-- Boy Scout Rule (Sub-E / 工程2): vault-encryption feature の REQ-S09〜S12（VEK キャッシュ + IPC V2 拡張）に対応する protocol-types 拡張を本セクションで確定する。
+     vault-encryption/detailed-design/vek-cache-and-ipc.md と双方向参照、SSoT は本ファイル（daemon-ipc）。
+     全て `#[non_exhaustive]` 維持で V1 クライアント非破壊。 -->
+
+### `IpcProtocolVersion` 拡張
+
+- 既存 `V1` を維持、新規 `V2` を追加（`#[non_exhaustive]` enum、V1 クライアントは非破壊）
+- `pub const fn current() -> Self` の戻り値を **`IpcProtocolVersion::V2`** に更新（Sub-E 完了時点の最新を返す、Sub-A の SSoT 集約原則）
+- handshake で V1 クライアントが接続した場合、サーバは `V1` サブセット（`Handshake` / `ListRecords` / `AddRecord` / `EditRecord` / `RemoveRecord`）のみ受理。V2 専用 variant 送信時は `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` で MSG-S15 に変換（`vault-encryption/requirements.md` MSG-S15 と整合）
+
+### `IpcRequest` V2 新 variant（5 件）
+
+| variant | フィールド | 用途 | 対応 `VaultMigration` メソッド |
+|---|---|---|---|
+| `Unlock { master_password: SerializableSecretBytes, recovery: Option<RecoveryMnemonicWords> }` | パスワード（必須）+ リカバリ（optional、`--recovery` 経路用 24 語） | vault unlock 要求 | `unlock_with_password` / `unlock_with_recovery` |
+| `Lock` | フィールドなし | 明示 vault lock 要求 | （Sub-E `VekCache::lock` 直接呼出、Sub-D 経由しない） |
+| `ChangePassword { old: SerializableSecretBytes, new: SerializableSecretBytes }` | 旧 + 新パスワード | パスワード変更 O(1) | `change_password` |
+| `RotateRecovery { master_password: SerializableSecretBytes }` | パスワード再認証 | リカバリ 24 語ローテーション | （Sub-E 新規実装、Sub-D 範囲外） |
+| `Rekey { master_password: SerializableSecretBytes }` | パスワード再認証 | VEK 入替 + 全レコード再暗号化 | `rekey` |
+
+### `IpcResponse` V2 新 variant（5 件）
+
+| variant | フィールド | 用途 |
+|---|---|---|
+| `Unlocked` | フィールドなし | unlock 成功（VEK 自体は IPC で返さず daemon 内キャッシュのみ） |
+| `Locked` | フィールドなし | lock 完了 |
+| `PasswordChanged` | フィールドなし | change_password 完了（VEK 不変、再 unlock 不要、daemon キャッシュ維持） |
+| `RecoveryRotated { disclosure: RecoveryWordsDisclosure }` | 新 24 語（`RecoveryDisclosure::disclose` 経路で初回 1 度のみ）| RotateRecovery 完了。`RecoveryWordsDisclosure` は IPC 用 `Vec<String>` newtype、受信側で即 Drop（zeroize）|
+| `Rekeyed { records_count: u64 }` | 再暗号化レコード数 | rekey 完了 |
+
+### `IpcErrorCode` V2 新 variant（4 件）
+
+| variant | 用途 | MSG マッピング |
+|---|---|---|
+| `VaultLocked` | `Locked` 状態で read/write IPC 受信、Sub-E `VekCache` の型レベル拒否（契約 C-22） | MSG-S09 (c) キャッシュ揮発 |
+| `BackoffActive { wait_secs: u32 }` | 連続失敗 5 回後の指数バックオフ中（契約 C-26、`wait_secs` のみユーザに見せる、`failures` は隠蔽） | MSG-S09 (a) パスワード違い + 待機時間 |
+| `RecoveryRequired` | Sub-D `MigrationError::RecoveryRequired` 透過、パスワード経路失敗時のリカバリ誘導（契約 C-27、Sub-D Rev5 ペガサス指摘契約の実装）| **MSG-S09 (a) リカバリ経路 (`vault unlock --recovery`) も可能 案内** |
+| `ProtocolDowngrade` | V1 クライアントが V2 専用 variant を送信した時に拒否（契約 C-28）| MSG-S15 |
+
+### `MigrationError → IpcErrorCode` マッピング（Sub-E 確定責務）
+
+`vault-encryption/detailed-design/vek-cache-and-ipc.md` §`MigrationError → IpcError` マッピング表 と整合。9 → 4 集約で **内部詳細を秘匿**しつつ MSG マッピング 1:1 確定。
+
+### Wire-format 例（V2 拡張）
+
+| Rust 値 | MessagePack JSON 表現例 |
+|---|---|
+| `IpcRequest::Unlock { master_password: <secret>, recovery: None }` | `{"unlock": {"master_password": <bytes>, "recovery": null}}` |
+| `IpcRequest::Lock` | `{"lock": null}` |
+| `IpcRequest::ChangePassword { old: <secret>, new: <secret> }` | `{"change_password": {"old": <bytes>, "new": <bytes>}}` |
+| `IpcResponse::Unlocked` | `{"unlocked": null}` |
+| `IpcResponse::Rekeyed { records_count: 42 }` | `{"rekeyed": {"records_count": 42}}` |
+| `IpcResponse::Error(IpcErrorCode::VaultLocked)` | `{"error": {"vault_locked": null}}` |
+| `IpcResponse::Error(IpcErrorCode::BackoffActive { wait_secs: 30 })` | `{"error": {"backoff_active": {"wait_secs": 30}}}` |
+| `IpcResponse::Error(IpcErrorCode::RecoveryRequired)` | `{"error": {"recovery_required": null}}` |
+| `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` | `{"error": {"protocol_downgrade": null}}` |
+
+### Sub-E PR レビュー必須確認
+
+1. **`#[non_exhaustive]` 維持**: 既存 V1 クライアントが V2 ビルドの daemon と通信する経路で `serde` deserialize が `unknown variant` で正常に失敗、daemon 側で `IpcResponse::Error(ProtocolDowngrade)` 応答（V1 サブセットのみ受理）
+2. **`SerializableSecretBytes` 利用**: 全 V2 variant でパスワード / リカバリ等の秘密値は `SerializableSecretBytes` 経由（`expose_secret` 0 件 grep gate 維持、TC-CI-016）
+3. **`RecoveryWordsDisclosure` の所有権モデル**: IPC 応答に乗せる時点で daemon 側は所有権を放棄、CLI/GUI 側で受信後即 Drop（zeroize）。daemon ログには記録しない（C-19 同型契約の IPC 経路実装）
+
+
