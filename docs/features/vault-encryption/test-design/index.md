@@ -15,7 +15,7 @@
 | [`sub-c-aead.md`](./sub-c-aead.md) | Sub-C (#41) AEAD アダプタ + AeadKey trait | `TC-C-{U,I,P,E}*` |
 | [`sub-d-repository-migration.md`](./sub-d-repository-migration.md) | Sub-D (#42) 暗号化 Vault リポジトリ + マイグレーション + 横断 REQ-P11 改訂 | `TC-D-{U,I,P,E,S}*` |
 | [`sub-e-vek-cache-ipc.md`](./sub-e-vek-cache-ipc.md) | Sub-E (#43) VEK キャッシュ + IPC V2 拡張 + 横断 daemon-ipc V2 ラウンドトリップ | `TC-E-{U,I,P,E,S}*` |
-| [`sub-f-cli-subcommands.md`](./sub-f-cli-subcommands.md)（Sub-F 新規、テスト担当が工程2 後半で作成）| Sub-F (#44) shikomi-cli vault サブコマンド + 既存 CRUD ロック時挙動 + 保護モードバナー + アクセシビリティ + TC-E-E01 田中ペルソナ E2E（Sub-E 凍結シナリオの実機完走）| `TC-F-{U,I,E,S}*` |
+| [`sub-f-cli-subcommands.md`](./sub-f-cli-subcommands.md) | Sub-F (#44) shikomi-cli vault サブコマンド + 既存 CRUD ロック時挙動 + 保護モードバナー + アクセシビリティ + **TC-F-E01 田中ペルソナ E2E**（Sub-E TC-E-E01 凍結シナリオの実機完走、Sub-F CLI 完成後）| `TC-F-{U,I,A,E,S}*` |
 
 ## 共通方針
 
@@ -24,7 +24,7 @@
 - TC ID prefix は **Sub 単位で物理分離**（`TC-A-` / `TC-B-` / `TC-C-` / `TC-D-` / `TC-DOC-`）。ID 重複ゼロ
 - META チェック（TC 件数 assert）は各分冊が独立に管理（lint スクリプトもファイル単位で参照）
 
-## TC 総数（Sub-F 工程2 追加後、テスト担当が確定）
+## TC 総数（Sub-F 工程2 後半 マユリ確定）
 
 | Sub | TC 数 | 分冊 |
 |---|---|---|
@@ -34,10 +34,10 @@
 | Sub-C | 26 | `sub-c-aead.md` |
 | Sub-D | 26 | `sub-d-repository-migration.md` |
 | Sub-E | 27 | `sub-e-vek-cache-ipc.md` |
-| Sub-F | TBD by テスト担当（工程2 後半）| `sub-f-cli-subcommands.md`（新規、テスト担当が REQ-S15/S16 + `detailed-design/cli-subcommands.md` を入力に作成）|
-| **合計** | **TBD** | — |
+| Sub-F | **35**（unit 12 + integration 13 + accessibility 4 + E2E 1 + static 5）| `sub-f-cli-subcommands.md` |
+| **合計** | **187** | — |
 
-**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 8 件（TC-E-S01..S08、Bug-E-001 解決経路 + cache_relocked seam 含む）+ **Sub-F TBD**（C-37 隠蔽オプション禁止 grep gate / clap 派生型 8 variant 網羅 grep / `--no-mode-banner` 不在 grep 等、テスト担当が確定）。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-F に継承し、5 度目以降の同型ドリフトを構造封鎖。
+**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 9 件（TC-E-S01..S09、Bug-E-001 解決経路 + cache_relocked seam 含む）+ **Sub-F 5 件**（TC-F-S01 `VaultSubcommand` 8 variant 整合 / TC-F-S02 `--no-mode-banner` 不在 grep (C-37) / TC-F-S03 i18n 辞書 MSG-S01..S20 全キー存在 / TC-F-S04 `recovery_disclosure::display` 所有権消費 signature + zeroize 経路 / TC-F-S05 アクセシビリティ 3 経路 + 自動切替）。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-F に継承し、5 度目以降の同型ドリフトを構造封鎖。
 
 ## 関連スクリプト
 
@@ -46,4 +46,4 @@
 - `sub-0-structure-lint.py`: `test-design/sub-0-threat-model.md` を対象
 - `sub-0-cross-ref.sh`: `test-design/` 配下全ファイルを参照
 - `sub-{a,b,c,d,e}-static-checks.sh`: 各 Sub の対応分冊を参照
-- `sub-f-static-checks.sh`: Sub-F 新規（テスト担当が工程2 後半で作成）。clap 派生型 8 variant 網羅 / 隠蔽オプション禁止（`--no-mode-banner` 不在）/ `presenter::recovery_disclosure` 1 度表示の構造防衛 / i18n 辞書キー命名規則 grep gate
+- `sub-f-static-checks.sh`: Sub-F (TC-F-S01..S05、テスト担当が工程3 で実装)。`VaultSubcommand` 8 variant 集合整合 / 隠蔽オプション禁止（`--no-mode-banner` 不在、C-37）/ i18n 辞書 MSG-S01..S20 全キー存在 / `presenter::recovery_disclosure::display` 所有権消費 signature + zeroize 経路 / アクセシビリティ 3 経路 + 自動切替経路存在
