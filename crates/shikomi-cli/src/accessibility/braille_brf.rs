@@ -3,8 +3,8 @@
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
 //!   §アクセシビリティ代替経路 `--output braille` 行
-//!   「自前 wordlist 変換テーブル（追加 crate なし、liblouis FFI bindings は
-//!    不採用 = unsafe C-FFI 経路を増やさない設計判断）」
+//!   (自前 wordlist 変換テーブル: 追加 crate なし、liblouis FFI bindings は
+//!   不採用 = unsafe C-FFI 経路を増やさない設計判断)
 //!
 //! 採用方針 (Phase 6):
 //! - **Grade 1 ASCII Braille** (各文字を 6dot Braille に 1:1 マップ) で実装。

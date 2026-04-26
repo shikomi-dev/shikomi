@@ -2,10 +2,9 @@
 //!
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
-//!   §アクセシビリティ代替経路 自動切替経路
-//!   「`SHIKOMI_ACCESSIBILITY=1` 環境変数 / OS スクリーンリーダー検出 / 明示フラグの
-//!    いずれかで `--output screen` 既定を `Braille` に上書き
-//!    （明示 `--output` フラグは常に最優先）」
+//!   §アクセシビリティ代替経路 自動切替経路 (`SHIKOMI_ACCESSIBILITY=1` env /
+//!   OS スクリーンリーダー検出 / 明示フラグのいずれかで `--output screen` 既定を
+//!   `Braille` に上書き、明示 `--output` フラグは常に最優先)
 //!
 //! Phase 6 スコープ:
 //! - `SHIKOMI_ACCESSIBILITY` env (`"1"` / `"true"` / `"yes"` のいずれかで有効) 判定

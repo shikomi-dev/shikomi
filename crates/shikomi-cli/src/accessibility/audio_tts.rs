@@ -42,10 +42,7 @@ pub fn speak(words: &[SerializableSecretBytes]) -> Result<(), CliError> {
         .map_err(|e| io_err("tts spawn", e))?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| stdin_unavailable_err())?;
+        let stdin = child.stdin.as_mut().ok_or_else(stdin_unavailable_err)?;
         stdin
             .write_all(payload.as_bytes())
             .map_err(|e| io_err("tts stdin", e))?;

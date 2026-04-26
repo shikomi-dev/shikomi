@@ -3,9 +3,8 @@
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
 //!   §セキュリティ設計 §`--output print` / `--output braille` の一時ファイル /
-//!   リダイレクト対策
-//!   「shikomi-cli 実装が `--output {print,braille}` 経路で `umask(0o077)` を
-//!    出力直前に内部適用してから stdout 書出を行う」
+//!   リダイレクト対策 (shikomi-cli 実装が `--output {print,braille}` 経路で
+//!   `umask(0o077)` を出力直前に内部適用してから stdout 書出を行う)
 //!
 //! 不変条件:
 //! - 出力直前に **既存プロセス umask を保存 → `0o077` に設定 → 出力 → 元値に復元**
