@@ -6,6 +6,10 @@
 //! 設計根拠: docs/features/daemon-ipc/detailed-design/composition-root.md / daemon-runtime.md
 
 #[doc(hidden)]
+pub mod backoff;
+#[doc(hidden)]
+pub mod cache;
+#[doc(hidden)]
 pub mod error;
 #[doc(hidden)]
 pub mod ipc;

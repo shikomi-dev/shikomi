@@ -29,6 +29,9 @@ tracing-subscriber = { workspace = true }
 dirs               = { workspace = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
+# Sub-E (#43) `OsLockSignal` trait の `async fn` を `Send + 'static` future 制約で
+# dyn 化するための async-trait macro (vek-cache-and-ipc.md §OsLockSignal trait)。
+async-trait        = { workspace = true }
 rmp-serde          = { workspace = true }
 bytes              = { workspace = true }
 futures-util       = { workspace = true }
