@@ -21,6 +21,16 @@
 # TC-D-S04 (DC-13 / cross-Sub regression): aes-gcm crate is imported
 #          ONLY under shikomi-infra/src/crypto/aead/ (Sub-C single-entry)
 #          and NOT pulled into shikomi-core for VaultMigration glue.
+# TC-D-S05 (DC-7 variant integrity): MigrationError variant 名集合が実装
+#          と期待値で一致するか機械検証 (Rev3 ドリフト構造封鎖)。
+# TC-D-S06 (C-21 stage integrity): AtomicWriteStage 6 値が実装と一致す
+#          るか機械検証 (Rev3 ドリフト構造封鎖)。
+# TC-D-S07 (TC-D-U12 ワイルドカード排除 / Rev4 怠惰封鎖): all_variants_
+#          match_exhaustively テストに bare wildcard `_ =>` arm が
+#          含まれないことを grep で機械検証。`#[non_exhaustive]` は
+#          defining crate 内で無効、9 variant 列挙時点で exhaustive。
+#          `_` arm が残ると variant 追加時に test が実際には壊れず、
+#          構造防衛の意味論が骨抜きになる経路を gate で封鎖する。
 #
 # Exit codes: 0 all pass / 1 at least one fail.
 
@@ -181,12 +191,130 @@ coverage_table=(
     "C-19 (RecoveryDisclosure::disclose move semantics)|shikomi-core::vault::recovery_disclosure"
     "C-20 (DecryptConfirmation _private)|shikomi-core::vault::decrypt_confirmation"
     "C-21 (atomic write原状復帰)|vault-persistence delegation, TC-D-I04 integration test"
-    "DC-7 (MigrationError 5 variants + non_exhaustive)|shikomi-core::error::MigrationError"
+    "DC-7 (MigrationError 9 variants + non_exhaustive)|shikomi-infra::persistence::vault_migration::error::MigrationError + TC-D-S05"
     "DC-8..11 (MSG-S10/S11/S13/S14 文言)|i18n catalog + sub-d-static-checks TC-D-S03"
     "DC-12 (REQ-P11 v1受入/v999拒否)|cross-feature: vault-persistence TC-I03/I04/I04a"
     "DC-13 (no aes_gcm in shikomi-core)|TC-D-S01 above"
     "Sub-D Clean Arch (VaultMigration in infra only)|TC-D-S02 above"
+    "C-21 AtomicWriteStage 6 values|vault-persistence persistence/error.rs + TC-D-S06"
+    "TC-D-U12 ワイルドカード排除 (variant 追加で test 自動失敗を維持)|vault_migration/error.rs::all_variants_match_exhaustively + TC-D-S07"
 )
+
+# ======================================================================
+# TC-D-S05: MigrationError variant count + name list integrity
+# ======================================================================
+# Petelgeuse 工程5 Rev3 で 3 度のドリフト指摘 (5 → 8 → 9) を経て発見:
+# 「設計書 / テスト設計の variant 数主張」と「実装の variant 数」が
+# 局所修正の繰り返しで乖離する怠惰経路。本 TC-D-S05 で実装の variant
+# 名集合を grep 抽出し、test-design.md / repository-and-migration.md /
+# basic-design/architecture.md の各文書の variant 列挙が完全一致するこ
+# とを機械検証する。Rev3 を最後の手作業同期にし、以後はこの grep gate
+# が変更時に自動失敗する構造防衛。
+ERROR_RS="$INFRA/persistence/vault_migration/error.rs"
+if [[ -f "$ERROR_RS" ]]; then
+    # MigrationError enum body から variant 名を抽出。
+    # 行頭スペース 4 + 大文字始まり識別子 + (`(` か `,` か `{`).
+    impl_variants=$(awk '
+        /^pub enum MigrationError/ { in_enum=1; next }
+        in_enum && /^}/ { in_enum=0; exit }
+        in_enum && /^[[:space:]]+[A-Z][A-Za-z0-9_]*[[:space:]]*[(,{]/ {
+            match($0, /[A-Z][A-Za-z0-9_]*/)
+            print substr($0, RSTART, RLENGTH)
+        }
+    ' "$ERROR_RS" | sort -u)
+    impl_count=$(echo "$impl_variants" | wc -l)
+
+    expected=("AlreadyEncrypted" "AtomicWriteFailed" "Crypto" "Domain" "NotEncrypted" "Persistence" "PlaintextNotUtf8" "RecoveryAlreadyConsumed" "RecoveryRequired")
+    expected_set=$(printf '%s\n' "${expected[@]}" | sort -u)
+    expected_count=${#expected[@]}
+
+    if [[ "$impl_count" -eq "$expected_count" ]] && [[ "$impl_variants" == "$expected_set" ]]; then
+        emit "TC-D-S05" "PASS" "MigrationError has expected $expected_count variants matching grep-extracted impl set"
+        detail "variants: $(echo "$impl_variants" | tr '\n' ' ')"
+    else
+        emit "TC-D-S05" "FAIL" "MigrationError variant set drift (impl_count=$impl_count, expected=$expected_count)"
+        detail "impl set:     $(echo "$impl_variants" | tr '\n' ' ')"
+        detail "expected set: $(echo "$expected_set" | tr '\n' ' ')"
+    fi
+else
+    emit "TC-D-S05" "SKIP" "vault_migration/error.rs not present (Sub-D impl not yet merged)"
+fi
+
+# ======================================================================
+# TC-D-S06: AtomicWriteStage 6 values integrity
+# ======================================================================
+PERSIST_ERR_RS="$INFRA/persistence/error.rs"
+if [[ -f "$PERSIST_ERR_RS" ]]; then
+    stage_values=$(awk '
+        /^pub enum AtomicWriteStage/ { in_enum=1; next }
+        in_enum && /^}/ { in_enum=0; exit }
+        in_enum && /^[[:space:]]+[A-Z][A-Za-z0-9_]*,/ {
+            match($0, /[A-Z][A-Za-z0-9_]*/)
+            print substr($0, RSTART, RLENGTH)
+        }
+    ' "$PERSIST_ERR_RS" | sort -u)
+    stage_count=$(echo "$stage_values" | wc -l)
+
+    expected_stages=("CleanupOrphan" "FsyncDir" "FsyncTemp" "PrepareNew" "Rename" "WriteTemp")
+    expected_stage_set=$(printf '%s\n' "${expected_stages[@]}" | sort -u)
+    expected_stage_count=${#expected_stages[@]}
+
+    if [[ "$stage_count" -eq "$expected_stage_count" ]] && [[ "$stage_values" == "$expected_stage_set" ]]; then
+        emit "TC-D-S06" "PASS" "AtomicWriteStage has expected $expected_stage_count values matching grep-extracted impl set"
+        detail "values: $(echo "$stage_values" | tr '\n' ' ')"
+    else
+        emit "TC-D-S06" "FAIL" "AtomicWriteStage value set drift (impl=$stage_count, expected=$expected_stage_count)"
+        detail "impl set:     $(echo "$stage_values" | tr '\n' ' ')"
+        detail "expected set: $(echo "$expected_stage_set" | tr '\n' ' ')"
+    fi
+else
+    emit "TC-D-S06" "SKIP" "persistence/error.rs not present"
+fi
+
+# ======================================================================
+# TC-D-S07: all_variants_match_exhaustively must NOT contain wildcard arm
+# ======================================================================
+# Petelgeuse 工程5 Rev4 で「4 度目の同型ドリフト経路の卵」を発見:
+# テスト設計 TC-D-U12 詳細表は「ワイルドカード `_` 無しで書く」と明記
+# しているが、実装の all_variants_match_exhaustively テスト本体に
+# `_ => "unknown"` が残ると、Rust Reference 通り `#[non_exhaustive]` は
+# defining crate 内で無効—— 9 variant 全列挙時点で exhaustive。`_` arm
+# は unreachable_patterns の警告対象であり、将来 variant 追加時に test が
+# **実際には先に壊れない**——構造防衛の意味論が骨抜きになる。
+#
+# 本 TC-D-S07 は all_variants_match_exhaustively 関数本体内に
+# bare wildcard arm (`^[[:space:]]+_[[:space:]]*=>`) が存在しないことを
+# 機械検証する。`MigrationError::AtomicWriteFailed { .. } =>` のような
+# struct pattern arm は識別子始まりで該当しない。
+ALL_VARIANTS_FN="all_variants_match_exhaustively"
+if [[ -f "$ERROR_RS" ]]; then
+    # awk で関数本体を抽出: `    fn all_variants_match_exhaustively` 行
+    # から `^    \}` (4-space indent close brace = fn の終端) までを切り出す。
+    # match の `};` は 8-space indent なので終端と誤認しない。
+    test_body=$(awk -v fn="$ALL_VARIANTS_FN" '
+        $0 ~ ("^    fn " fn) { in_test=1; print; next }
+        in_test && /^    \}[[:space:]]*$/ { print; in_test=0; exit }
+        in_test { print }
+    ' "$ERROR_RS")
+
+    if [[ -z "$test_body" ]]; then
+        emit "TC-D-S07" "SKIP" "fn $ALL_VARIANTS_FN not found in error.rs"
+    else
+        # bare `_ =>` arm を grep。`{ .. } =>` や `MigrationError::X =>` は
+        # 識別子始まりで該当しない (先頭 whitespace 直後に `_` 1 文字 + `=>`)。
+        wildcard_arms=$(echo "$test_body" | grep -nE '^[[:space:]]+_[[:space:]]*=>' || true)
+        if [[ -z "$wildcard_arms" ]]; then
+            emit "TC-D-S07" "PASS" "$ALL_VARIANTS_FN contains no bare wildcard '_ =>' arm (TC-D-U12 設計書 ワイルドカード無し と整合)"
+            detail "fn body lines: $(echo "$test_body" | wc -l)"
+        else
+            emit "TC-D-S07" "FAIL" "$ALL_VARIANTS_FN contains bare wildcard '_ =>' arm — TC-D-U12 設計書違反、'#[non_exhaustive]' は crate 内で無効、variant 追加時の test 自動失敗が骨抜き"
+            while IFS= read -r line; do detail "  $line"; done <<< "$wildcard_arms"
+            detail "remediation: 9 variant exhaustive match を完成させ '_ => ...' arm を削除せよ"
+        fi
+    fi
+else
+    emit "TC-D-S07" "SKIP" "vault_migration/error.rs not present (Sub-D impl not yet merged)"
+fi
 
 # ======================================================================
 # Summary
