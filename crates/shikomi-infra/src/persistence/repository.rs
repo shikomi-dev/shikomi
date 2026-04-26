@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags};
-use shikomi_core::{ProtectionMode, Record, Vault};
+use shikomi_core::{Record, Vault};
 
 use super::{
     audit::Audit,
@@ -13,7 +13,7 @@ use super::{
     paths::{self, VaultPaths},
     permission::PermissionGuard,
     sqlite::{atomic::AtomicWriter, mapping::Mapping, schema::SchemaSql},
-    VaultRepository, TRACKING_ISSUE_ENCRYPTED_VAULT,
+    VaultRepository,
 };
 
 // -------------------------------------------------------------------
@@ -197,13 +197,8 @@ impl SqliteVaultRepository {
         // Step 10: vault_header を SELECT
         let header = Self::select_vault_header(&conn)?;
 
-        // Step 12: 暗号化モードは未実装
-        if header.protection_mode() == ProtectionMode::Encrypted {
-            return Err(PersistenceError::UnsupportedYet {
-                feature: "encrypted vault persistence",
-                tracking_issue: TRACKING_ISSUE_ENCRYPTED_VAULT,
-            });
-        }
+        // Step 12: Sub-D (#42) で暗号化モードを解禁。protection_mode による拒否経路は削除。
+        // 暗号化処理 (AEAD 検証 / wrap_VEK 復号) は呼出側 (`VaultMigration` / Sub-E daemon) 責務。
 
         // Step 13: Vault 集約を構築
         let mut vault = Vault::new(header);
@@ -290,13 +285,8 @@ impl SqliteVaultRepository {
 
     /// `save` の実装本体。audit ログなしで vault を書き込む。書き込みバイト数を返す。
     fn save_inner(&self, vault: &Vault) -> Result<u64, PersistenceError> {
-        // Step 2: 暗号化モードは未実装（Fail Fast）
-        if vault.protection_mode() == ProtectionMode::Encrypted {
-            return Err(PersistenceError::UnsupportedYet {
-                feature: "encrypted vault persistence",
-                tracking_issue: TRACKING_ISSUE_ENCRYPTED_VAULT,
-            });
-        }
+        // Step 2: Sub-D (#42) で暗号化モード save を解禁。Fail Fast 拒否経路は削除。
+        // BLOB は composite container として `Mapping::vault_header_to_params` で詰める。
 
         // Step 3: ディレクトリを作成し、適切なパーミッションを設定
         PermissionGuard::ensure_dir(self.paths.dir())?;

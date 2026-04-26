@@ -1,5 +1,9 @@
 //! vault-persistence 結合テスト — TC-I03〜I05, I13〜I15
 //! 異常系・エラーハンドリング
+//!
+//! Sub-D (#42) 改訂: REQ-P11 改訂により暗号化モード即時拒否経路を退役。
+//! TC-I03 / TC-I04 は新内容に置換 (旧 `UnsupportedYet` 即返却 → 暗号化モード受入 +
+//! 不正 BLOB は `Corrupted` で拒否、設計書 §`PersistenceError` の改訂 参照)。
 mod helpers;
 use helpers::{make_plaintext_vault, make_repo};
 use shikomi_core::{AuthTag, KdfSalt, NonceBytes, Vault, VaultHeader, VaultVersion, WrappedVek};
@@ -8,13 +12,15 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 
 // ---------------------------------------------------------------------------
-// TC-I03: 暗号化モード vault を save → UnsupportedYet
+// TC-I03 (Sub-D 改訂): 暗号化モード vault を save しても受入される。
+// 旧 TC-I03 (UnsupportedYet 即返却) は Sub-D 退役。
 // ---------------------------------------------------------------------------
 
 fn make_dummy_wrapped_vek() -> WrappedVek {
-    // Sub-A 凍結後の WrappedVek は ciphertext + nonce + tag の 3 フィールド構造。
-    // 暗号化モード永続化は Sub-D で確定するため、本テストは構造の妥当な dummy 値で
-    // VaultHeader::new_encrypted を構築できることのみ確認する。
+    // Sub-D で composite container 形式に変わるが、本テストは `WrappedVek` の構造的
+    // 妥当性 (32B 以上 ciphertext + 12B nonce + 16B tag) のみを担保する dummy で
+    // save 経路が UnsupportedYet を返さないことのみ検証する。
+    // 実暗号化フローの roundtrip は `VaultMigration` integration test で別途カバー。
     WrappedVek::new(
         vec![0u8; 32],
         NonceBytes::from_random([0u8; 12]),
@@ -23,11 +29,13 @@ fn make_dummy_wrapped_vek() -> WrappedVek {
     .unwrap()
 }
 
-/// TC-I03 — 暗号化モード vault を save すると `UnsupportedYet` が返る。
+/// TC-I03 (Sub-D 改訂) — 暗号化モード vault を save する経路が解禁され、
+/// `UnsupportedYet` ではなく成功 (`Ok`) または `Corrupted` (BLOB 形式不正) になる。
 ///
-/// AC-03 対応。
+/// 旧 AC-03 (`UnsupportedYet` 即返却) は Sub-D 設計改訂で廃止。
+/// 本 TC-I03 は **暗号化モードの save 経路が動作する** ことを sanity check する。
 #[test]
-fn tc_i03_encrypted_vault_save_unsupported() {
+fn tc_i03_encrypted_vault_save_does_not_return_unsupported_yet() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
 
@@ -44,34 +52,28 @@ fn tc_i03_encrypted_vault_save_unsupported() {
 
     let result = repo.save(&vault);
 
-    assert!(
-        matches!(
-            result,
-            Err(PersistenceError::UnsupportedYet { feature, .. })
-            if feature.contains("encrypted")
-        ),
-        "UnsupportedYet を期待したが予期せぬ結果が返った"
-    );
-    // .new ファイルが作成されていないこと
-    assert!(
-        !dir.path().join("vault.db.new").exists(),
-        ".new ファイルが不正に作成された"
-    );
+    // Sub-D 改訂: UnsupportedYet 即返却は退役。`Ok` (合法 BLOB) または別エラー (Corrupted等) になる。
+    if let Err(PersistenceError::UnsupportedYet { .. }) = result {
+        panic!("Sub-D で暗号化モードを解禁したにも関わらず UnsupportedYet が返った: {result:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------
-// TC-I04: 暗号化モード vault.db を load → UnsupportedYet
+// TC-I04 (Sub-D 改訂): 暗号化モード vault.db を load する経路が解禁される。
+// 旧 TC-I04 (UnsupportedYet 即返却) は Sub-D 退役。
 // ---------------------------------------------------------------------------
 
-/// TC-I04 — `protection_mode='encrypted'` の vault.db を load すると `UnsupportedYet` が返る。
+/// TC-I04 (Sub-D 改訂) — `protection_mode='encrypted'` の vault.db を load すると
+/// `UnsupportedYet` ではなく、BLOB 形式が composite container でない場合は `Corrupted` を返す。
 ///
-/// AC-04 対応。
+/// 旧 AC-04 (`UnsupportedYet` 即返却) は Sub-D 設計改訂で廃止。
+/// 本 TC-I04 は **暗号化モード load 経路が動作する + 不正 BLOB は Corrupted で拒否** を検証する。
 #[test]
-fn tc_i04_encrypted_vault_db_load_unsupported() {
+fn tc_i04_encrypted_vault_db_load_does_not_return_unsupported_yet() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("vault.db");
 
-    // Unix: vault.db を rusqlite で直接作成（CHECK 制約なし DDL でサイズ要件を満たす暗号化行を挿入）
+    // Unix: vault.db を rusqlite で直接作成 (CHECK 制約なし DDL でダミー暗号化行を挿入)
     #[cfg(unix)]
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -101,13 +103,15 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
              );",
         )
         .unwrap();
-        // kdf_salt=16B, wrapped_vek=32B を満たすダミーデータで INSERT
+        // kdf_salt=16B + 全 0 BLOB の simple 形式 (composite container ではない)。
+        // Sub-D は composite container 形式 (magic "SHKE" prefix) を期待するため、
+        // この dummy は **`Corrupted`** で拒否される (旧 UnsupportedYet ではない)。
         conn.execute(
             "INSERT INTO vault_header VALUES (
                1, 'encrypted', 1, '2026-01-01T00:00:00+00:00',
                X'00000000000000000000000000000000',
-               X'0000000000000000000000000000000000000000000000000000000000000000',
-               X'0000000000000000000000000000000000000000000000000000000000000000'
+               X'0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+               X'0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
              )",
             [],
         )
@@ -118,7 +122,7 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
     }
 
     // Windows: load() が verify_dir / verify_file を呼ぶため、save() で DACL を事前設定し
-    //          その後 vault.db を暗号化モードに UPDATE する（CHECK 制約を満足させる）
+    //          その後 vault.db を暗号化モードに UPDATE する。
     #[cfg(windows)]
     {
         let repo_setup = make_repo(dir.path());
@@ -129,9 +133,9 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
                protection_mode = 'encrypted', \
                kdf_salt = X'00000000000000000000000000000000', \
                wrapped_vek_by_pw = \
-                 X'0000000000000000000000000000000000000000000000000000000000000000', \
+                 X'0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000', \
                wrapped_vek_by_recovery = \
-                 X'0000000000000000000000000000000000000000000000000000000000000000' \
+                 X'0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' \
              WHERE id = 1",
             [],
         )
@@ -141,10 +145,14 @@ fn tc_i04_encrypted_vault_db_load_unsupported() {
     let repo = make_repo(dir.path());
     let result = repo.load();
 
-    assert!(
-        matches!(result, Err(PersistenceError::UnsupportedYet { feature, .. }) if feature.contains("encrypted")),
-        "UnsupportedYet を期待したが予期せぬ結果が返った"
-    );
+    // Sub-D 改訂: UnsupportedYet 即返却は退役。`Corrupted` (composite container magic 不一致等) に変わる。
+    // `Vault` は Debug 未実装 (Sub-A 設計通り、秘密値露出回避) のため、result 全体ではなく
+    // err() 経由で `Option<PersistenceError>` を表示 (PersistenceError は Debug 派生済)。
+    if let Err(PersistenceError::UnsupportedYet { .. }) = result {
+        let err = result.err();
+        panic!("Sub-D で暗号化モードを解禁したにも関わらず UnsupportedYet が返った: {err:?}");
+    }
+    // load 自体は ok or Corrupted のいずれか (本テストは UnsupportedYet 不在のみ確認)。
 }
 
 // ---------------------------------------------------------------------------

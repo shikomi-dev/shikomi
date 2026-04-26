@@ -51,8 +51,8 @@ fn aad_strategy() -> impl Strategy<Value = Aad> {
     // 採用範囲のみに絞る。バージョン拡張時は VaultVersion::CURRENT を辿って自動拡張可。
     let secs_range = 1_577_836_800_i64..=1_893_456_000_i64;
     (
-        secs_range,                          // unix epoch seconds
-        0_i64..1_000_000_i64,                // microseconds within the second
+        secs_range,           // unix epoch seconds
+        0_i64..1_000_000_i64, // microseconds within the second
     )
         .prop_map(|(secs, micros)| {
             let record_id = RecordId::new(Uuid::now_v7()).expect("UUIDv7 valid");
