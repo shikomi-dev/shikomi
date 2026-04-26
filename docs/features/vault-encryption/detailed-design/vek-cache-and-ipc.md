@@ -209,8 +209,8 @@ stateDiagram-v2
 | `Unlocked` | `{}` | Unlock 成功（VEK 自体は IPC で返さない、daemon 内キャッシュのみ）|
 | `Locked` | `{}` | Lock 完了 |
 | `PasswordChanged` | `{}` | ChangePassword 完了 |
-| `RecoveryRotated` | `{ disclosure: RecoveryDisclosureWords }` | RotateRecovery 完了、新 24 語を**初回 1 度のみ**返却（`RecoveryDisclosure::disclose` を IPC 経路で実装）|
-| `Rekeyed` | `{ records_count: usize }` | Rekey 完了、再暗号化レコード数 |
+| `RecoveryRotated` | `{ words: Vec<SerializableSecretBytes>, cache_relocked: bool }` | RotateRecovery 完了、新 24 語を**初回 1 度のみ**返却（`RecoveryDisclosure::disclose` を IPC 経路で実装）+ `cache_relocked` で daemon 内 VEK 再キャッシュ成否を明示（C-30/C-31/C-32、Sub-E 工程5 ペガサス致命指摘で追加、`basic-design/ux-and-msg.md` §cache_relocked: false の UX 設計判断参照）|
+| `Rekeyed` | `{ records_count: usize, words: Vec<SerializableSecretBytes>, cache_relocked: bool }` | Rekey 完了、再暗号化レコード数 + 新 24 語（rekey + recovery rotation 1 atomic 化、F-E5）+ `cache_relocked` で再キャッシュ成否を明示（同上）|
 
 ### 新規 `IpcError` variant（4 件）
 
@@ -295,7 +295,8 @@ stateDiagram-v2
 6. ヘッダ更新: `wrapped_vek_by_recovery` のみ新値で置換、`wrapped_vek_by_pw` / `nonce_counter` / `kdf_params` は維持
 7. ヘッダ AEAD envelope 再構築（C-17/C-18 通り、AAD = 全フィールド正規化バイト列）
 8. atomic write
-9. `IpcResponse::RecoveryRotated { disclosure: RecoveryWordsDisclosure }` で**新 24 語を初回 1 度のみ返却**（`RecoveryDisclosure::disclose` の所有権消費を IPC 経路で表現）。**daemon 側 zeroize の型レベル強制**（Sub-E 工程2 服部指摘）: (a) `RecoveryWordsDisclosure` は `Drop` で `String::zeroize()` 連鎖（Sub-A `RecoveryWords` 同型）、(b) daemon ハンドラは `tokio::write_all` で IPC フレーム送信完了後、`disclosure` を `mem::replace(&mut disclosure, RecoveryWordsDisclosure::empty())` で取り出して即 `drop` → Drop 連鎖で zeroize、(c) `tracing::debug!` / `info!` / `error!` のいずれにも `disclosure` の Debug 出力を含めない（`Debug` 実装は `[REDACTED RECOVERY WORDS (24)]` 固定、Sub-A 同型）、(d) IPC エラー応答時 `Err(_)` 経路でも disclosure が構築済の場合は同様に zeroize（Drop 連鎖で透過）
+9. **再キャッシュ試行**: `cache.lock().await` で旧 VEK 破棄 → `unlock_with_password()` で再キャッシュ。失敗時は `tracing::warn!(target="shikomi_daemon::v2_handler", ...)` で診断ログ + `cache_relocked: false` を応答に明示（**Sub-E 工程5 ペガサス致命指摘修正**、Lie-Then-Surprise 防止、`basic-design/ux-and-msg.md` §cache_relocked: false の UX 設計判断 §却下案 §不変条件 C-30/C-31/C-32 と整合）
+10. `IpcResponse::RecoveryRotated { words: Vec<SerializableSecretBytes>, cache_relocked: bool }` で**新 24 語を初回 1 度のみ返却**（`RecoveryDisclosure::disclose` の所有権消費を IPC 経路で表現）。**daemon 側 zeroize の型レベル強制**（Sub-E 工程2 服部指摘）: (a) `RecoveryWordsDisclosure` は `Drop` で `String::zeroize()` 連鎖（Sub-A `RecoveryWords` 同型）、(b) daemon ハンドラは `tokio::write_all` で IPC フレーム送信完了後、`disclosure` を `mem::replace(&mut disclosure, RecoveryWordsDisclosure::empty())` で取り出して即 `drop` → Drop 連鎖で zeroize、(c) `tracing::debug!` / `info!` / `error!` のいずれにも `disclosure` の Debug 出力を含めない（`Debug` 実装は `[REDACTED RECOVERY WORDS (24)]` 固定、Sub-A 同型）、(d) IPC エラー応答時 `Err(_)` 経路でも disclosure が構築済の場合は同様に zeroize（Drop 連鎖で透過）
 
 ### F-E5: `rekey`（IPC `Rekey` 受信、nonce overflow / 明示 rekey）
 
@@ -303,8 +304,8 @@ stateDiagram-v2
 2. **rekey + recovery rotation atomic 化**（Sub-E 工程2 服部指摘で整合性破壊ウィンドウ封鎖）: 旧設計は rekey 完了時点〜ユーザが `rotate_recovery` 実行までの**ウィンドウ**で `wrapped_vek_by_pw=新VEK` / `wrapped_vek_by_recovery=旧VEK` の不整合状態を残し、recovery 経路 unlock で AEAD tag mismatch（MSG-S10 過信防止文言が表示されるが**実際は内部状態不整合**）を発火する経路があった。新設計は **rekey と recovery rotation を 1 atomic write トランザクションで同時実行**:
    - `vault_migration.rekey_with_recovery_rotation(&master_password)?` を Sub-D に追加要求（**Sub-D Rev6 への Boy Scout 要求**）。旧 `rekey` メソッドは内部で本メソッドに委譲する形に改訂、外向き API 後方互換維持
    - 内部処理: ① 旧 VEK で全レコード復号 → 新 VEK 生成 → 全レコード再暗号化、② `wrapped_vek_by_pw` 再 wrap（旧 KEK_pw 流用）、③ **新 mnemonic 生成** + `wrapped_vek_by_recovery` 再 wrap（新 mnemonic で wrap 済の値）、④ `nonce_counter` リセット、⑤ ヘッダ AEAD envelope 再構築、⑥ atomic write 1 回、⑦ 新 `RecoveryDisclosure` を返却
-3. **キャッシュ更新**: `cache.lock().await` で旧 VEK を破棄 → `cache.unlock(new_vek).await` で新 VEK を格納
-4. `IpcResponse::Rekeyed { records_count, disclosure: RecoveryWordsDisclosure }` 応答（再暗号化レコード件数 + 新 24 語、F-E4 §step 9 と同じ zeroize 経路）。**ユーザは rekey 完了直後に新 24 語をメモする責務**: rekey は片方向操作（旧 mnemonic invalidated）、新 24 語を記録しない場合は次回パスワード忘失時に永久損失するリスクが残る（MSG-S07 文言で明示誘導、Sub-F 担当）
+3. **キャッシュ更新（再キャッシュ試行）**: `cache.lock().await` で旧 VEK を破棄 → `unlock_with_password()` で新パスワードを使い再キャッシュを試行。失敗時は `tracing::warn!(target="shikomi_daemon::v2_handler", ...)` で診断ログ + `cache_relocked: false` を応答に明示（F-E4 §step 9 と同経路、Lie-Then-Surprise 防止、§不変条件 C-30/C-31/C-32 と整合）
+4. `IpcResponse::Rekeyed { records_count, words: Vec<SerializableSecretBytes>, cache_relocked: bool }` 応答（再暗号化レコード件数 + 新 24 語 + 再キャッシュ成否、F-E4 §step 9 と同じ zeroize 経路）。**ユーザは rekey 完了直後に新 24 語をメモする責務**: rekey は片方向操作（旧 mnemonic invalidated）、新 24 語を記録しない場合は次回パスワード忘失時に永久損失するリスクが残る（MSG-S07 文言で明示誘導、Sub-F 担当）。**`cache_relocked: false` 時**は MSG-S20 を連結表示し Sub-F が再 unlock 経路を能動的に提示する責務
 
 ### 旧設計（rekey と rotate_recovery 分離案）の却下理由
 
@@ -326,6 +327,9 @@ stateDiagram-v2
 | **C-27**: `MigrationError::RecoveryRequired` を `IpcError::RecoveryRequired` 透過 → MSG-S09 (a) | `From<MigrationError> for IpcError` 実装で transparent 透過 | ユニットテスト: パスワード失敗で `RecoveryRequired` 発火 → IPC 応答が `RecoveryRequired` variant、MSG-S09 (a) 文言を含む |
 | **C-28**: V1 クライアントが V2 専用 variant 送信時に `ProtocolDowngrade` で拒否 | handshake 許可リスト方式で `(client_version, request_variant)` の組合せを daemon ハンドラで検証（旧設計の「`#[non_exhaustive]` の serde 経路保護」誤認は Sub-E 工程2 ペテルギウス指摘で訂正、許可リストテーブルが SSoT） | integration test: V1 セッションで V2 variant 送信 → `IpcResponse::Error(ProtocolDowngrade)` 返却 |
 | **C-29**: handshake 必須、handshake 前は全 IPC variant 拒否（Sub-E 工程2 服部指摘） | daemon ハンドラに `ClientState::PreHandshake` / `Handshake { version }` を保持、`PreHandshake` 状態で `Handshake` 以外の variant を受信した場合は接続即切断 + `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` 返却 | integration test: handshake バイパスで V2 variant を直接送信 → 接続切断 + `ProtocolDowngrade` 返却 |
+| **C-30**: `IpcResponse::Rekeyed` / `RecoveryRotated` は `cache_relocked: bool` フィールド必須（Sub-E 工程5 ペガサス致命指摘で追加） | `shikomi_core::ipc::IpcResponse` の variant 定義で型レベル強制、フィールド欠落時はコンパイルエラー | grep 静的検査（TC-E-S* で `cache_relocked` フィールド存在を網羅確認）+ ユニットテスト: `Rekeyed` / `RecoveryRotated` 構築時に `cache_relocked` 必須 |
+| **C-31**: `cache_relocked: false` は **vault.db atomic write 成功後の経路でのみ発生**、atomic write 失敗時は `Err(IpcError::Persistence)` で返り `Rekeyed` / `RecoveryRotated` 応答自体が構築されない | F-E4 §step 8（atomic write）→ §step 9（再キャッシュ）の順序強制、atomic write 失敗は `?` で早期 return | integration test: atomic write 失敗時 → `IpcError::Persistence` 返却、`Rekeyed` / `RecoveryRotated` 応答を返さない |
+| **C-32**: `cache_relocked: false` 経路でユーザが次の read/write IPC を送ると `IpcError::VaultLocked` が返る、Sub-F は MSG-S20 表示後 **ユーザが次操作を行う前に再 unlock 経路を能動的に提示**する責務 | daemon は `cache.lock().await` 後の再キャッシュ失敗時、`VaultUnlockState::Locked` 状態のまま応答を返す → 次の `ListRecords` 等で `Err(VaultLocked)` 透過 | integration test: rekey で `cache_relocked: false` 経路 → 次の `ListRecords` で `IpcError::VaultLocked` 返却を機械固定 |
 
 ## Sub-E → 後続 Sub への引継ぎ
 

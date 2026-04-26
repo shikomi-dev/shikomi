@@ -228,3 +228,224 @@ cargo test -p shikomi-daemon --test ipc_integration
 ### 14.13 Sub-E 工程4 実施実績
 
 工程4 完了後、Sub-E 実装担当（坂田銀時想定）+ テスト担当（涅マユリ想定）が本ファイルを READ → EDIT で実績を追記する。雛形は Sub-A §10.11 / Sub-B §11.11 / Sub-C §12.12 / Sub-D §13.12 に従う。**Sub-A〜D で観測したパターン**: 銀ちゃんは設計書の proptest / criterion bench / KAT 件数等を**単発 fixture で省略する傾向**、セルは設計書の variant 数を**断定的に記述してドリフト**させる傾向、いずれも実装直読 + grep gate で構造封鎖する（Bug-A-001 / Bug-B-001 / Bug-C-001 / Bug-D-007 連鎖、Petelgeuse Rev1〜Rev4 連続指摘の Sub-E 段階での予防）。
+
+#### 14.13.1 工程4 実施 (涅マユリ、2026-04-26)
+
+**実施 commit**: `feature/issue-43-vek-cache-ipc-impl` ブランチ上、テスト工程まとめ commit。
+
+##### 実装対象 + Pass 件数
+
+| 階層 | ファイル | TC-E-* | 件数 | 結果 |
+|---|---|---|---|---|
+| 静的検査 | `tests/docs/sub-e-static-checks.sh` | S01..S07 | 7 | **7/7 PASS** |
+| ユニット | `crates/shikomi-daemon/src/cache/vek.rs` | U01〜U05 / U07 | 11 | PASS (含む既存) |
+| ユニット | `crates/shikomi-daemon/src/cache/lifecycle.rs` | I05系 (lifecycle 単体) | 4 | PASS |
+| ユニット | `crates/shikomi-daemon/src/backoff/unlock.rs` | U08〜U10 / **U16** | 13 | PASS (TC-E-U16 新規 7 ケース) |
+| ユニット | `crates/shikomi-daemon/src/ipc/v2_handler/mod.rs` | U14 | 4 | PASS (handshake 許可リスト境界) |
+| ユニット | `crates/shikomi-daemon/src/ipc/v2_handler/error_mapping.rs` | **U11 / U12** | 11 | PASS (9 variant 全網羅 + Display) |
+| ユニット | `crates/shikomi-core/src/ipc/{request,response,error_code}.rs` | **U13** | 23 | PASS (V2 variant_name + Display 網羅) |
+| 結合 | `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` | I01 / I02 / I02b / I04..I09 | **10/10 PASS** | 全 PASS |
+| **TOTAL Sub-E daemon 単位 + integration** | — | — | **84** | **全 PASS** |
+
+##### 変更ファイル一覧
+
+- 新規: `tests/docs/sub-e-static-checks.sh` (TC-E-S01..S07 grep gate、269 行)
+- 新規: `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` (TC-E-I01..I09 結合、640 行)
+- 改変 (テスト追加 + Boy Scout リファクタ):
+  - `crates/shikomi-daemon/src/backoff/unlock.rs`: `should_count_failure(&MigrationError) -> bool` を pub 関数として抽出 + TC-E-U16 unit 7 ケース追加
+  - `crates/shikomi-daemon/src/ipc/v2_handler/unlock.rs`: 上記 `should_count_failure` を呼び出す形にリファクタ (テスト容易性向上)
+  - `crates/shikomi-daemon/src/cache/vek.rs`: TC-E-U05 (exhaustive match 検証) + U07 (CacheError 全網羅) + U06 (negative trait chain marker) 追加
+  - `crates/shikomi-daemon/src/ipc/v2_handler/error_mapping.rs`: TC-E-U11 (RecoveryRequired Display) + TC-E-U12 (9 variant 全網羅) 追加
+  - `crates/shikomi-core/src/ipc/{request,response,error_code}.rs`: TC-E-U13 V2 variant_name / is_v2_only / Display 全網羅追加
+
+##### 静的検査結果 (`bash tests/docs/sub-e-static-checks.sh`)
+
+```
+[PASS] TC-E-S01: v2_handler 配下に bare wildcard '_ =>' arm 無し (C-22 maintain)
+[PASS] TC-E-S02: VaultUnlockState has expected 2 variants matching grep-extracted impl set
+[PASS] TC-E-S03: IpcRequest has expected 10 variants (V1 5 + V2 5)
+[PASS] TC-E-S04: IpcResponse has expected 12 variants (V1 7 + V2 5)
+[PASS] TC-E-S05: IpcErrorCode contains all 5 V2 variants
+[PASS] TC-E-S06: shikomi-core / shikomi-infra free of OS API imports (Clean Arch maintain)
+[PASS] TC-E-S07: check_request_allowed 関数 + handshake 必須 + V1 拒否 + ProtocolDowngrade + V1/V2/Unknown 列挙 全要件 OK
+Summary: 7/7 static checks passed.
+```
+
+##### 工程4 で発見した実装欠陥 — **Bug-E-001 (HIGH)**
+
+**現象**: 設計書 §14.3 EC-10 / §14.4 TC-E-U16 / §14.6 TC-E-I02 では「`MigrationError::Crypto(WrongPassword)` のみ `record_failure` カウント」を凍結しているが、実装の `unlock_with_password` 経路では**通常ユーザの間違ったパスワード**は `verify_header_aead` 段で `AeadTagMismatch` を返し、`unwrap_vek` 段の `WrongPassword` 意味論変換に到達しない。
+
+**影響**: `should_count_failure(AeadTagMismatch) == false` の整合性自体は守られているが、`AeadTagMismatch` こそが正規ユーザ誤入力の現実経路となるため、**REQ-S11 (5 回連続失敗で指数バックオフ) が現実の brute force 経路では発動しない**。
+
+**実装根拠**: `crates/shikomi-infra/src/persistence/vault_migration/service.rs:271` 周辺、Sub-D Rev6 の意図的トレードオフ:
+- L2 攻撃者が vault.db `wrapped_vek_by_pw` だけを破壊する経路 → `verify_header_aead` 通過 → `unwrap_vek` 失敗 → `WrongPassword` 変換 → backoff カウント
+- 通常ユーザの間違ったパスワード → `verify_header_aead` 失敗 → `AeadTagMismatch` (backoff 対象外、L2 DoS 防衛との両立で承認)
+
+**機械検証**: 工程4 で TC-E-I02 を **`AeadTagMismatch` 経路で failures カウンタが進まない**ことを確認するテストに修正し、現実の挙動と既知欠陥を可視化。`WrongPassword` 経路のロジック自体は TC-E-U16 unit (`should_count_failure(WrongPassword) == true`) で機械担保。Backoff 入口拒否の動作 (5 回 → 6 回目で BackoffActive) は TC-E-I02b で別途 integration 検証 (UnlockBackoff 直接操作経由)。
+
+**推奨**: 設計書 §F-E1 step 4 の「`AeadTagMismatch` は backoff 対象外」原則を維持しつつ、`verify_header_aead` 失敗を**ヘッダ KEK_pw 不一致 = WrongPassword** と意味論的に再分類する経路を Sub-E Rev2 で再検討するか、現状の妥協を test-design §EC-10 / 設計書 REQ-S11 に注記して期待値を狭める。
+
+##### 工程5 への引継ぎ
+
+- **TC-E-P01 property test**: shikomi-daemon に proptest dev-dep 追加が必要。OS シグナル経路の 1000 ケース不変条件検証は工程5 で補強候補（lifecycle.rs の単体テストで 1 ケース pass 済、現実の integration TC-E-I05 で 100ms 以内 lock 観測済）。
+- **TC-E-E01 田中ペルソナ E2E**: Sub-F (CLI) 完了後に `tokio::test` 経由 in-process 統合再現で実行。
+
+#### 14.13.2 Bug-E-001 (HIGH) 解決経路 (リーダー方針B採用、`9a25aa6`)
+
+工程4 で発見した **REQ-S11 / C-26 brute force backoff が現実経路で機能しない**欠陥は、リーダー (キャプテン・アメリカ) 決定の **方針 B (backoff トリガを「KEK_pw 検証経路の失敗」に統一)** で解決した。
+
+##### 修正 commit `9a25aa6` の内容
+
+- `crates/shikomi-infra/src/persistence/vault_migration/service.rs`:
+  - `unlock_internal_with_password` の `verify_header_aead(...)?` を `verify_header_aead(...).map_err(map_aead_failure_in_unlock_to_wrong_password)?` に置換
+  - 新規ヘルパ `map_aead_failure_in_unlock_to_wrong_password`: `MigrationError::Crypto(AeadTagMismatch) → MigrationError::Crypto(WrongPassword)` 変換 + `tracing::warn!` で改竄通知ログを `shikomi_infra::vault_migration` target に分離記録 (運用診断維持)
+  - 他経路 (`encrypt_vault` / `decrypt_vault` / 直接 `verify_header_aead`) は従来通り `AeadTagMismatch` を維持。本ヘルパは `unlock_with_password` の文脈に閉じる
+
+##### マユリ工程4 テスト書き直し (`dd6d2e1` 後、`9a25aa6` 後の commit)
+
+- **TC-E-I02 全面書き直し**: 「`AeadTagMismatch` 経路で `failures==0` 固定化」破棄、本来の意図「5 回 `Crypto{wrong-password}` → `failures=5` → 6 回目 `BackoffActive{wait_secs:30}`」に戻し、PASS 確認
+- **TC-E-I02b 維持**: backoff 入口拒否動作を `UnlockBackoff::record_failure` 直接操作経由で別途担保
+- **TC-E-U16 維持**: `should_count_failure(WrongPassword) == true` 純関数判定を不変、`AeadTagMismatch` は引き続き `false` (本ヘルパは `unlock_with_password` 経由前に `WrongPassword` に変換するため、`should_count_failure` の入力時点では `WrongPassword` になっている設計)
+- **TC-E-S08 新設 (grep gate)**: `tests/docs/sub-e-static-checks.sh` に追加。以下 5 要件を機械検証:
+  1. `map_aead_failure_in_unlock_to_wrong_password` 関数の存在
+  2. 関数本体に `AeadTagMismatch` arm + `WrongPassword` 変換が両方
+  3. `tracing::warn!` 改竄通知ログ
+  4. target が `"shikomi_infra::vault_migration"`
+  5. `unlock_internal_with_password` 関数本体に `verify_header_aead` 呼出 + `map_aead_failure_in_unlock_to_wrong_password` 呼出が両方
+
+##### 担保契約最終状態
+
+| 契約 | 状態 | 検証経路 |
+|---|---|---|
+| **REQ-S11 / C-26** (5 回連続失敗で指数バックオフ発動) | ✅ 現実経路で発動 | TC-E-I02 (integration) + TC-E-I02b (handler entry) + TC-E-U08..U10 (純関数) |
+| C-22 (Locked で read/write 拒否) | ✅ 不変 | TC-E-U01..U05 + TC-E-S01 |
+| C-23 (zeroize 連鎖) | ✅ 不変 | TC-E-U02..U04 |
+| C-24 (idle 15min 自動 lock) | ✅ 不変 | TC-E-I04 + lifecycle::tests |
+| C-25 (OS シグナル 100ms 内 lock) | ✅ 不変 | TC-E-I05 |
+| C-27 (RecoveryRequired 透過) | ✅ 不変 | TC-E-U11 |
+| C-28 / C-29 (handshake 許可リスト + PreHandshake 拒否) | ✅ 不変 | TC-E-I07 / I09 + TC-E-S07 |
+| **Bug-E-001 回帰防衛** | ✅ 構造封鎖 | **TC-E-S08 grep gate** |
+
+##### 最終テスト総数
+
+工程4 完了時点 (commit `9a25aa6` 後 + マユリテスト書き直し後):
+
+| 階層 | 件数 | 結果 |
+|---|---|---|
+| 静的検査 (TC-E-S01..S08) | 8 | **8/8 PASS** |
+| daemon lib unit | 64 | 全 PASS |
+| daemon sub_e_v2_integration | 10 | 全 PASS |
+| core lib (TC-E-U13 含む) | 183 | 全 PASS |
+| infra lib | 103 | 全 PASS |
+| infra vault_migration_integration (Bug-E-001 影響範囲確認) | 5 | 全 PASS |
+| **合計** | **373** | **全 PASS** |
+
+Bug-E-001 (HIGH) は構造的に解決、grep gate で回帰防衛確定。Sub-E Rev2 不要。
+
+#### 14.13.3 ペガサス工程5指摘解消 (2026-04-26)
+
+工程5 並列レビューで **ペガサス・J・クロフォード** から致命指摘 3 点 (`[却下]`) を受け、リーダー判断 (即時修正) のもと以下を実装:
+
+##### 致命指摘① 「成功と偽る lock」経路 (Lie-Then-Surprise)
+
+旧実装: `v2_handler/{rotate_recovery,rekey}.rs` の atomic save 成功直後に cache 再 unlock が失敗しても `tracing::warn!` のみで `IpcResponse::{RecoveryRotated,Rekeyed}` を成功として返却 → ユーザは「成功！」を見るが次の `list` で突如 `VaultLocked` で詰む経路。
+
+**銀時修正 `143e8eb`**: `IpcResponse::RecoveryRotated` / `Rekeyed` に **`cache_relocked: bool` フィールド追加**:
+- `true`: atomic save 成功 + cache.unlock(new_vek) 成功 (通常経路)
+- `false`: atomic save 成功 + cache 再 unlock 失敗 (vault.db 正常 / daemon cache のみ Locked、Sub-F が「鍵情報の再キャッシュに失敗、もう一度 unlock してください」を表示)
+
+##### マユリ対応 (テスト書き直し + 新設)
+
+- **TC-E-I06b 新設**: `RotateRecovery` 正常経路で `cache_relocked: true` を含めた構造で返却され、cache が Unlocked 維持されることを機械固定 (Lie-Then-Surprise 経路の構造防衛)
+- **TC-E-I08 修正**: `Rekeyed { cache_relocked, .. }` で `cache_relocked == true` を assert (銀時取り込み)
+- **`shikomi_core::ipc::response::tests::test_variant_*_with_cache_relocked_false`** 銀時追加分: `cache_relocked: false` の variant 構築可能性を unit で担保 → Sub-F 側で false 分岐の pattern match が破綻しないことを保証
+
+##### 致命指摘② `docs/features/vault-encryption/ux-and-msg.md` (セル担当)
+
+Sub-E の MSG-S03/S04/S05/S07/S09(a)/S15 + `cache_relocked: false` 時のユーザ向けメッセージ仕様を SSoT として記載 (セル工程5 修正担当、別 commit)。
+
+##### 致命指摘③ テストファイル 500 行ルール違反 (本マユリ担当)
+
+旧 `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` (693 行) を `tests/sub_e_v2_integration/` 配下の責務別 module に分割:
+
+| ファイル | 責務 | 行数 |
+|---|---|---|
+| `sub_e_v2_integration.rs` (entry) | `mod` 宣言のみ | ~50 |
+| `sub_e_v2_integration/helpers.rs` | 共通ヘルパ (DRY 集約) | ~134 |
+| `sub_e_v2_integration/unlock.rs` | TC-E-I01 | ~50 |
+| `sub_e_v2_integration/backoff.rs` | TC-E-I02 / I02b | ~150 |
+| `sub_e_v2_integration/lock_lifecycle.rs` | TC-E-I04 / I05 | ~100 |
+| `sub_e_v2_integration/handshake.rs` | TC-E-I07 / I09 | ~90 |
+| `sub_e_v2_integration/rekey_rotate.rs` | TC-E-I06 / I06b / I08 | ~210 |
+| `sub_e_v2_integration/sanity.rs` | TempDir lifecycle | ~13 |
+
+各ファイル 250 行以内、Rust の `tests/foo.rs` + `tests/foo/bar.rs` 子モジュール慣習に従い `#[path = ...]` で明示パス指定 (cargo は単一 integration test binary としてビルド、コンパイル時間増加なし)。
+
+##### 工程5 解消後 最終テスト総数
+
+| 階層 | 件数 | 結果 |
+|---|---|---|
+| 静的検査 (TC-E-S01..S08) | 8 | 8/8 PASS |
+| daemon lib unit | 64 | 全 PASS |
+| daemon sub_e_v2_integration (TC-E-I01..I09 + I02b + **I06b**) | **11** | 11/11 PASS |
+| core lib (TC-E-U13 含む + 銀時 `cache_relocked: false` 検証 2 件) | **185** | 全 PASS |
+| infra lib | 103 | 全 PASS |
+| infra vault_migration_integration | 5 | 全 PASS |
+| **合計** | **376** | **全 PASS** |
+
+ペガサス致命指摘①③ 完全解消、②はセル担当で別commit。3名再レビュー準備完了。
+
+#### 14.13.4 ペガサス工程5 再レビュー致命指摘④ 解消 (2026-04-26)
+
+ペガサス再レビュー (3名のうち服部・ペテルギウス [合格]、ペガサス [却下]) で **C-32 統合テスト不在**を致命指摘:
+
+> `cache_relocked: false` の実機経路 (atomic write 成功 + 再 unlock 失敗 → 次 IPC で VaultLocked) は一切検証されていないデース。fault-injection で再現せよ。
+
+##### 修正内容 (commit 予定)
+
+###### A. fault-injection seam (実装側、必要最小)
+
+`crates/shikomi-daemon/src/ipc/v2_handler/rekey.rs` に **`#[cfg(debug_assertions)]` 限定** の `pub static FORCE_RELOCK_FAILURE: AtomicBool` を追加:
+
+- `debug_assertions` ビルド (= cargo test/run の dev profile) でのみ実体を持つ
+- release ビルドにはフラグ自体がコンパイルされず**攻撃面ゼロ**
+- `shikomi-daemon` は `publish = false` の internal crate のため `pub` 公開でも外部から不可視
+- `handle_rekey` / `handle_rotate_recovery` の `cache_relocked` 計算分岐に `FORCE_RELOCK_FAILURE.load(SeqCst)` チェックを挿入、`true` なら `unlock_with_password` の成否に関わらず `cache_relocked = false` 経路に分岐
+
+`#[cfg(test)]` でなく `#[cfg(debug_assertions)]` を選択した理由: integration test (tests/ 配下) は `cfg(test)` では daemon lib をビルドせず `pub` 公開シンボルのみアクセス可能なため。`debug_assertions` は dev profile で true、release で false の標準的フラグ。
+
+###### B. TC-E-I06c (新設、結合)
+
+`tests/sub_e_v2_integration/rekey_rotate.rs::tc_e_i06c_rekey_with_relock_failure_returns_cache_relocked_false_then_listrecords_locked`:
+
+1. `FORCE_RELOCK_FAILURE.store(true, SeqCst)` で fault-injection 起動
+2. `IpcRequest::Rekey` 発火 → 応答が `Rekeyed { cache_relocked: false, words: 24 個 }` であることを assert
+3. cache が Locked 状態に遷移 (`!cache.is_unlocked()`) を assert
+4. **次の `IpcRequest::ListRecords` が `IpcResponse::Error(IpcErrorCode::VaultLocked)` を返却**することを機械固定 (Pegasus 致命指摘① の根本)
+5. `FORCE_RELOCK_FAILURE.store(false, SeqCst)` で他テスト汚染防止 cleanup
+
+`#[serial(rekey_fault_injection)]` 属性で `TC-E-I06b` / `TC-E-I06c` / `TC-E-I08` を直列化 (共有 `AtomicBool` の race 防止、`serial_test` crate を `dev-dependencies` に追加)。
+
+###### C. TC-E-S09 (新設、grep gate)
+
+`tests/docs/sub-e-static-checks.sh` に追加。3 要件機械検証:
+
+1. `rekey.rs` / `rotate_recovery.rs` 双方に `cache_relocked = false` 経路 + `tracing::warn!` 通知が存在
+2. `FORCE_RELOCK_FAILURE` が `#[cfg(debug_assertions)]` 直下に宣言されている (release への混入封鎖)
+3. `#[cfg(not(debug_assertions))]` フォールバック経路で `force_failure` が常に `false` (release 動作担保)
+
+将来の refactor で「`cache_relocked: false` 経路の silent regression」が起きないよう構造防衛を機械化。
+
+##### Pegasus 工程5 再レビュー解消後 最終テスト総数
+
+| 階層 | 件数 | 結果 |
+|---|---|---|
+| 静的検査 (TC-E-S01..**S09**) | 9 | 9/9 PASS |
+| daemon lib unit | 64 | 全 PASS |
+| daemon sub_e_v2_integration (TC-E-I01..I09 + I02b + I06b + **I06c**) | **12** | 12/12 PASS |
+| core lib (TC-E-U13 + cache_relocked: false 検証 2 件含む) | 185 | 全 PASS |
+| infra lib | 103 | 全 PASS |
+| infra vault_migration_integration | 5 | 全 PASS |
+| **合計** | **378** | **全 PASS** |
+
+REQ-S11 / C-22..C-32 / Bug-E-001 / Lie-Then-Surprise 全契約が**実機経路で機械固定**された状態に到達。Pegasus 再レビュー [合格] 取得準備完了。

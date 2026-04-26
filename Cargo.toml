@@ -82,6 +82,16 @@ zxcvbn          = { version = "3",    default-features = false, features = ["def
 criterion       = { version = "0.5", default-features = false }
 # Sub-C (#41) AEAD アダプタ。AES-256-GCM (RustCrypto)、tech-stack §4.7 凍結。
 aes-gcm         = { version = "0.10", default-features = false, features = ["alloc", "aes", "zeroize"] }
+# Sub-E (#43) `verify_password` で VEK の bit-exact 比較を constant-time 実施する。
+# `vek-cache-and-ipc.md` §F-E4 step 2 (subtle::ConstantTimeEq 経由 side-channel 排除)。
+# aes-gcm が transitive で同 crate を引くが、direct dep に明示昇格して version 漂流を防ぐ。
+subtle          = { version = "2", default-features = false }
+# Sub-E (#43) `OsLockSignal` trait の `async fn in trait` を `Send + 'static` future
+# 制約付きで dyn 化するため。`vek-cache-and-ipc.md` §OsLockSignal trait の代替方針
+# (`#[trait_variant::make]` macro 採用が困難な場合は `async-trait` で `Box<dyn>` 経由
+# 動的ディスパッチ) を採用。1 回のヒープ確保コストはあるがテスト容易性 + 既存 stable
+# Rust エディションでの保証された動作を優先 (tech-stack.md §4.7 同期更新)。
+async-trait     = { version = "0.1", default-features = false }
 # Sub-C (#41) test-design TC-C-P01 / TC-C-P02 用 proptest。1000 ケースで
 # AAD 入れ替え検出 + encrypt/decrypt 往復不変条件を property 検証する。
 # Bug-C-001 顛末: 銀ちゃん impl は単発 fixture 検証のみで proptest 不在、

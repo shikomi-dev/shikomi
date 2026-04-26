@@ -21,6 +21,8 @@ use shikomi_core::ipc::{
 use shikomi_core::{
     RecordId, RecordKind, RecordLabel, SecretBytes, Vault, VaultHeader, VaultVersion,
 };
+use shikomi_daemon::backoff::UnlockBackoff;
+use shikomi_daemon::cache::VekCache;
 use shikomi_daemon::ipc::server::IpcServer;
 use shikomi_daemon::ipc::transport::ListenerEnum;
 use shikomi_daemon::lifecycle::single_instance::SingleInstanceLock;
@@ -121,6 +123,8 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
     } = lock.take_listener().expect("take_listener");
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let cache = VekCache::new();
+    let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
     let mut server = IpcServer::new(
         ListenerEnum::Unix {
             listener,
@@ -128,6 +132,8 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
         },
         Arc::clone(&repo_arc),
         Arc::clone(&vault_arc),
+        cache,
+        backoff,
     );
     let server_handle = tokio::spawn(async move {
         let _ = server.start_with_shutdown(shutdown_rx).await;

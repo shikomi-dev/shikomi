@@ -13,7 +13,7 @@
 | [`architecture.md`](./architecture.md) | モジュール構成 / クラス設計 / 依存方向（Clean Arch） / アーキテクチャへの影響 / ER 図 |
 | [`processing-flows.md`](./processing-flows.md) | F-A1〜F-A5 / F-B1〜F-B4 / F-C1〜F-C4 / F-D1〜F-D5 等の処理フロー + シーケンス図 |
 | [`security.md`](./security.md) | セキュリティ設計（脅威モデル整合 / Fail-Secure 型レベル強制 / OWASP Top 10）+ エラーハンドリング方針 |
-| [`ux-and-msg.md`](./ux-and-msg.md) | 外部連携（該当なし）+ UX 設計（Sub-A `WeakPasswordFeedback` / Sub-D MSG 文言設計指針概要） |
+| [`ux-and-msg.md`](./ux-and-msg.md) | 外部連携（該当なし）+ UX 設計（Sub-A `WeakPasswordFeedback` / Sub-D MSG 文言設計指針概要 / **Sub-E IPC V2 経路 UX + cache_relocked: false 仕様 + 田中ペルソナ ジャーニー + 不変条件 C-30/C-31/C-32**） |
 
 ## 記述ルール（必ず守ること）
 
