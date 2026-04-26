@@ -199,7 +199,7 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
 
 ### `DecryptConfirmation`（型レベル二段確認の証跡、Sub-D Rev2 で Clean Arch 観点に整合）
 
-<!-- Boy Scout Rule (Sub-D Rev2 / 工程5 ペテルギウス指摘): 旧設計の `confirm(yes_keyword, password_reentry, expected_password) -> Result<_, ConfirmError>` は **`subtle::ConstantTimeEq` を shikomi-infra に持ち込む経路**を内包し Clean Architecture 違反。実装段階で「**確認ロジック自体は Sub-F CLI/GUI 層が担当、shikomi-infra には通過証跡だけを型レベルで閉じ込める**」判断に変更し、シグネチャを `pub fn confirm() -> Self` に簡略化。`ConfirmError` variant も削除（Sub-F 側エラーに移譲）。型レベル強制（C-20）は `_private: ()` 非可視性フィールド + `decrypt_vault` 引数必須の 2 軸で維持される。 -->
+<!-- Boy Scout Rule (Sub-D Rev2 / 工程5 ペテルギウス指摘): 確認ロジック（キーワード入力 + パスワード再入力 + `subtle::ConstantTimeEq` 比較）を shikomi-infra に持ち込む旧設計は Clean Architecture 違反のため、Sub-F CLI/GUI 層に責務移譲。シグネチャを `pub fn confirm() -> Self` に簡略化、関連エラー variant も削除（PR #60 履歴）。型レベル強制（C-20）は `_private: ()` 非可視性フィールド + `decrypt_vault` 引数必須の 2 軸で維持される。 -->
 
 - `pub struct DecryptConfirmation { _private: () }`（外部 crate からの直接構築禁止、`_private` 非 `pub` フィールドで `E0451` private field error）
 - `pub fn confirm() -> Self`（**Sub-D Rev2 で簡略化**、引数ゼロ、`Result` を返さない）
@@ -209,7 +209,7 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
   3. 両方通過後に本関数を呼び `DecryptConfirmation` を取得
   4. `VaultMigration::decrypt_vault(_, confirm)` の引数として渡す
 - **`--force` フラグでも `decrypt_vault` の `confirmation: DecryptConfirmation` 引数を省略不可**（型シグネチャで強制、Sub-F CLI 実装でも回避経路を作れない、C-20 維持）
-- **二段確認失敗時のエラー処理は Sub-F 内部のエラー型で表現**（旧 `ConfirmError` / `MigrationError::ConfirmationRequired` は不要、Sub-F が独自に MSG-S14 再表示経路を構築）
+- **二段確認失敗時のエラー処理は Sub-F 内部のエラー型で表現**（shikomi-infra の `MigrationError` には対応 variant を持たず、Sub-F が独自に MSG-S14 再表示経路を構築）
 
 ### Clean Architecture 観点の責務分離（Sub-D Rev2 で明文化）
 
@@ -352,7 +352,6 @@ classDiagram
         +Crypto_CryptoError
         +Persistence_PersistenceError
         +AtomicWriteFailed_stage
-        // (Sub-D Rev2 で削除: ConfirmationRequired)
         +PlaintextNotUtf8
         +RecoveryAlreadyConsumed
     }
@@ -364,7 +363,6 @@ classDiagram
 | `Crypto(CryptoError)` | `#[error(transparent)]` | KDF / AEAD 失敗の透過、`AeadTagMismatch` / `NonceLimitExceeded` を含む | MSG-S10 / MSG-S11 |
 | `Persistence(PersistenceError)` | `#[error(transparent)]` | `repo.load` / `repo.save` 失敗 | 既存 MSG（vault-persistence 側） |
 | `AtomicWriteFailed { stage, source }` | `#[error("vault migration atomic write failed at stage {stage}")]` | マイグレーション中の atomic write 失敗、原状復帰済み明示 | MSG-S13 |
-<!-- Sub-D Rev2 で削除: ConfirmationRequired variant 不要。理由: `confirm()` 引数ゼロ化により ConfirmError 経路が消滅、二段確認失敗時のエラー処理は Sub-F 内部のエラー型で完結（MSG-S14 確認モーダル再表示は presentation 層責務）。 -->
 | `PlaintextNotUtf8` | `#[error("decrypted plaintext is not valid UTF-8")]` | 復号成功したが UTF-8 不正（ありえない経路、Sub-C `Verified<Plaintext>` を構築できた時点で AEAD 検証は通っているが、UTF-8 検証は別レイヤー） | 開発者向けエラー（基本的にユーザに見せない、`MSG-S10` カテゴリに統合可） |
 | `RecoveryAlreadyConsumed` | `#[error("recovery disclosure already consumed")]` | `RecoveryDisclosure::disclose` 2 回目呼出（型レベルで防げない move 後の使用は compile_fail だが、`drop_without_disclose` 後の disclose を runtime で防ぐ）| 開発者向けエラー |
 
