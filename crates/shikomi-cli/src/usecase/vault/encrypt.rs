@@ -1,14 +1,17 @@
-//! `vault encrypt` usecase（Sub-F #44 Phase 2、F-F1）。
+//! `vault encrypt` usecase（Sub-F #44、F-F1）。
 //!
 //! 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
-//! §処理フロー詳細 F-F1
+//! §処理フロー詳細 F-F1 / §アクセシビリティ代替経路
 //!
-//! Phase 2 スコープ: master password 取得 → IPC `Encrypt` 1 往復 → 24 語を
-//! Screen 経路で render。`--output {print,braille,audio}` は Phase 5 で実装。
+//! Phase 6: `--output` 自動切替 + braille / audio 経路を accessibility モジュール
+//! 経由で wire。`--output print` (PDF) は Phase 7 に分離 (printpdf 依存追加と同時)。
+
+use std::io::Write;
 
 use shikomi_core::ipc::SerializableSecretBytes;
 
 use super::read_master_password;
+use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
 use crate::cli::{EncryptArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -27,24 +30,46 @@ pub fn execute(
     let master_password = read_master_password("master password: ")?;
     let disclosure = repo.encrypt(master_password, args.accept_limits)?;
     if !quiet {
-        render_disclosure(&disclosure, args.output, locale);
+        render_disclosure(&disclosure, args.output, locale)?;
     }
     Ok(())
 }
 
-/// 24 語を `--output` 経路で render する。Phase 2 は `Screen` 経路のみ実装。
-fn render_disclosure(disclosure: &[SerializableSecretBytes], output: OutputTarget, locale: Locale) {
-    let rendered = match output {
-        OutputTarget::Screen => success::render_recovery_disclosure_screen(disclosure, locale),
-        OutputTarget::Print | OutputTarget::Braille | OutputTarget::Audio => {
-            // Phase 5 で `accessibility::{print_pdf, braille_brf, audio_tts}` に dispatch。
-            // Phase 2 は Screen 経路にフォールバックして「未実装」案内を併記する。
-            success::render_recovery_disclosure_screen_with_fallback_notice(
-                disclosure, output, locale,
-            )
+/// 24 語を `--output` 経路で render する。`SHIKOMI_ACCESSIBILITY` env による
+/// 自動切替を `output_target::resolve` で適用してから dispatch する。
+fn render_disclosure(
+    disclosure: &[SerializableSecretBytes],
+    output: OutputTarget,
+    locale: Locale,
+) -> Result<(), CliError> {
+    let resolved = output_target::resolve(output);
+    match resolved {
+        OutputTarget::Screen => {
+            let rendered = success::render_recovery_disclosure_screen(disclosure, locale);
+            write_to_stdout(&rendered)
         }
-    };
+        OutputTarget::Braille => {
+            // umask(0o077) 内部適用 → BRF stdout 書出 → 旧 umask 復元 (RAII)。
+            // ユーザの `> recovery.brf` リダイレクト先が 0600 相当で生成される。
+            umask::with_secure_umask(|| braille_brf::write_to_stdout(disclosure))
+        }
+        OutputTarget::Audio => audio_tts::speak(disclosure),
+        OutputTarget::Print => {
+            // Phase 7 で PDF 本実装。現状は Screen + fallback notice を継続。
+            let rendered = success::render_recovery_disclosure_screen_with_fallback_notice(
+                disclosure, resolved, locale,
+            );
+            write_to_stdout(&rendered)
+        }
+    }
+}
+
+fn write_to_stdout(s: &str) -> Result<(), CliError> {
     let mut out = std::io::stdout().lock();
-    use std::io::Write;
-    let _ = out.write_all(rendered.as_bytes());
+    out.write_all(s.as_bytes()).map_err(|e| {
+        CliError::Persistence(shikomi_infra::persistence::PersistenceError::Io {
+            path: std::path::PathBuf::from("<stdout>"),
+            source: e,
+        })
+    })
 }

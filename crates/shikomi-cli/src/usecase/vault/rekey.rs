@@ -13,6 +13,7 @@
 use std::io::Write;
 
 use super::read_master_password;
+use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -31,7 +32,7 @@ pub fn execute(
     let master_password = read_master_password("master password: ")?;
     let outcome = repo.rekey(master_password)?;
     if !quiet {
-        render_rekey(&outcome, args.output, locale);
+        render_rekey(&outcome, args.output, locale)?;
     }
     Ok(())
 }
@@ -40,24 +41,47 @@ fn render_rekey(
     outcome: &crate::io::ipc_vault_repository::RekeyOutcome,
     output: OutputTarget,
     locale: Locale,
-) {
-    let mut rendered = match output {
+) -> Result<(), CliError> {
+    let resolved = output_target::resolve(output);
+    match resolved {
         OutputTarget::Screen => {
-            success::render_rekeyed(outcome.records_count, &outcome.words, locale)
+            let mut rendered =
+                success::render_rekeyed(outcome.records_count, &outcome.words, locale);
+            if !outcome.cache_relocked {
+                cache_relocked_warning::render_to(&mut rendered, locale);
+            }
+            write_to_stdout(&rendered)
         }
-        OutputTarget::Print | OutputTarget::Braille | OutputTarget::Audio => {
-            // Phase 5 でアクセシビリティ経路に dispatch、現状は Screen fallback。
-            success::render_rekeyed_with_fallback_notice(
+        OutputTarget::Braille => {
+            umask::with_secure_umask(|| braille_brf::write_to_stdout(&outcome.words))?;
+            // 24 語の本体は BRF で出力済み。MSG-S20 連結 (cache_relocked == false) は
+            // Screen 経路で stderr ではなく stdout に出してしまうと印字機が読めるため、
+            // BRF 出力の純粋性を尊重して MSG-S20 は **省略** する (Phase 6 trade-off、
+            // Phase 7 で BRF 末尾に「次操作前に再 unlock」の点字表現を検討)。
+            Ok(())
+        }
+        OutputTarget::Audio => audio_tts::speak(&outcome.words),
+        OutputTarget::Print => {
+            let mut rendered = success::render_rekeyed_with_fallback_notice(
                 outcome.records_count,
                 &outcome.words,
-                output,
+                resolved,
                 locale,
-            )
+            );
+            if !outcome.cache_relocked {
+                cache_relocked_warning::render_to(&mut rendered, locale);
+            }
+            write_to_stdout(&rendered)
         }
-    };
-    if !outcome.cache_relocked {
-        cache_relocked_warning::render_to(&mut rendered, locale);
     }
+}
+
+fn write_to_stdout(s: &str) -> Result<(), CliError> {
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(rendered.as_bytes());
+    out.write_all(s.as_bytes()).map_err(|e| {
+        CliError::Persistence(shikomi_infra::persistence::PersistenceError::Io {
+            path: std::path::PathBuf::from("<stdout>"),
+            source: e,
+        })
+    })
 }

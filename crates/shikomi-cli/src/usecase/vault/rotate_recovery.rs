@@ -8,6 +8,7 @@
 use std::io::Write;
 
 use super::read_master_password;
+use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -26,7 +27,7 @@ pub fn execute(
     let master_password = read_master_password("master password: ")?;
     let outcome = repo.rotate_recovery(master_password)?;
     if !quiet {
-        render_rotate_recovery(&outcome, args.output, locale);
+        render_rotate_recovery(&outcome, args.output, locale)?;
     }
     Ok(())
 }
@@ -35,16 +36,41 @@ fn render_rotate_recovery(
     outcome: &crate::io::ipc_vault_repository::RotateRecoveryOutcome,
     output: OutputTarget,
     locale: Locale,
-) {
-    let mut rendered = match output {
-        OutputTarget::Screen => success::render_recovery_rotated(&outcome.words, locale),
-        OutputTarget::Print | OutputTarget::Braille | OutputTarget::Audio => {
-            success::render_recovery_rotated_with_fallback_notice(&outcome.words, output, locale)
+) -> Result<(), CliError> {
+    let resolved = output_target::resolve(output);
+    match resolved {
+        OutputTarget::Screen => {
+            let mut rendered = success::render_recovery_rotated(&outcome.words, locale);
+            if !outcome.cache_relocked {
+                cache_relocked_warning::render_to(&mut rendered, locale);
+            }
+            write_to_stdout(&rendered)
         }
-    };
-    if !outcome.cache_relocked {
-        cache_relocked_warning::render_to(&mut rendered, locale);
+        OutputTarget::Braille => {
+            umask::with_secure_umask(|| braille_brf::write_to_stdout(&outcome.words))?;
+            Ok(())
+        }
+        OutputTarget::Audio => audio_tts::speak(&outcome.words),
+        OutputTarget::Print => {
+            let mut rendered = success::render_recovery_rotated_with_fallback_notice(
+                &outcome.words,
+                resolved,
+                locale,
+            );
+            if !outcome.cache_relocked {
+                cache_relocked_warning::render_to(&mut rendered, locale);
+            }
+            write_to_stdout(&rendered)
+        }
     }
+}
+
+fn write_to_stdout(s: &str) -> Result<(), CliError> {
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(rendered.as_bytes());
+    out.write_all(s.as_bytes()).map_err(|e| {
+        CliError::Persistence(shikomi_infra::persistence::PersistenceError::Io {
+            path: std::path::PathBuf::from("<stdout>"),
+            source: e,
+        })
+    })
 }

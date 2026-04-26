@@ -8,6 +8,8 @@
 //! §前提: crate 構成、composition-root.md §処理順序
 
 #[doc(hidden)]
+pub mod accessibility;
+#[doc(hidden)]
 pub mod cli;
 #[doc(hidden)]
 pub mod error;
