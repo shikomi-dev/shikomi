@@ -52,10 +52,10 @@
 | バリアント | 意味 |
 |-----------|------|
 | `PrepareNew` | `.new` 作成前の準備（親ディレクトリ作成等） |
-| `WriteTemp` | `.new` への SQLite 書込中（open / PRAGMA / DDL / insert / COMMIT） |
+| `WriteTemp` | `.new` への SQLite 書込中（open / PRAGMA / DDL / insert / COMMIT / **`PRAGMA wal_checkpoint(TRUNCATE)`** / **`PRAGMA journal_mode = DELETE`** / **`Connection::close()` 明示呼出**）。close 失敗は本 stage に分類（Issue #65、Win file-handle semantics 対応）|
 | `FsyncTemp` | `.new` の `sync_all` |
 | `FsyncDir` | 親ディレクトリの `sync_all` |
-| `Rename` | `rename` / `ReplaceFileW` |
+| `Rename` | `rename` / `ReplaceFileW`。Win 限定で一過性エラー（`ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION` / `ERROR_LOCK_VIOLATION`）に対する **50ms × 最大 5 回 retry**（合計 250ms 以内）を本 stage に内包。retry 全敗で本 stage 失敗として上位へ return（Issue #65、`../basic-design/error.md` §Windows rename PermissionDenied 行）|
 | `CleanupOrphan` | `.new` の削除失敗（best-effort） |
 
 ## load / save のアルゴリズム詳細（制御フロー）
@@ -100,11 +100,15 @@
    8. `Mapping::vault_header_to_params(vault.header())` で params 取得、`tx.execute(INSERT_VAULT_HEADER, params)` 実行
    9. `for record in vault.records()`: `Mapping::record_to_params(record)` → `tx.execute(INSERT_RECORD, params)`
    10. `tx.commit()?`
-   11. `drop(conn)`
+   11. **`execute("PRAGMA wal_checkpoint(TRUNCATE)")`** — WAL モード採用時に `-wal` / `-shm` サイドカーをチェックポイント+truncate で物理空にする（DELETE モード採用時は no-op だが副作用なし、SQLite "Write-Ahead Logging" §`PRAGMA wal_checkpoint` https://www.sqlite.org/pragma.html#pragma_wal_checkpoint 参照）
+   12. **`execute("PRAGMA journal_mode = DELETE")`** — 残存の `-journal` / `-wal` / `-shm` サイドカーを削除モードに切替し、close 時にサイドカーが物理消去されることを契約として固定（Issue #65 由来、Win file-handle semantics 対応の根本対策）
+   13. **`conn.close()` を明示呼出**。`Result<(), (Connection, rusqlite::Error)>` を握り、失敗時は `AtomicWriteFailed { stage: WriteTemp, source: io::Error::other(<wrapped sqlite err>) }` で fail fast。`drop(conn)` 任せで Win file-handle 解放遅延を許容しない（rusqlite Drop は `sqlite3_close_v2` を呼ぶが pending stmt cache があると close を遅延する semantics — `rusqlite::Connection::close` doc https://docs.rs/rusqlite/latest/rusqlite/struct.Connection.html#method.close 参照）
 7. `AtomicWriter::fsync_and_rename(self.paths)`:
-   1. `File::open(new_path)?.sync_all()?`（`FsyncTemp`）
+   1. `File::open(new_path)?.sync_all()?`（`FsyncTemp`、Win では `read(true).write(true)` で開く — `FlushFileBuffers` が書込権限を要求するため）
    2. `File::open(dir)?.sync_all()?`（`FsyncDir`、Unix のみ。Windows では no-op）
-   3. `fs::rename(new_path, final_path)?` または `ReplaceFileW(..., REPLACEFILE_WRITE_THROUGH)`（`Rename`）
+   3. **rename 段（OS 別分岐）**:
+      - **Unix**: `fs::rename(new_path, final_path)?`（POSIX `rename(2)` は atomic）。失敗即 `AtomicWriteFailed { stage: Rename }`
+      - **Windows**: `ReplaceFileW(..., REPLACEFILE_WRITE_THROUGH)` を呼ぶ。`ERROR_ACCESS_DENIED (5)` / `ERROR_SHARING_VIOLATION (32)` / `ERROR_LOCK_VIOLATION (33)` を**一過性エラー**として識別し、**`cfg(windows)` 限定 retry**（`std::thread::sleep(Duration::from_millis(50))` × 最大 **5 回**、合計上限 **250ms**）を挿入。リトライ間で対象ファイルへの新たな I/O は行わない（Win Indexer / Defender / バックアップソフトの一過性ハンドルが解放されるのを待つだけ）。それ以外のエラーコード（`ERROR_DISK_FULL` 等）は即 fail fast、retry しない。retry 全敗で `AtomicWriteFailed { stage: Rename, source }` を返す（一次情報: Microsoft Learn "MoveFileExW" / "ReplaceFileW" https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew、`std::fs::rename` Win 挙動 https://doc.rust-lang.org/std/fs/fn.rename.html#platform-specific-behavior 参照）
    4. 各段階で失敗したら `AtomicWriter::cleanup_new(new_path)` を呼び、best-effort で `.new` を削除。元のエラーを `AtomicWriteFailed { stage, source }` にラップして return
 8. `audit::exit_ok_save(record_count, bytes_written, elapsed_ms)` を発行、`VaultLock` が drop され排他ロックが解放される
 9. `Ok(())` を返却

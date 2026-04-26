@@ -189,6 +189,22 @@ classDiagram
 
 **3. なぜ `AtomicWriter` を別クラスに分離するか**: atomic write は「`.new` への書き込み」「fsync」「rename」「cleanup」の 4 段階があり、各段階で失敗時の責務が異なる。`SqliteVaultRepository::save` に直接書くと関数が 100 行超えになり SRP 違反。`AtomicWriter` は**状態を持たない**（メソッドはいずれも引数の `&VaultPaths` と `&Vault` から計算）、`impl AtomicWriter` の関連関数のみで構成（実質 modulized namespace）。
 
+**3.1 `AtomicWriter` のクローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `write_new` 内で SQLite `Connection` を扱う際、以下の順序を**契約**として固定する。順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast し、本契約は型では強制できないため doc コメント（`atomic.rs`）と本設計書 SSoT で二重管理する（`./flows.md` §`save` step 6.10〜6.13 と整合）:
+
+1. 全 `INSERT` を含むトランザクションを `tx.commit()` で締める
+2. **`PRAGMA wal_checkpoint(TRUNCATE)`** を発行（WAL 採用時のサイドカー強制空化、DELETE 採用時は no-op で害なし）
+3. **`PRAGMA journal_mode = DELETE`** を発行（残存サイドカーを close 時に物理削除する契約に切替）
+4. **`Connection::close()` を明示呼出**（`Drop` 任せ禁止）。失敗は `WriteTemp` stage で fail fast
+5. 以降 `fsync_and_rename` 段で `.new` を再 open してフラッシュ → rename
+
+**契約違反例**（PR レビューで却下対象、`../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合）:
+
+- `tx.commit()` 後に `drop(conn)` のみで `Connection::close()` 明示呼出を省く（`sqlite3_close_v2` の遅延クローズ semantics で Win rename が race する温床、rusqlite docs https://docs.rs/rusqlite/latest/rusqlite/struct.Connection.html#method.close 参照）
+- `PRAGMA wal_checkpoint(TRUNCATE)` / `journal_mode = DELETE` を省く（`-wal` / `-shm` / `-journal` サイドカー残存で Win Indexer が触りに行き rename 競合の温床）
+- `cfg(windows)` rename retry を「根本対策なし」で挿入する（`./flows.md` §`save` step 7.3 / `../basic-design/error.md` §Windows rename PermissionDenied 行で禁止）
+
+**3.2 `AtomicWriteSession` への構造体化リファクタは Phase 8 別 PR に分離**: 上記クローズ順序契約は理想的には `AtomicWriteSession { conn, paths, new_path }` のようなセッション型を作り、`finalize(self) -> Result<()>` の所有権消費メソッドに集約することで**型レベル強制**できる（Tell, Don't Ask）。本 Issue では既存 `AtomicWriter` ZST + 静的メソッド連鎖の構造を維持し、本 PR スコープを「Issue #65 バグ修正 + 契約 SSoT 化」に絞る（KISS、本 PR 肥大化回避）。構造体化は Phase 8 リファクタ専用 PR で実施する（外部レビューでキャプテン決定、合意済）。
+
 **4. なぜ `PermissionGuard` を別クラスに分離するか**: OS 別実装（Unix / Windows）を `cfg(unix)` / `cfg(windows)` で切り分けるが、`SqliteVaultRepository` の制御フローを OS 依存にしたくない。`PermissionGuard` が OS 非依存の 4 メソッド（`ensure_dir` / `ensure_file` / `verify_dir` / `verify_file`）を公開し、内部で `cfg_if!` で実装選択（Dependency Inversion の OS レベル適用）。
 
 **5. なぜ `Mapping` を構造体ではなく関連関数の集合にするか**: 写像は**副作用なし・状態なし**の純関数。構造体でラップすると不要なインスタンス生成が発生する（YAGNI）。`Mapping` は空構造体（zero-sized type）にし、関連関数 `Mapping::vault_header_to_params` のようにドット記法で呼び出す（namespace 機能のみ）。

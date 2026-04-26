@@ -31,7 +31,7 @@
 | REQ-P02, P03, P04, P05, P11, P12 | `shikomi_infra::persistence::sqlite` | `crates/shikomi-infra/src/persistence/sqlite/mod.rs` | `SqliteVaultRepository` 実装の入口、トランザクション制御 |
 | REQ-P03 | 〃 `::schema` | `crates/shikomi-infra/src/persistence/sqlite/schema.rs` | `CREATE TABLE`・`CHECK` 制約・`PRAGMA` の SQL 定数 |
 | REQ-P03, P09 | 〃 `::mapping` | `crates/shikomi-infra/src/persistence/sqlite/mapping.rs` | ドメイン型 ↔ SQLite 行の写像（シリアライズ / 検証付きデシリアライズ） |
-| REQ-P04, P05 | 〃 `::atomic` | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` | atomic write（`.new` → fsync → rename）、`.new` 残存検出 |
+| REQ-P04, P05 | 〃 `::atomic` | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` | atomic write（`.new` への SQLite 書込 → **DB ハンドル明示クローズ + WAL/journal サイドカー解放** → fsync → rename → Win 限定 rename リトライ補強）、`.new` 残存検出。**ハンドル解放順序は契約**（OS 別 file-handle semantics の差を吸収する責務、`./error.md` §Windows rename PermissionDenied 経路 / `../detailed-design/flows.md` §`save` step 6-7） |
 | REQ-P06, P07 | `shikomi_infra::persistence::permission` | `crates/shikomi-infra/src/persistence/permission/mod.rs` | OS 非依存の検証 API。内部で `cfg_if!` により `unix.rs` / `windows.rs` へ委譲 |
 | REQ-P06 | 〃 `::unix` | `crates/shikomi-infra/src/persistence/permission/unix.rs` | `cfg(unix)` のみ有効。`0o700` / `0o600` 設定・検証 |
 | REQ-P07 | 〃 `::windows` | `crates/shikomi-infra/src/persistence/permission/windows.rs` | `cfg(windows)` のみ有効。NTFS owner-only DACL 設定・検証（`SetNamedSecurityInfoW` / `GetNamedSecurityInfoW`）。**本モジュールは本 Issue で スタブ → 本実装に置換**、関連ヘルパは `pub(super)` で同ファイル内に閉じる。unsafe boundary は**本ファイル内のみ**（`./security.md` §unsafe_code 整合方針 / §Windows owner-only DACL の適用戦略 と詳細設計 `detailed-design/classes.md` §13 を参照） |
@@ -186,6 +186,11 @@ classDiagram
 - **`SqliteVaultRepository` は構造体 1 つ**: 内部で `VaultPaths` / `AtomicWriter` / `PermissionGuard` / `Mapping` / `Schema` を**委譲ベースで利用**する。継承は使わない（Composition over Inheritance）
 - **`AtomicWriter` / `PermissionGuard` / `Mapping` は公開しない**: `pub(crate)` で `persistence` モジュール内部実装。外部から個別に呼び出せるのは `SqliteVaultRepository` 経由のみ
 - **`PersistenceError` は `shikomi-core::DomainError` と独立**: 下位ドメインエラーは `Corrupted` バリアント内の `#[source] source: Option<DomainError>` で保持する（旧 `DomainError` バリアント廃止・`Corrupted` に統合、詳細は `../detailed-design/classes.md` §設計判断 §12）。ドメイン層エラーを握り潰さず `#[source]` チェーンで辿れる（Fail Fast + 原因追跡）
+- **atomic write の不変条件 — DB ハンドル明示クローズ + サイドカー解放保証**（Issue #65 由来、Windows file-handle semantics 対応の SSoT）:
+  - `AtomicWriter::write_new` は SQLite `Connection` の **`close()` を明示呼び**、`Result` を握って失敗時は `AtomicWriteFailed { stage: WriteTemp }` で fail fast する。`Drop` 任せのクローズ順序依存は禁止
+  - close 直前に `PRAGMA wal_checkpoint(TRUNCATE)` と `PRAGMA journal_mode = DELETE` を発行し、`-journal` / `-wal` / `-shm` サイドカーを物理削除する。サイドカーが残ったまま rename 経路に入ることを構造的に防ぐ
+  - **Windows file-handle semantics**: `MoveFileExW` は source ハンドルを保持するプロセス/別ハンドルが残存する場合 `ERROR_ACCESS_DENIED (code 5)` を返す（POSIX `rename(2)` がオープン中ハンドルを許容するのと非対称）。本差を「DB ハンドル明示クローズ契約」+「サイドカー解放契約」+「Win 限定 rename retry 補強（`./error.md` §Windows rename PermissionDenied 経路）」の三層で吸収する
+  - **一次情報出典**: Microsoft Learn "MoveFileExW" https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw / SQLite "Atomic Commit In SQLite" https://www.sqlite.org/atomiccommit.html / SQLite "Write-Ahead Logging" https://www.sqlite.org/wal.html
 
 ## 処理フロー
 

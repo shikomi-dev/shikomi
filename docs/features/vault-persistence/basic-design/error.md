@@ -20,6 +20,7 @@
 | パーミッション異常（Unix mode / Windows DACL 不変条件違反） | `PersistenceError::InvalidPermission { path, expected, actual }` で即 return。**自動修復しない**（ユーザ明示操作を要求、Fail Secure）。`actual` 先頭ラベル（Windows: `inherited/ace_count/trustee_mismatch/mask_mismatch`）で 4 不変条件のどれが壊れたかを識別（`../detailed-design/flows.md` §Windows `verify_*`） | 同上 |
 | `.new` 残存 | `PersistenceError::OrphanNewFile` で即 return。**自動削除しない** | 同上。リカバリ UI で案内（別 Issue） |
 | atomic write 失敗 | 発生 stage を `AtomicWriteStage` 列挙で区別、`.new` はベストエフォートで削除、`PersistenceError::AtomicWriteFailed` を返す | 同上 |
+| Windows rename PermissionDenied (`code: 5`) | 根本対策（DB ハンドル明示クローズ + WAL checkpoint/journal_mode=DELETE によるサイドカー解放、`./index.md` §設計判断メモ §atomic write の不変条件）を実施した上で、なおも残存する Win Indexer / Defender 等のスキャン由来の一過性ロックを補強する目的で **`cfg(windows)` 限定 rename リトライ**（50ms × 最大 5 回、合計 250ms 以内）を `AtomicWriteStage::Rename` 段に挿入。リトライ失敗で `AtomicWriteFailed { stage: Rename, source }` を返す | 同上。Issue #65 |
 | スキーマ不一致（`application_id` / `user_version`） | `PersistenceError::SchemaMismatch` または `Corrupted`（前者は「別アプリの DB」、後者は「バージョン未知」）で区別 | 同上 |
 | 暗号化モード vault | `PersistenceError::UnsupportedYet { feature, tracking_issue }` で即 return（Fail Fast） | 同上。別 Issue 進捗を tracking_issue で明示 |
 | vault ディレクトリ解決失敗 | `PersistenceError::CannotResolveVaultDir` で即 return | 同上 |
@@ -28,3 +29,5 @@
 | 内部バグ（不変条件違反） | `debug_assert!` で検出、production では `tracing::error!` 後 panic | daemon がキャプチャ（別 Issue） |
 
 **本 Issue での禁止事項**: `Result<T, String>` / `Result<T, Box<dyn Error>>` 等のエラー情報を失う型の公開 API 使用／本番コードパスの `unwrap()` `expect()`／エラー握り潰し（`let _ = ...` 等の無言通過）。`AtomicWriter::cleanup_new` のみベストエフォート（`tracing::warn!` でログ、元のエラーは必ず呼出側に伝播）。`permission/windows.rs` の unsafe ブロック内での早期 return は RAII ガード（`SecurityDescriptorGuard` / `LocalFreeAclGuard` / `SidStringGuard`）の `Drop` で `LocalFree` が走ることに依存して良いが、`Drop` 内の `LocalFree` 失敗は**元のエラーを上書きしない**（`tracing::warn!` のみ、`./security.md` §Windows owner-only DACL の適用戦略）。
+
+**Windows rename retry の盲目採用は禁止**（Issue #65 由来の防衛線）: `cfg(windows)` rename リトライは「DB ハンドル明示クローズ + WAL/journal サイドカー解放」の根本対策が**先**に施されている前提でのみ補強として許可される。根本原因（rusqlite Drop 順序遅延 / サイドカー残存 / Win file-handle semantics）の articulate を省いて retry のみで CI green を装う PR は却下対象。同じく `#[cfg(windows)] #[ignore]` でテストを回避する PR は問答無用で却下（CI スコープ錯覚の温床）。リトライ採用の根拠は `./index.md` §設計判断メモ §atomic write の不変条件 と本ファイル §エラーハンドリング方針 §Windows rename PermissionDenied 行の双方に記録する（SSoT 二重露出による忘却防止）。
