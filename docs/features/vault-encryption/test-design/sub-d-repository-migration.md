@@ -70,9 +70,9 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 | TC-D-U05 | C-19 | `RecoveryDisclosure::drop_without_disclose(self)` で内部 `RecoveryMnemonic` の Drop 連鎖発火（Sub-A C-1 zeroize 維持）| ユニット | Drop 連鎖 |
 | TC-D-U06 | DC-6 | `RecoveryWords` への `serde::Serialize` 実装は **compile_fail**（永続化禁止）| ユニット | compile_fail |
 | TC-D-U07 | DC-6 | `RecoveryWords` への `Display` 実装は **compile_fail**（誤表示防止）| ユニット | compile_fail |
-| TC-D-U08 | C-20 | `DecryptConfirmation::confirm(yes_keyword="DECRYPT", password_reentry, &expected)` で両一致時のみ `Ok(DecryptConfirmation { _private: () })` | ユニット | 二段確認 |
-| TC-D-U09 | C-20 | `DecryptConfirmation::confirm` で `yes_keyword != "DECRYPT"` → `Err(ConfirmError::WrongKeyword)` | ユニット | 異常系 |
-| TC-D-U10 | C-20 | `DecryptConfirmation::confirm` で password 不一致 → `Err(ConfirmError::WrongPassword)` | ユニット | 異常系 |
+| TC-D-U08 | C-20 | `DecryptConfirmation::confirm()` が **引数ゼロ**で `DecryptConfirmation { _private: () }` を返す（Sub-D Rev2 で Clean Arch 観点から `subtle::ConstantTimeEq` 比較を Sub-F CLI/GUI 層に責務移譲、本関数は二段確認通過証跡を型レベルで閉じ込めるのみ） | ユニット | 通過証跡 |
+| TC-D-U09 | C-20 / Sub-F 引継ぎ | **「DECRYPT」キーワード入力 + paste 抑制 + パスワード再入力 + `subtle::ConstantTimeEq` 比較**の二段確認**ロジック検証**は Sub-F CLI/GUI 層の責務（`shikomi-cli` / `shikomi-gui` で実装）。本 TC は Sub-F 工程で詳細化、Sub-D 範囲では `MigrationError::ConfirmationRequired` 経路のみ確認 | — | Sub-F 引継ぎ |
+| TC-D-U10 | C-20 / Sub-F 引継ぎ | password 再入力不一致時のエラー UX は Sub-F CLI/GUI 層責務（shikomi-infra `confirm()` は引数ゼロのため検証経路を持たない、Clean Arch 整合）。本 TC は Sub-F 工程で詳細化 | — | Sub-F 引継ぎ |
 | TC-D-U11 | C-20 | 外部 crate `tests/` から `DecryptConfirmation { _private: () }` 直接構築 → **compile_fail**（`_private` 非可視）| ユニット | compile_fail |
 | TC-D-U12 | DC-7 | `MigrationError` 5 variant `(WeakPassword, Crypto, Persistence, AtomicWriteFailed, ConfirmationRequired, PlaintextNotUtf8)` の `match` 網羅で `cargo check` 警告 0 件、`#[non_exhaustive]` 適用 | ユニット | enum 網羅 |
 | TC-D-U13 | DC-8 | MSG-S10 i18n 翻訳辞書経由文言に **「断定」キーワード不在 + 「可能性」「いずれにせよ」「バックアップから復元」が含まれる** | ユニット | 文言 |
@@ -112,10 +112,15 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 
 | テストID | 入力 | 期待結果 |
 |---|---|---|
-| TC-D-U08 | `DecryptConfirmation::confirm("DECRYPT", &correct_password_str, &expected_master_password)` | `Ok(DecryptConfirmation { _private: () })` |
-| TC-D-U09 | yes_keyword = `"decrypt"` (小文字) や `"YES"` 等 | `Err(ConfirmError::WrongKeyword)` |
-| TC-D-U10 | password_reentry = `"wrong"` | `Err(ConfirmError::WrongPassword)` |
+| TC-D-U08 | `DecryptConfirmation::confirm()`（**引数ゼロ**、Sub-D Rev2 同期） | `DecryptConfirmation { _private: () }`（通過証跡として型レベルで閉じ込め）|
+| TC-D-U09 | — | **Sub-F 引継ぎ**: 「DECRYPT」キーワード手入力 + paste 抑制 + 大文字検証は Sub-F CLI/GUI 層で `subtle::ConstantTimeEq` 比較実装、shikomi-infra `confirm()` には到達不能（Clean Arch 維持）|
+| TC-D-U10 | — | **Sub-F 引継ぎ**: パスワード再入力 + `subtle::ConstantTimeEq` 比較 + 不一致時の MSG-S14 再表示は Sub-F CLI/GUI 層責務 |
 | TC-D-U11 | 外部 crate（`tests/` integration test）から `DecryptConfirmation { _private: () }` 直接構築 | compile_fail（`_private` 非可視性、外部から構築不能）|
+
+> **Sub-F 引継ぎ責務（TC-D-U09/U10 移譲先）**:
+> - **`shikomi-cli`**: `vault decrypt` サブコマンドで「DECRYPT」キーワード手入力プロンプト + paste 抑制（rpassword crate）+ 大文字検証 + パスワード再入力 + `subtle::ConstantTimeEq` 比較 + 通過時に `DecryptConfirmation::confirm()` を呼出
+> - **`shikomi-gui`**: 田中ペルソナ向けモーダルで同等 UI（input type="password" + paste 無効化属性 + ARIA 警告 + 通過時に IPC 経由 daemon に証跡渡し）
+> - 検証 TC は Sub-F 工程の `test-design/sub-f-cli-and-gui.md` で詳細化（本 §13.10 引継ぎ表参照）
 
 #### `MigrationError` + MSG 文言（DC-7〜DC-11）
 
@@ -192,7 +197,7 @@ cargo test -p shikomi-infra --test vault_persistence_integration
 | Sub | 本ファイル §13 拡張時の追加内容 |
 |---|---|
 | Sub-E (#43) | `VaultMigration::unlock_with_*` の戻り値 `Vek` を `tokio::sync::RwLock<Option<Vek>>` キャッシュに格納する経路、アイドル 15min / スクリーンロック / サスペンド時の `zeroize` 観測、IPC V2 `Unlock` / `Lock` / `ChangePassword` / `RotateRecovery` / `Rekey` request の `MigrationError` ↔ `IpcErrorCode` マッピング検証 |
-| Sub-F (#44) | `vault encrypt` CLI で `RecoveryDisclosure::disclose` 経由 24 語表示 + MSG-S06 二段階確認、`vault decrypt` CLI で `DecryptConfirmation::confirm` 経由二段確認 + MSG-S14、`vault rekey` CLI で `MigrationError::Crypto(NonceLimitExceeded)` 起点の MSG-S11 誘導、`vault change-password` で MSG-S05 成功表示、CLI 終了コード割当 + i18n 翻訳辞書統合 |
+| Sub-F (#44) | `vault encrypt` CLI で `RecoveryDisclosure::disclose` 経由 24 語表示 + MSG-S06 二段階確認、`vault decrypt` CLI で **TC-D-U09/U10 移譲分の二段確認ロジック実装**（「DECRYPT」キーワード手入力 + paste 抑制 + 大文字検証 + パスワード再入力 + `subtle::ConstantTimeEq` 比較 + 通過時に `DecryptConfirmation::confirm()` 呼出）+ MSG-S14、`vault rekey` CLI で `MigrationError::Crypto(NonceLimitExceeded)` 起点の MSG-S11 誘導、`vault change-password` で MSG-S05 成功表示、CLI 終了コード割当 + i18n 翻訳辞書統合 |
 
 ### 13.12 Sub-D 工程4 実施実績
 
