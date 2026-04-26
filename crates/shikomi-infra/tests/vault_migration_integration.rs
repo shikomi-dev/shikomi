@@ -93,12 +93,43 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
 
 /// TC-D-I02: encrypt_vault → decrypt_vault で平文 vault 復元（DecryptConfirmation 経由）.
 ///
-/// 注意: 本 TC は `DecryptConfirmation::confirm` の API シグネチャ次第で
-/// 構造が変わる。実装の `decrypt_vault` シグネチャを確認後に最終形を組む。
+/// `DecryptConfirmation::confirm()` で型レベル証跡を作り、`decrypt_vault` の
+/// 引数として渡す。decrypt_vault は内部で `unlock_internal_with_password` →
+/// 全 records `decrypt_one_record` → 平文 vault 構築 → atomic write を実行。
 #[test]
-#[ignore = "decrypt_vault confirmation 経路の API 形態を実装観察後に確定（Sub-D Rev2 待ち）"]
 fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
-    // 実装観察用 placeholder
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(dir.path());
+    seed_plaintext_vault(&repo, 5);
+
+    let (kdf_pw, kdf_recovery, aead, rng, gate) = build_migration_set();
+    let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
+
+    // 暗号化
+    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+
+    // 復号 (DecryptConfirmation は二段確認証跡)
+    let confirmation = shikomi_infra::persistence::vault_migration::DecryptConfirmation::confirm();
+    migration
+        .decrypt_vault(STRONG_PASSWORD.to_string(), confirmation)
+        .expect("decrypt_vault must restore plaintext records");
+
+    // load して平文モードに戻ったことを確認
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var("SHIKOMI_VAULT_DIR", dir.path());
+    let repo2 = shikomi_infra::persistence::SqliteVaultRepository::new().unwrap();
+    std::env::remove_var("SHIKOMI_VAULT_DIR");
+    let loaded = repo2.load().unwrap();
+    assert_eq!(
+        loaded.header().protection_mode(),
+        ProtectionMode::Plaintext,
+        "decrypt_vault 後は平文モードに戻るべき"
+    );
+    assert_eq!(
+        loaded.records().len(),
+        5,
+        "全 records が復号されて平文 vault に書き戻されるべき"
+    );
 }
 
 /// TC-D-I03: rekey 後の旧 VEK / 新 VEK の挙動を観察.
@@ -154,15 +185,54 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
     );
 }
 
-/// TC-D-I04: rekey 後、旧 records が新 VEK で復号できないこと（旧 VEK 無効化）.
+/// TC-D-I04: rekey 後の `decrypt_vault` 全件成功（Bug-D-002 修正の機械検証）.
 ///
-/// rekey の本来の目的: 新 VEK 生成 + 全 records 再暗号化 + wrapped_vek 更新。
-/// 旧 wrapped_vek が残ると旧 VEK 経由で旧 records が復号できてしまう経路が
-/// 残る。Bug-D-002 と組合せで実装の挙動を観察。
+/// Bug-D-002 修正後: rekey で wrapped_vek_by_pw を新 KEK で再ラップ + records
+/// 新 VEK で再暗号化。同パスワードで decrypt_vault が**全 records 復号成功**
+/// するなら新 VEK 経路が完全に通っていることを意味する。
 #[test]
-#[ignore = "Bug-D-002 確定後に詳細化（rekey 実装が修正されたら本 TC が機能する）"]
-fn tc_d_i04_rekey_invalidates_old_vek_path_observation() {
-    // 実装観察用 placeholder
+fn tc_d_i04_rekey_then_decrypt_vault_all_records_succeed() {
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(dir.path());
+    seed_plaintext_vault(&repo, 5);
+
+    let (kdf_pw, kdf_recovery, aead, rng, gate) = build_migration_set();
+    let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
+
+    // 1) encrypt
+    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+
+    // 2) rekey (Bug-D-002 修正後: wrapped_vek_by_pw 新 KEK で再ラップ + records 新 VEK で再暗号化)
+    migration
+        .rekey_vault(STRONG_PASSWORD.to_string())
+        .expect("rekey_vault must complete");
+
+    // 3) post-rekey decrypt_vault: 全 records が新 VEK で復号成功すべき
+    let confirmation = shikomi_infra::persistence::vault_migration::DecryptConfirmation::confirm();
+    migration
+        .decrypt_vault(STRONG_PASSWORD.to_string(), confirmation)
+        .expect(
+            "Bug-D-002 修正検証: rekey 後 decrypt_vault が全 records 復号成功すべき。\n\
+             失敗した場合は wrapped_vek_by_pw 再ラップ or records 再暗号化のいずれかが\n\
+             設計書 §F-D4 と乖離している。",
+        );
+
+    // 4) load して平文 vault が完全復元されたことを確認
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var("SHIKOMI_VAULT_DIR", dir.path());
+    let repo2 = shikomi_infra::persistence::SqliteVaultRepository::new().unwrap();
+    std::env::remove_var("SHIKOMI_VAULT_DIR");
+    let loaded = repo2.load().unwrap();
+    assert_eq!(
+        loaded.header().protection_mode(),
+        ProtectionMode::Plaintext,
+        "rekey + decrypt_vault 後は平文モードに戻るべき"
+    );
+    assert_eq!(
+        loaded.records().len(),
+        5,
+        "rekey 後の全 records が新 VEK で復号され平文 vault に書き戻されるべき"
+    );
 }
 
 /// TC-D-I05: REQ-P11 改訂による v1 暗号化 vault load 経路（横断検証）.
