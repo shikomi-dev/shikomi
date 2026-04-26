@@ -41,6 +41,11 @@ pub fn write_to_stdout(words: &[SerializableSecretBytes]) -> Result<(), CliError
 }
 
 /// 24 語を BRF 文字列にエンコードする pure 関数 (テスト容易性)。
+///
+/// Phase 7: BIP-39 wordlist でよく出る whole-word level Grade 2 contractions
+/// を一部適用する (`grade2_word_contraction` 経由)。マッチしない単語は Grade 1
+/// (ASCII Braille 1 文字 1 マップ) で fallback する。完全な Grade 2 (2048 語
+/// 全部 + character-level contractions) は将来 minor に分離。
 #[must_use]
 pub fn encode_words(words: &[SerializableSecretBytes]) -> String {
     let mut out = String::new();
@@ -48,12 +53,43 @@ pub fn encode_words(words: &[SerializableSecretBytes]) -> String {
         let plain = w.to_lossy_string_for_handler();
         let line_no = i + 1;
         out.push_str(&format!("{line_no:>2}. "));
-        for ch in plain.chars() {
-            out.push(ascii_to_braille(ch));
+        if let Some(short) = grade2_word_contraction(&plain) {
+            // Grade 2: 単一文字 contraction (例: "child" → "C")
+            out.push_str(short);
+        } else {
+            // Grade 1 fallback: 文字毎 ASCII Braille マップ
+            for ch in plain.chars() {
+                out.push(ascii_to_braille(ch));
+            }
         }
         out.push('\n');
     }
     out
+}
+
+/// BIP-39 wordlist で出現する Grade 2 whole-word contractions 一部。
+///
+/// 設計根拠:
+/// - Unified English Braille (UEB) 2013 §10.6 wholeword alphabetic wordsigns
+/// - BIP-39 English wordlist (2048 語) のうち UEB single-letter wordsign
+///   対象は限定的 (have / like / people / you / child / it / not / so / us)
+///
+/// Phase 7 では出現頻度が高く UEB single-letter wordsign が確立した 9 語のみ
+/// 対応。残り 2039 語は Grade 1 fallback。次 minor で character-level
+/// contractions (ch / sh / th 等) と group-sign を追加して Grade 2 完全対応。
+fn grade2_word_contraction(word: &str) -> Option<&'static str> {
+    match word {
+        "have" => Some("H"),
+        "like" => Some("L"),
+        "people" => Some("P"),
+        "you" => Some("Y"),
+        "child" => Some("C"),
+        "it" => Some("X"),
+        "not" => Some("N"),
+        "so" => Some("S"),
+        "us" => Some("U"),
+        _ => None,
+    }
 }
 
 /// ASCII 1 文字を BRF (北米 ASCII Braille) 1 文字にマップする。
@@ -145,6 +181,31 @@ mod tests {
     fn test_ascii_to_braille_unknown_char_maps_to_question() {
         assert_eq!(ascii_to_braille('Ω'), '?');
         assert_eq!(ascii_to_braille('!'), '?');
+    }
+
+    #[test]
+    fn test_grade2_contraction_known_words_map_to_single_letter() {
+        // BIP-39 に含まれる UEB single-letter wordsign 対象 9 語の確認
+        assert_eq!(grade2_word_contraction("have"), Some("H"));
+        assert_eq!(grade2_word_contraction("like"), Some("L"));
+        assert_eq!(grade2_word_contraction("people"), Some("P"));
+        assert_eq!(grade2_word_contraction("you"), Some("Y"));
+        assert_eq!(grade2_word_contraction("child"), Some("C"));
+    }
+
+    #[test]
+    fn test_grade2_contraction_unknown_words_return_none() {
+        // BIP-39 wordlist の他多数 (Grade 1 fallback 対象)
+        assert_eq!(grade2_word_contraction("abandon"), None);
+        assert_eq!(grade2_word_contraction("ability"), None);
+        assert_eq!(grade2_word_contraction("zone"), None);
+    }
+
+    #[test]
+    fn test_encode_words_uses_grade2_for_known_word() {
+        let brf = encode_words(&[word("have")]);
+        // Grade 2 single-letter wordsign "H" + 改行
+        assert!(brf.contains(" 1. H\n"), "expected grade-2 H, got: {brf}");
     }
 
     #[test]

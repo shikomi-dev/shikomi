@@ -21,5 +21,8 @@
 
 pub mod audio_tts;
 pub mod braille_brf;
+pub mod file_acl;
 pub mod output_target;
+pub mod print_pdf;
+pub mod screen_reader;
 pub mod umask;

@@ -13,7 +13,7 @@
 use std::io::Write;
 
 use super::read_master_password;
-use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
+use crate::accessibility::{audio_tts, braille_brf, output_target, print_pdf, umask};
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -62,16 +62,11 @@ fn render_rekey(
         }
         OutputTarget::Audio => audio_tts::speak(&outcome.words),
         OutputTarget::Print => {
-            let mut rendered = success::render_rekeyed_with_fallback_notice(
-                outcome.records_count,
-                &outcome.words,
-                resolved,
-                locale,
-            );
-            if !outcome.cache_relocked {
-                cache_relocked_warning::render_to(&mut rendered, locale);
-            }
-            write_to_stdout(&rendered)
+            // Phase 7: PDF 経路。MSG-S20 連結は Braille と同様 PDF 純粋性を尊重して
+            // 省略 (操作成功 = ExitCode::Success は維持、cache_relocked 警告は将来
+            // PDF 末尾ページに追記する設計 minor で検討)。
+            umask::with_secure_umask(|| print_pdf::write_to_stdout(&outcome.words))?;
+            Ok(())
         }
     }
 }

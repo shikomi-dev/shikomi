@@ -11,7 +11,7 @@ use std::io::Write;
 use shikomi_core::ipc::SerializableSecretBytes;
 
 use super::read_master_password;
-use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
+use crate::accessibility::{audio_tts, braille_brf, output_target, print_pdf, umask};
 use crate::cli::{EncryptArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -55,11 +55,9 @@ fn render_disclosure(
         }
         OutputTarget::Audio => audio_tts::speak(disclosure),
         OutputTarget::Print => {
-            // Phase 7 で PDF 本実装。現状は Screen + fallback notice を継続。
-            let rendered = success::render_recovery_disclosure_screen_with_fallback_notice(
-                disclosure, resolved, locale,
-            );
-            write_to_stdout(&rendered)
+            // Phase 7: 手書き PDF 1.4 (printpdf 依存不使用) で生成。umask(0o077)
+            // 内部適用でリダイレクト先 0600 相当を保証 (TC-F-A05)。
+            umask::with_secure_umask(|| print_pdf::write_to_stdout(disclosure))
         }
     }
 }

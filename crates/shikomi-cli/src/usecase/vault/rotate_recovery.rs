@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use super::read_master_password;
-use crate::accessibility::{audio_tts, braille_brf, output_target, umask};
+use crate::accessibility::{audio_tts, braille_brf, output_target, print_pdf, umask};
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
@@ -52,15 +52,8 @@ fn render_rotate_recovery(
         }
         OutputTarget::Audio => audio_tts::speak(&outcome.words),
         OutputTarget::Print => {
-            let mut rendered = success::render_recovery_rotated_with_fallback_notice(
-                &outcome.words,
-                resolved,
-                locale,
-            );
-            if !outcome.cache_relocked {
-                cache_relocked_warning::render_to(&mut rendered, locale);
-            }
-            write_to_stdout(&rendered)
+            umask::with_secure_umask(|| print_pdf::write_to_stdout(&outcome.words))?;
+            Ok(())
         }
     }
 }

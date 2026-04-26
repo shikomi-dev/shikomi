@@ -6,30 +6,34 @@
 //!   OS スクリーンリーダー検出 / 明示フラグのいずれかで `--output screen` 既定を
 //!   `Braille` に上書き、明示 `--output` フラグは常に最優先)
 //!
-//! Phase 6 スコープ:
+//! Phase 6 〜 Phase 7:
 //! - `SHIKOMI_ACCESSIBILITY` env (`"1"` / `"true"` / `"yes"` のいずれかで有効) 判定
 //! - 明示フラグ最優先 (clap default が `Screen` の場合のみ env で上書き)
-//! - OS スクリーンリーダー自動検出 (macOS `defaults read` / Win Narrator process /
-//!   Linux Orca DBus) は **Phase 7** に分離
+//! - **Phase 7**: OS スクリーンリーダー自動検出 (`screen_reader::is_screen_reader_active`)
+//!   を統合。env / OS 検出のいずれかで `Screen → Braille` 上書き (OR 評価)。
 //!
 //! 不変条件:
 //! - 明示 `--output {print,braille,audio}` は **常に** その値を返す (env 無視)。
 //! - 既定値 (`Screen`) かつ `SHIKOMI_ACCESSIBILITY` 有効時のみ `Braille` に切替。
 //! - env が未設定 / 無効値の場合は `Screen` のまま (Fail Closed の逆、UX 優先)。
 
+use crate::accessibility::screen_reader;
 use crate::cli::OutputTarget;
 
 /// `--output` フラグの実効値を解決する。
 ///
-/// `requested` が `Screen` (clap 既定) かつ `SHIKOMI_ACCESSIBILITY` env 有効時
-/// のみ `Braille` に上書き。それ以外は `requested` をそのまま返す。
+/// `requested` が `Screen` (clap 既定) かつ以下のいずれかの場合に `Braille` 上書き:
+/// - `SHIKOMI_ACCESSIBILITY` env が有効 (`1` / `true` / `yes`)
+/// - OS スクリーンリーダーが起動中 (Phase 7、`screen_reader` モジュール経由)
+///
+/// 明示フラグ (`Print` / `Braille` / `Audio`) は env / 検出に関わらず最優先。
 #[must_use]
 pub fn resolve(requested: OutputTarget) -> OutputTarget {
     if requested != OutputTarget::Screen {
         return requested; // 明示フラグは最優先
     }
     let raw = std::env::var("SHIKOMI_ACCESSIBILITY").ok();
-    if accessibility_env_enabled(raw.as_deref()) {
+    if accessibility_env_enabled(raw.as_deref()) || screen_reader::is_screen_reader_active() {
         OutputTarget::Braille
     } else {
         OutputTarget::Screen
