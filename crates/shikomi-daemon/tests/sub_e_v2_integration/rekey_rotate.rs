@@ -14,7 +14,8 @@ use crate::helpers::{
     encrypt_existing_vault, fast_argon2_adapter, handshake_v2, run_dispatch, secret,
     seed_plaintext_vault, STRONG_PASSWORD,
 };
-use shikomi_core::ipc::{IpcRequest, IpcResponse, SerializableSecretBytes};
+use serial_test::serial;
+use shikomi_core::ipc::{IpcErrorCode, IpcRequest, IpcResponse, SerializableSecretBytes};
 use shikomi_daemon::backoff::UnlockBackoff;
 use shikomi_daemon::cache::VekCache;
 use shikomi_infra::crypto::aead::AesGcmAeadAdapter;
@@ -86,6 +87,7 @@ async fn tc_e_i06_v2_change_password_keeps_cache_unlocked() {
 // 機械固定する (Lie-Then-Surprise 経路の構造防衛)。
 
 #[tokio::test]
+#[serial(rekey_fault_injection)]
 async fn tc_e_i06b_rotate_recovery_returns_cache_relocked_true() {
     let (dir, repo) = fresh_repo();
     tighten_perms_unix(dir.path());
@@ -143,10 +145,120 @@ async fn tc_e_i06b_rotate_recovery_returns_cache_relocked_true() {
 }
 
 // =====================================================================
+// TC-E-I06c: cache_relocked=false の実機経路 (Pegasus 工程5 致命指摘 ④ / C-32)
+// =====================================================================
+//
+// **Pegasus 再レビュー指摘**: TC-E-I06b / TC-E-I08 は `cache_relocked: true` の
+// happy path のみ機械固定し、`cache_relocked: false` の実機経路は未検証だった。
+// Lie-Then-Surprise 経路の構造防衛を完成させるため、fault-injection で
+// `unlock_with_password` 失敗を再現:
+//
+// 1. 応答が `Rekeyed { cache_relocked: false, words: 24 個 }`
+// 2. cache が Locked 状態に遷移 (atomic write 成功 / daemon cache のみ Locked)
+// 3. **次の `IpcRequest::ListRecords` が `IpcErrorCode::VaultLocked` を返却**
+//    (Pegasus 致命指摘① の根本: 「成功と偽る lock」を許さない)
+//
+// 実装: `shikomi_daemon::ipc::v2_handler::rekey::FORCE_RELOCK_FAILURE` (cfg(test)
+// 限定 AtomicBool seam) を `true` セット → handler の `cache_relocked` 計算分岐が
+// 強制 `false` 経路に分岐 → 実応答で機械固定。本番ビルドにはフラグ自体が
+// コンパイルされない (攻撃面ゼロ)。
+
+#[tokio::test]
+#[serial(rekey_fault_injection)]
+async fn tc_e_i06c_rekey_with_relock_failure_returns_cache_relocked_false_then_listrecords_locked()
+{
+    use shikomi_daemon::ipc::v2_handler::rekey::FORCE_RELOCK_FAILURE;
+    use std::sync::atomic::Ordering;
+
+    let (dir, repo) = fresh_repo();
+    tighten_perms_unix(dir.path());
+    seed_plaintext_vault(&repo, 3);
+    encrypt_existing_vault(&repo);
+
+    let cache = VekCache::new();
+    let backoff = Mutex::new(UnlockBackoff::new());
+
+    // unlock (rekey 前提として cache.is_unlocked == true、C-22)
+    let _ = run_dispatch(
+        &repo,
+        &cache,
+        &backoff,
+        handshake_v2(),
+        IpcRequest::Unlock {
+            master_password: secret(STRONG_PASSWORD),
+            recovery: None,
+        },
+    )
+    .await;
+    assert!(cache.is_unlocked().await);
+
+    // fault-injection: 次の rekey で relock を強制失敗させる
+    FORCE_RELOCK_FAILURE.store(true, Ordering::SeqCst);
+
+    let resp = run_dispatch(
+        &repo,
+        &cache,
+        &backoff,
+        handshake_v2(),
+        IpcRequest::Rekey {
+            master_password: secret(STRONG_PASSWORD),
+        },
+    )
+    .await;
+
+    // fault-injection を解除 (他テストへの汚染防止)
+    FORCE_RELOCK_FAILURE.store(false, Ordering::SeqCst);
+
+    // (1) 応答が Rekeyed { cache_relocked: false, words: 24 個 } であること
+    match resp {
+        IpcResponse::Rekeyed {
+            records_count,
+            words,
+            cache_relocked,
+        } => {
+            assert_eq!(records_count, 3, "rekey は records を全件再暗号化する");
+            assert_eq!(
+                words.len(),
+                24,
+                "cache_relocked: false でも新 24 語は必ず返却される (atomic write 成功 = 新 mnemonic 唯一有効)"
+            );
+            assert!(
+                !cache_relocked,
+                "fault-injection で relock 失敗 → cache_relocked == false (Lie-Then-Surprise 経路の構造防衛)"
+            );
+        }
+        other => panic!("expected Rekeyed {{ cache_relocked: false, .. }}, got {other:?}"),
+    }
+
+    // (2) cache が Locked 状態に遷移している (atomic write 成功 / daemon cache のみ Locked)
+    assert!(
+        !cache.is_unlocked().await,
+        "cache_relocked: false 経路では cache が Locked のまま (Sub-F が再 unlock 誘導する責務、MSG-S05 派生)"
+    );
+
+    // (3) 次の IpcRequest::ListRecords が IpcErrorCode::VaultLocked を返却
+    let next = run_dispatch(
+        &repo,
+        &cache,
+        &backoff,
+        handshake_v2(),
+        IpcRequest::ListRecords,
+    )
+    .await;
+    match next {
+        IpcResponse::Error(IpcErrorCode::VaultLocked) => {}
+        other => panic!(
+            "次 IPC (ListRecords) は VaultLocked を返却すべき (Pegasus 致命指摘① 構造防衛), got {other:?}"
+        ),
+    }
+}
+
+// =====================================================================
 // TC-E-I08: rekey atomic 整合性 + 旧 mnemonic 経路 Fail Kindly (EC-9)
 // =====================================================================
 
 #[tokio::test]
+#[serial(rekey_fault_injection)]
 async fn tc_e_i08_rekey_atomic_recovery_consistency() {
     let (dir, repo) = fresh_repo();
     tighten_perms_unix(dir.path());

@@ -56,27 +56,45 @@ pub async fn handle_rotate_recovery<R: VaultRepository + ?Sized>(
             reason: format!("cache-lock-failed: {err}"),
         });
     }
-    let cache_relocked = match ctx.migration.unlock_with_password(password_str) {
-        Ok(new_vek) => match ctx.cache.unlock(new_vek).await {
-            Ok(()) => true,
+    // テスト fault-injection: TC-E-I06c で `cache_relocked: false` 経路を実機経路として
+    // 発火させる (rekey.rs の `FORCE_RELOCK_FAILURE` を共有)。release ビルドには
+    // フラグ自体がコンパイルされないため攻撃面ゼロ (`#[cfg(debug_assertions)]`)。
+    #[cfg(debug_assertions)]
+    let force_failure =
+        super::rekey::FORCE_RELOCK_FAILURE.load(std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(debug_assertions))]
+    let force_failure = false;
+
+    let cache_relocked = if force_failure {
+        tracing::warn!(
+            target: "shikomi_daemon::ipc::v2_handler",
+            "rotate_recovery: relock forced to fail (test fault-injection); \
+             responding with cache_relocked=false (Pegasus 工程5 TC-E-I06c)"
+        );
+        false
+    } else {
+        match ctx.migration.unlock_with_password(password_str) {
+            Ok(new_vek) => match ctx.cache.unlock(new_vek).await {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "shikomi_daemon::ipc::v2_handler",
+                        "rotate_recovery: cache.unlock failed after atomic save: {err:?}; \
+                         responding with cache_relocked=false (Pegasus 工程5)"
+                    );
+                    false
+                }
+            },
             Err(err) => {
+                // atomic write は成功、daemon 側 cache 復旧のみ失敗。
+                // ユーザは再 unlock が必要。`cache_relocked: false` で田中ペルソナへ通知。
                 tracing::warn!(
                     target: "shikomi_daemon::ipc::v2_handler",
-                    "rotate_recovery: cache.unlock failed after atomic save: {err:?}; \
+                    "rotate_recovery: cache re-unlock failed after atomic save: {err:?}; \
                      responding with cache_relocked=false (Pegasus 工程5)"
                 );
                 false
             }
-        },
-        Err(err) => {
-            // atomic write は成功、daemon 側 cache 復旧のみ失敗。
-            // ユーザは再 unlock が必要。`cache_relocked: false` で田中ペルソナへ通知。
-            tracing::warn!(
-                target: "shikomi_daemon::ipc::v2_handler",
-                "rotate_recovery: cache re-unlock failed after atomic save: {err:?}; \
-                 responding with cache_relocked=false (Pegasus 工程5)"
-            );
-            false
         }
     };
 

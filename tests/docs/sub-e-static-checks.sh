@@ -38,6 +38,12 @@
 #            shikomi-infra に存在し、`tracing::warn!` で改竄通知を残す経路を
 #            機械検証。Bug-E-001 (REQ-S11 / C-26 brute force backoff の現実
 #            経路発動) を回帰させない構造防衛。
+# - TC-E-S09 (Pegasus 工程5 致命指摘 ④ / C-32): `rekey.rs` / `rotate_recovery.rs`
+#            に `cache_relocked: false` を明示的に返す経路 (`cache_relocked = false`
+#            または `false,$` 末尾の if/match arm) が存在し、Lie-Then-Surprise
+#            経路を構造的に拒絶していることを機械検証。fault-injection seam
+#            (`FORCE_RELOCK_FAILURE`) は `cfg(test)` 限定で本番経路には混入しない
+#            ことも合わせて確認。
 #
 # Exit codes: 0 all pass / 1 at least one fail.
 
@@ -399,6 +405,60 @@ if [[ -f "$VAULT_MIGRATION_SERVICE_RS" ]]; then
     fi
 else
     emit "TC-E-S08" "FAIL" "$VAULT_MIGRATION_SERVICE_RS not found"
+fi
+
+# ======================================================================
+# TC-E-S09: cache_relocked: false 経路 + fault-injection seam の cfg(test) 限定
+# ======================================================================
+REKEY_RS="$DAEMON/ipc/v2_handler/rekey.rs"
+ROTATE_RS="$DAEMON/ipc/v2_handler/rotate_recovery.rs"
+
+if [[ -f "$REKEY_RS" ]] && [[ -f "$ROTATE_RS" ]]; then
+    failures=()
+
+    # (a) rekey.rs / rotate_recovery.rs 双方に cache_relocked = false 経路が存在
+    for f in "$REKEY_RS" "$ROTATE_RS"; do
+        # `false` を返す arm (= false, または false$ パターン)
+        if ! grep -qE 'cache_relocked[[:space:]]*=[[:space:]]*false|false,?\s*$|=>[[:space:]]*false' "$f"; then
+            failures+=("(a) $f に cache_relocked=false 経路が見当たらない (Lie-Then-Surprise 構造防衛)")
+        fi
+        # tracing::warn の cache_relocked=false 通知ログが存在
+        if ! grep -qE "cache_relocked=false" "$f"; then
+            failures+=("(a2) $f に cache_relocked=false の tracing::warn 通知が見当たらない")
+        fi
+    done
+
+    # (b) FORCE_RELOCK_FAILURE が cfg(debug_assertions) 限定であること
+    #     (release build には実体がコンパイルされない、攻撃面ゼロ)
+    if ! grep -qE '#\[cfg\(debug_assertions\)\]' "$REKEY_RS"; then
+        failures+=("(b) rekey.rs に #[cfg(debug_assertions)] 属性が見当たらない (FORCE_RELOCK_FAILURE 露出経路)")
+    fi
+    # FORCE_RELOCK_FAILURE 宣言が cfg(debug_assertions) 直下にあるか確認
+    cfg_dbg_line=$(grep -n '#\[cfg(debug_assertions)\]' "$REKEY_RS" | head -n1 | cut -d: -f1)
+    if [[ -n "$cfg_dbg_line" ]]; then
+        # cfg(debug_assertions) の直後数行内に FORCE_RELOCK_FAILURE 宣言が出現するか
+        range=$(awk -v start="$cfg_dbg_line" 'NR>=start && NR<=start+5' "$REKEY_RS")
+        if ! echo "$range" | grep -qE "FORCE_RELOCK_FAILURE"; then
+            failures+=("(b2) rekey.rs の #[cfg(debug_assertions)] 直後に FORCE_RELOCK_FAILURE 宣言が見当たらない")
+        fi
+    fi
+
+    # (c) release ビルド (cfg(not(debug_assertions))) で force_failure が常に false
+    for f in "$REKEY_RS" "$ROTATE_RS"; do
+        if ! grep -qE '#\[cfg\(not\(debug_assertions\)\)\]' "$f"; then
+            failures+=("(c) $f に #[cfg(not(debug_assertions))] フォールバック経路が見当たらない (release で force_failure 強制 false)")
+        fi
+    done
+
+    if [[ ${#failures[@]} -eq 0 ]]; then
+        emit "TC-E-S09" "PASS" "Pegasus 致命指摘④解消経路 (cache_relocked=false 経路 + cfg(test) 限定 fault-injection seam) 全要件 OK"
+    else
+        emit "TC-E-S09" "FAIL" "cache_relocked=false 経路 / cfg(test) 限定 seam に欠落あり (${#failures[@]} 件) — Lie-Then-Surprise 回帰経路"
+        for fmsg in "${failures[@]}"; do detail "$fmsg"; done
+        detail "remediation: docs/features/vault-encryption/test-design/sub-e-vek-cache-ipc.md §14.13.4 TC-E-I06c SSoT 参照"
+    fi
+else
+    emit "TC-E-S09" "FAIL" "rekey.rs または rotate_recovery.rs not found"
 fi
 
 # ======================================================================

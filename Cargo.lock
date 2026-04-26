@@ -1728,6 +1728,7 @@ dependencies = [
  "predicates",
  "rmp-serde",
  "serde",
+ "serial_test",
  "shikomi-core",
  "shikomi-infra",
  "tempfile",

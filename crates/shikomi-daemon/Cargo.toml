@@ -47,6 +47,9 @@ windows-sys        = { workspace = true }
 tempfile           = { workspace = true }
 assert_cmd         = { workspace = true }
 predicates         = { workspace = true }
+# Pegasus 工程5 致命指摘 ④ TC-E-I06c で `FORCE_RELOCK_FAILURE` (debug_assertions
+# 限定 AtomicBool) を共有する rekey/rotate_recovery 系テストを直列化するため。
+serial_test        = { workspace = true }
 
 # pty 経由 E2E（Issue #33 / TC-E2E-017、Unix 限定）。
 # `e2e_daemon_phase15_pty.rs` のみで使用、本番バイナリ非混入。
