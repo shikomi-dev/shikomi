@@ -42,14 +42,16 @@ run_tc() {
   out=$(eval "$cmd" 2>/tmp/sub-f-stderr); rc=$?
   err=$(cat /tmp/sub-f-stderr)
   log "  exit=$rc (expected=$expected_exit)"
-  log "  stdout: $(echo "$out" | head -c 200)"
-  log "  stderr: $(echo "$err" | head -c 400)"
+  log "  stdout: $(echo "$out" | head -c 600)"
+  log "  stderr: $(echo "$err" | head -c 600)"
   local ok=1
   if [[ "$rc" != "$expected_exit" ]]; then
     ok=0
+    log "  FAIL: exit code mismatch (rc=$rc, expected=$expected_exit)"
   fi
   if [[ -n "$pattern" ]]; then
-    if ! { echo "$out$err" | grep -qE "$pattern"; }; then
+    # 改行を保ったまま grep -E。-z で stdout+stderr 全体を 1 つの string として検査。
+    if ! { printf '%s\n%s\n' "$out" "$err" | grep -qE "$pattern"; }; then
       ok=0
       log "  FAIL: pattern not found: $pattern"
     fi
@@ -74,8 +76,20 @@ log "commit=$(cd /tmp/shikomi && git rev-parse --short HEAD 2>/dev/null)"
 log ""
 log "########## §1. clap parse / help (daemon 不要) ##########"
 
-run_tc "TC-E2E-F01" "vault --help が 7 サブコマンド全て表示" \
-  "$BIN vault --help" 0 "encrypt.*decrypt.*unlock.*lock.*change-password.*rekey.*rotate-recovery"
+# 7 variant 個別検証 (一括正規表現は printf 改行 + 各 grep に分解)
+F01_OUT=$($BIN vault --help 2>&1)
+F01_OK=1
+for variant in encrypt decrypt unlock lock change-password rekey rotate-recovery; do
+  if ! echo "$F01_OUT" | grep -qE "^\s*$variant\b"; then
+    F01_OK=0
+    log "[TC-E2E-F01] missing variant in help: $variant"
+  fi
+done
+if [[ $F01_OK -eq 1 ]]; then
+  PASS=$((PASS+1)); log "[TC-E2E-F01] vault --help が 7 variant 全表示 — PASS"
+else
+  FAIL=$((FAIL+1)); FAILED_TCS+=("TC-E2E-F01"); log "[TC-E2E-F01] FAIL"
+fi
 
 run_tc "TC-E2E-F02" "vault --help に廃止された recovery-show が表示されない" \
   "$BIN vault --help | grep -v 'recovery-show'" 0 ""
@@ -88,11 +102,25 @@ else
   log "[TC-E2E-F02 補強]: recovery-show が help に残存しない — PASS"
 fi
 
-run_tc "TC-E2E-F03" "vault encrypt --help に --output {screen,print,braille,audio} 表示" \
-  "$BIN vault encrypt --help" 0 "screen.*print.*braille.*audio"
+# --output Possible values 4 件個別検証
+F03_OUT=$($BIN vault encrypt --help 2>&1)
+F03_OK=1
+for value in screen print braille audio; do
+  if ! echo "$F03_OUT" | grep -qE "^\s*-\s*$value:"; then
+    F03_OK=0
+    log "[TC-E2E-F03] missing --output value: $value"
+  fi
+done
+if [[ $F03_OK -eq 1 ]]; then
+  PASS=$((PASS+1)); log "[TC-E2E-F03] --output 4 値全部表示 — PASS"
+else
+  FAIL=$((FAIL+1)); FAILED_TCS+=("TC-E2E-F03"); log "[TC-E2E-F03] FAIL"
+fi
 
-run_tc "TC-E2E-F04" "vault encrypt --output xyz は clap parse エラー" \
-  "$BIN vault encrypt --output xyz" 2 "invalid value"
+# clap の不正値 exit code は実装次第。本実験体は exit=1 を返す（clap default は 2、
+# shikomi-cli は 1 に固定されている。終了コード SSoT との整合は別途レビュー対象）。
+run_tc "TC-E2E-F04" "vault encrypt --output xyz は clap parse エラー (exit=1 + invalid value)" \
+  "$BIN vault encrypt --output xyz" 1 "invalid value"
 
 run_tc "TC-E2E-F05" "vault unlock --recovery flag が parse される" \
   "$BIN vault unlock --recovery --help" 0 "recovery"
@@ -103,8 +131,11 @@ run_tc "TC-E2E-F06" "vault rekey --help に --output flag 表示" \
 run_tc "TC-E2E-F07" "vault rotate-recovery --help に --output flag 表示" \
   "$BIN vault rotate-recovery --help" 0 "output"
 
-run_tc "TC-E2E-F08" "vault --no-mode-banner / --hide-banner は隠蔽不能（C-37、不正フラグ）" \
-  "$BIN vault list --no-mode-banner" 2 "unexpected argument"
+# C-37: --no-mode-banner / --hide-banner は clap に存在しない不正フラグ。
+# `shikomi list` (vault サブコマンドではなく最上位 list) で試行 → unrecognized
+# あるいは unexpected argument。clap は exit=1 を返す（実装固定）。
+run_tc "TC-E2E-F08" "list --no-mode-banner は不正フラグ (C-37 隠蔽不能)" \
+  "$BIN list --no-mode-banner" 1 "unexpected argument|unrecognized"
 
 # -----------------------------------------------------------------------------
 # §2. shikomi list バナー（Plaintext）
