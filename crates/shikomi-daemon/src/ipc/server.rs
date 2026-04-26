@@ -341,12 +341,18 @@ async fn handle_connection<S>(
                         let aead = AesGcmAeadAdapter;
                         let rng = Rng;
                         let gate = ZxcvbnGate::default();
+                        let repo_ref: &SqliteVaultRepository = Arc::as_ref(&repo);
                         let migration = VaultMigration::new(
-                            &*repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate,
+                            repo_ref,
+                            &kdf_pw,
+                            &kdf_recovery,
+                            &aead,
+                            &rng,
+                            &gate,
                         );
 
                         let ctx = V2Context {
-                            repo: &*repo,
+                            repo: repo_ref,
                             vault: &vault,
                             cache: &cache,
                             backoff: &backoff,
