@@ -126,7 +126,7 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 
 | テストID | 検証手段 | 期待結果 |
 |---|---|---|
-| TC-D-U12 | `match err: MigrationError { Crypto(_) ⇒ ..., Persistence(_) ⇒ ..., Domain(_) ⇒ ..., AlreadyEncrypted ⇒ ..., NotEncrypted ⇒ ..., PlaintextNotUtf8 ⇒ ..., RecoveryAlreadyConsumed ⇒ ..., AtomicWriteFailed { .. } ⇒ ..., RecoveryRequired ⇒ ..., }` を**ワイルドカード `_` 無し**で書く | `cargo check` 警告 0 件（**9 variant 全網羅**、Rev3 で実装 `error.rs` 直読確定）+ `#[non_exhaustive]` で外部 crate からの追加 variant 対応強制 |
+| TC-D-U12 | `match err: MigrationError { Crypto(_) ⇒ ..., Persistence(_) ⇒ ..., Domain(_) ⇒ ..., AlreadyEncrypted ⇒ ..., NotEncrypted ⇒ ..., PlaintextNotUtf8 ⇒ ..., RecoveryAlreadyConsumed ⇒ ..., AtomicWriteFailed { .. } ⇒ ..., RecoveryRequired ⇒ ..., }` を**ワイルドカード `_` 無し**で書く | `cargo check` 警告 0 件（**9 variant 全網羅**、Rev3 で実装 `error.rs` 直読確定）+ `#[non_exhaustive]` で外部 crate からの追加 variant 対応強制。**ワイルドカード排除は TC-D-S07 grep gate で機械強制**（`#[non_exhaustive]` は defining crate 内で無効、`_` arm が残ると variant 追加時に test が実際には壊れず構造防衛が骨抜きになる経路を Rev4 で封鎖、Petelgeuse 工程5 Rev4 指摘で焼き付け）|
 | TC-D-U13 | i18n 翻訳辞書 `msg-s10.ja.txt` を grep | 「断定」**不在**、「可能性」「いずれにせよ」「バックアップから復元」**含有** |
 | TC-D-U14 | i18n 翻訳辞書 `msg-s11.ja.txt` を grep | `\d+` 数字（`NonceCounter::current()` 由来）**不在**、「`vault rekey`」「鍵を再生成」**含有** |
 | TC-D-U15 | i18n 翻訳辞書 `msg-s13.ja.txt` を grep | 「変更前の状態に戻っています」**含有** |
@@ -187,7 +187,7 @@ cargo test -p shikomi-infra --test vault_persistence_integration
 ### 13.10 Sub-D テスト証跡
 
 - `cargo test -p shikomi-infra --test vault_migration_*` の stdout（unit + integration + property pass 件数 + atomic write 失敗模擬の cleanup 観測）
-- 静的検証スクリプト stdout（`sub-d-static-checks.sh` 4 件以上想定）
+- 静的検証スクリプト stdout（`sub-d-static-checks.sh` 7 件想定: TC-D-S01..S04 + TC-D-S05/S06 variant gate + **TC-D-S07 wildcard gate**）
 - proptest 失敗時の minimization 出力（あれば）
 - vault-persistence 横断 regression 結果（TC-I03/I04 新内容 + TC-I04a 新設の pass）
 - 全て `/app/shared/attachments/マユリ/sub-d-*.txt` に保存し Discord 添付
