@@ -181,12 +181,84 @@ coverage_table=(
     "C-19 (RecoveryDisclosure::disclose move semantics)|shikomi-core::vault::recovery_disclosure"
     "C-20 (DecryptConfirmation _private)|shikomi-core::vault::decrypt_confirmation"
     "C-21 (atomic write原状復帰)|vault-persistence delegation, TC-D-I04 integration test"
-    "DC-7 (MigrationError 5 variants + non_exhaustive)|shikomi-core::error::MigrationError"
+    "DC-7 (MigrationError 9 variants + non_exhaustive)|shikomi-infra::persistence::vault_migration::error::MigrationError + TC-D-S05"
     "DC-8..11 (MSG-S10/S11/S13/S14 文言)|i18n catalog + sub-d-static-checks TC-D-S03"
     "DC-12 (REQ-P11 v1受入/v999拒否)|cross-feature: vault-persistence TC-I03/I04/I04a"
     "DC-13 (no aes_gcm in shikomi-core)|TC-D-S01 above"
     "Sub-D Clean Arch (VaultMigration in infra only)|TC-D-S02 above"
+    "C-21 AtomicWriteStage 6 values|vault-persistence persistence/error.rs + TC-D-S06"
 )
+
+# ======================================================================
+# TC-D-S05: MigrationError variant count + name list integrity
+# ======================================================================
+# Petelgeuse 工程5 Rev3 で 3 度のドリフト指摘 (5 → 8 → 9) を経て発見:
+# 「設計書 / テスト設計の variant 数主張」と「実装の variant 数」が
+# 局所修正の繰り返しで乖離する怠惰経路。本 TC-D-S05 で実装の variant
+# 名集合を grep 抽出し、test-design.md / repository-and-migration.md /
+# basic-design/architecture.md の各文書の variant 列挙が完全一致するこ
+# とを機械検証する。Rev3 を最後の手作業同期にし、以後はこの grep gate
+# が変更時に自動失敗する構造防衛。
+ERROR_RS="$INFRA/persistence/vault_migration/error.rs"
+if [[ -f "$ERROR_RS" ]]; then
+    # MigrationError enum body から variant 名を抽出。
+    # 行頭スペース 4 + 大文字始まり識別子 + (`(` か `,` か `{`).
+    impl_variants=$(awk '
+        /^pub enum MigrationError/ { in_enum=1; next }
+        in_enum && /^}/ { in_enum=0; exit }
+        in_enum && /^[[:space:]]+[A-Z][A-Za-z0-9_]*[[:space:]]*[(,{]/ {
+            match($0, /[A-Z][A-Za-z0-9_]*/)
+            print substr($0, RSTART, RLENGTH)
+        }
+    ' "$ERROR_RS" | sort -u)
+    impl_count=$(echo "$impl_variants" | wc -l)
+
+    expected=("AlreadyEncrypted" "AtomicWriteFailed" "Crypto" "Domain" "NotEncrypted" "Persistence" "PlaintextNotUtf8" "RecoveryAlreadyConsumed" "RecoveryRequired")
+    expected_set=$(printf '%s\n' "${expected[@]}" | sort -u)
+    expected_count=${#expected[@]}
+
+    if [[ "$impl_count" -eq "$expected_count" ]] && [[ "$impl_variants" == "$expected_set" ]]; then
+        emit "TC-D-S05" "PASS" "MigrationError has expected $expected_count variants matching grep-extracted impl set"
+        detail "variants: $(echo "$impl_variants" | tr '\n' ' ')"
+    else
+        emit "TC-D-S05" "FAIL" "MigrationError variant set drift (impl_count=$impl_count, expected=$expected_count)"
+        detail "impl set:     $(echo "$impl_variants" | tr '\n' ' ')"
+        detail "expected set: $(echo "$expected_set" | tr '\n' ' ')"
+    fi
+else
+    emit "TC-D-S05" "SKIP" "vault_migration/error.rs not present (Sub-D impl not yet merged)"
+fi
+
+# ======================================================================
+# TC-D-S06: AtomicWriteStage 6 values integrity
+# ======================================================================
+PERSIST_ERR_RS="$INFRA/persistence/error.rs"
+if [[ -f "$PERSIST_ERR_RS" ]]; then
+    stage_values=$(awk '
+        /^pub enum AtomicWriteStage/ { in_enum=1; next }
+        in_enum && /^}/ { in_enum=0; exit }
+        in_enum && /^[[:space:]]+[A-Z][A-Za-z0-9_]*,/ {
+            match($0, /[A-Z][A-Za-z0-9_]*/)
+            print substr($0, RSTART, RLENGTH)
+        }
+    ' "$PERSIST_ERR_RS" | sort -u)
+    stage_count=$(echo "$stage_values" | wc -l)
+
+    expected_stages=("CleanupOrphan" "FsyncDir" "FsyncTemp" "PrepareNew" "Rename" "WriteTemp")
+    expected_stage_set=$(printf '%s\n' "${expected_stages[@]}" | sort -u)
+    expected_stage_count=${#expected_stages[@]}
+
+    if [[ "$stage_count" -eq "$expected_stage_count" ]] && [[ "$stage_values" == "$expected_stage_set" ]]; then
+        emit "TC-D-S06" "PASS" "AtomicWriteStage has expected $expected_stage_count values matching grep-extracted impl set"
+        detail "values: $(echo "$stage_values" | tr '\n' ' ')"
+    else
+        emit "TC-D-S06" "FAIL" "AtomicWriteStage value set drift (impl=$stage_count, expected=$expected_stage_count)"
+        detail "impl set:     $(echo "$stage_values" | tr '\n' ' ')"
+        detail "expected set: $(echo "$expected_stage_set" | tr '\n' ' ')"
+    fi
+else
+    emit "TC-D-S06" "SKIP" "persistence/error.rs not present"
+fi
 
 # ======================================================================
 # Summary

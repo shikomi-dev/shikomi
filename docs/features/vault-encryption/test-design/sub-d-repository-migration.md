@@ -51,7 +51,7 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 | **C-20** | `DecryptConfirmation` 引数必須（`_private: ()` で外部 crate 直接構築禁止、`--force` でも省略不可）| ユニット（compile_fail）|
 | **C-21** | マイグレーション中の atomic write 失敗で `.new` cleanup + 原状復帰（`vault-persistence` `.new` 残存検出経路に委譲）| 結合 |
 | DC-6 | `RecoveryWords` `Display` 未実装、`serde::Serialize` 未実装（永続化禁止、Vek 同型）| ユニット（compile_fail）|
-| DC-7 | `MigrationError` **8 variant** 網羅（Sub-D Rev2 で `ConfirmationRequired` を Sub-F 責務移譲 → 削除、最終 variant 数 = `Crypto / Persistence / Domain / AlreadyEncrypted / NotEncrypted / PlaintextNotUtf8 / RecoveryAlreadyConsumed / AtomicWriteFailed`）、`#[non_exhaustive]` で外部 crate からの破壊的変更耐性 | ユニット（match 網羅）|
+| DC-7 | `MigrationError` **9 variant** 網羅（実装 `error.rs` 直読確定 = `Crypto(CryptoError) / Persistence(PersistenceError) / Domain(DomainError) / AlreadyEncrypted / NotEncrypted / PlaintextNotUtf8 / RecoveryAlreadyConsumed / AtomicWriteFailed { stage, source } / RecoveryRequired`）、`#[non_exhaustive]` で外部 crate からの破壊的変更耐性 | ユニット（match 網羅）|
 | DC-8 | MSG-S10 文言: 過信防止「断定禁止」+ 過小評価回避「vault.db 信頼禁止」+ 次の一手「バックアップから復元」（Sub-C Rev1 凍結指針継承）| ユニット（文字列 assert）|
 | DC-9 | MSG-S11 文言: `vault rekey` 誘導 + **残操作猶予数値非表示**（`NonceCounter::current()` を MSG に含めない）| ユニット（grep）|
 | DC-10 | MSG-S13 文言: 原状復帰明示「vault.db は変更前の状態に戻っています」+ 段階情報（過信防止）| ユニット（文字列 assert）|
@@ -74,12 +74,12 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 | TC-D-U09 | C-20 / Sub-F 引継ぎ | **「DECRYPT」キーワード入力 + paste 抑制 + パスワード再入力 + `subtle::ConstantTimeEq` 比較**の二段確認**ロジック検証**は Sub-F CLI/GUI 層の責務（`shikomi-cli` / `shikomi-gui` で実装、Sub-F 内部のエラー型で表現）。本 TC は Sub-F 工程で詳細化、Sub-D 範囲では到達不能（Sub-D Rev2 で `MigrationError::ConfirmationRequired` も削除済、確認失敗は Sub-F 内部完結） | — | Sub-F 引継ぎ |
 | TC-D-U10 | C-20 / Sub-F 引継ぎ | password 再入力不一致時のエラー UX は Sub-F CLI/GUI 層責務（shikomi-infra `confirm()` は引数ゼロのため検証経路を持たない、Clean Arch 整合）。本 TC は Sub-F 工程で詳細化 | — | Sub-F 引継ぎ |
 | TC-D-U11 | C-20 | 外部 crate `tests/` から `DecryptConfirmation { _private: () }` 直接構築 → **compile_fail**（`_private` 非可視）| ユニット | compile_fail |
-| TC-D-U12 | DC-7 | `MigrationError` **8 variant**（Sub-D Rev2 同期）: `Crypto(CryptoError) / Persistence(PersistenceError) / Domain(DomainError) / AlreadyEncrypted / NotEncrypted / PlaintextNotUtf8 / RecoveryAlreadyConsumed / AtomicWriteFailed { stage, source }` の `match` 網羅で `cargo check` 警告 0 件、`#[non_exhaustive]` 適用。**`ConfirmationRequired` は Sub-F 責務移譲で削除済**（前 Rev で 9 variant だった、Petelgeuse 工程5 Rev1 指摘で四層同期完了） | ユニット | enum 網羅 |
+| TC-D-U12 | DC-7 | `MigrationError` **9 variant**（実装 `error.rs` L25-72 直読確定）: `Crypto(CryptoError) / Persistence(PersistenceError) / Domain(DomainError) / AlreadyEncrypted / NotEncrypted / PlaintextNotUtf8 / RecoveryAlreadyConsumed / AtomicWriteFailed { stage, source } / RecoveryRequired` の `match` 網羅で `cargo check` 警告 0 件、`#[non_exhaustive]` 適用。**`ConfirmationRequired` は Sub-F 責務移譲で削除済**（履歴: 元 9 → 削除で 8 と誤記 → Rev2 で実装直読再確認、`RecoveryRequired` 含む 9 variant が最終形と確定。Petelgeuse 工程5 Rev1〜Rev3 で 3 度のドリフト指摘を経て**実装直読ベースの SSoT 確立**） | ユニット | enum 網羅 |
 | TC-D-U13 | DC-8 | MSG-S10 i18n 翻訳辞書経由文言に **「断定」キーワード不在 + 「可能性」「いずれにせよ」「バックアップから復元」が含まれる** | ユニット | 文言 |
 | TC-D-U14 | DC-9 | MSG-S11 i18n 翻訳辞書経由文言に **`NonceCounter::current()` 由来の数値（「あと N 回」等）が含まれない**（grep）| ユニット | 情報漏洩防衛 |
 | TC-D-U15 | DC-10 | MSG-S13 i18n 翻訳辞書経由文言に **「変更前の状態に戻っています」が含まれる**（原状復帰明示）| ユニット | 文言 |
 | TC-D-U16 | DC-11 | MSG-S14 i18n 翻訳辞書経由文言に **「DECRYPT」「パスワードを再入力」「`--force` でも省略不可」が含まれる** | ユニット | 文言 |
-| TC-D-U17 | C-21 | `MigrationError::AtomicWriteFailed { stage }` で stage が `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` のいずれか | ユニット | enum 列挙 |
+| TC-D-U17 | C-21 | `MigrationError::AtomicWriteFailed { stage }` で stage が **6 値のいずれか**（実装 `crates/shikomi-infra/src/persistence/error.rs` L119-131 `AtomicWriteStage` enum 直読確定）: `PrepareNew` / `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` / `CleanupOrphan` | ユニット | enum 列挙 |
 | TC-D-U18 | DC-13 / Clean Arch 回帰 | shikomi-core に `aes_gcm` / `OsRng` / `getrandom` の直接 import 不混入（Sub-A/B/C 累積、Sub-D で破壊しない）| ユニット（grep）| 回帰 |
 | TC-D-I01 | DC-1 | tempdir SQLite で `encrypt_vault` 実行 → vault.db に暗号化済みヘッダ + 全レコード書込 + `unlock_with_password` で同 VEK 復元 + records 全件復号一致 | 結合 | 往復 |
 | TC-D-I02 | DC-2 | 同上で `encrypt_vault → decrypt_vault(_, DecryptConfirmation::confirm(...).unwrap())` → 元平文 vault と records 全件 bit-exact 一致 | 結合 | 双方向 |
@@ -126,12 +126,12 @@ Sub-D は **Sub-A/B/C で凍結した型・契約・MSG 文言指針を初めて
 
 | テストID | 検証手段 | 期待結果 |
 |---|---|---|
-| TC-D-U12 | `match err: MigrationError { Crypto(_) ⇒ ..., Persistence(_) ⇒ ..., Domain(_) ⇒ ..., AlreadyEncrypted ⇒ ..., NotEncrypted ⇒ ..., PlaintextNotUtf8 ⇒ ..., RecoveryAlreadyConsumed ⇒ ..., AtomicWriteFailed { .. } ⇒ ..., }` を**ワイルドカード `_` 無し**で書く | `cargo check` 警告 0 件（**8 variant 全網羅**、Sub-D Rev2 で `ConfirmationRequired` 削除済）+ `#[non_exhaustive]` で外部 crate からの追加 variant 対応強制 |
+| TC-D-U12 | `match err: MigrationError { Crypto(_) ⇒ ..., Persistence(_) ⇒ ..., Domain(_) ⇒ ..., AlreadyEncrypted ⇒ ..., NotEncrypted ⇒ ..., PlaintextNotUtf8 ⇒ ..., RecoveryAlreadyConsumed ⇒ ..., AtomicWriteFailed { .. } ⇒ ..., RecoveryRequired ⇒ ..., }` を**ワイルドカード `_` 無し**で書く | `cargo check` 警告 0 件（**9 variant 全網羅**、Rev3 で実装 `error.rs` 直読確定）+ `#[non_exhaustive]` で外部 crate からの追加 variant 対応強制 |
 | TC-D-U13 | i18n 翻訳辞書 `msg-s10.ja.txt` を grep | 「断定」**不在**、「可能性」「いずれにせよ」「バックアップから復元」**含有** |
 | TC-D-U14 | i18n 翻訳辞書 `msg-s11.ja.txt` を grep | `\d+` 数字（`NonceCounter::current()` 由来）**不在**、「`vault rekey`」「鍵を再生成」**含有** |
 | TC-D-U15 | i18n 翻訳辞書 `msg-s13.ja.txt` を grep | 「変更前の状態に戻っています」**含有** |
 | TC-D-U16 | i18n 翻訳辞書 `msg-s14.ja.txt` を grep | 「DECRYPT」「パスワードを再入力」「`--force`」**含有** |
-| TC-D-U17 | `MigrationError::AtomicWriteFailed { stage: AtomicWriteStage::Rename, source }` 構築 + match | stage variant が `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` の 4 値のみ |
+| TC-D-U17 | `MigrationError::AtomicWriteFailed { stage: AtomicWriteStage::Rename, source }` 構築 + match | stage variant が **`PrepareNew` / `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` / `CleanupOrphan` の 6 値のみ**（vault-persistence `persistence/error.rs` L119-131 `AtomicWriteStage` 完全列挙、Rev3 実装直読確定。前 Rev で「4 値のみ」と誤記、Petelgeuse 工程5 Rev3 指摘で実装直読ベースに是正） |
 | TC-D-U18 | `grep -rE "use aes_gcm::\|OsRng\|rand_core::OsRng\|getrandom::" crates/shikomi-core/src/` | 0 件（コメント除外）|
 
 ### 13.6 Sub-D 結合テスト詳細
