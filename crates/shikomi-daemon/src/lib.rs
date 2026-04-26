@@ -104,15 +104,12 @@ pub async fn run() -> ExitCode {
         return DaemonExit::EncryptionUnsupported.into();
     }
 
-    let listener = match single_instance.take_listener() {
-        Some(l) => l,
-        None => {
-            tracing::error!(
-                target: "shikomi_daemon::lifecycle",
-                "internal: listener missing after acquisition"
-            );
-            return DaemonExit::SystemError.into();
-        }
+    let Some(listener) = single_instance.take_listener() else {
+        tracing::error!(
+            target: "shikomi_daemon::lifecycle",
+            "internal: listener missing after acquisition"
+        );
+        return DaemonExit::SystemError.into();
     };
 
     let repo = Arc::new(repo);

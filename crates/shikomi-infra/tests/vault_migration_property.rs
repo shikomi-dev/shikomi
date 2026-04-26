@@ -105,9 +105,9 @@ proptest! {
 
         // encrypt → decrypt 往復
         let kdf_pw = Argon2idAdapter::default();
-        let kdf_recovery = Bip39Pbkdf2Hkdf::default();
+        let kdf_recovery = Bip39Pbkdf2Hkdf;
         let aead = AesGcmAeadAdapter;
-        let rng = Rng::default();
+        let rng = Rng;
         let gate = ZxcvbnGate::default();
         let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 

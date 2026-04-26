@@ -44,9 +44,9 @@ fn build_migration_set() -> (
 ) {
     (
         Argon2idAdapter::default(),
-        Bip39Pbkdf2Hkdf::default(),
+        Bip39Pbkdf2Hkdf,
         AesGcmAeadAdapter,
-        Rng::default(),
+        Rng,
         ZxcvbnGate::default(),
     )
 }
