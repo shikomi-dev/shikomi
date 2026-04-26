@@ -192,23 +192,22 @@ async fn tc_e_i01_unlock_round_trip() {
 }
 
 // =====================================================================
-// TC-E-I02 (現実経路): 不正パスワードは AeadTagMismatch を返し backoff 対象外
+// TC-E-I02: 5 回連続失敗で 6 回目 BackoffActive (REQ-S11 / C-26)
 // =====================================================================
 //
-// **Bug-E-001 (HIGH) 候補**: 設計書 §F-E1 step 4 / EC-10 では「`WrongPassword` のみ
-// backoff カウント」と凍結されているが、実装の `unlock_with_password` 経路では
-// 通常ユーザの間違ったパスワードは `verify_header_aead` 段で `AeadTagMismatch` を
-// 返し、`unwrap_vek` 段の `WrongPassword` 意味論変換に到達しない。
-// L2 攻撃者の vault.db 破壊と正規ユーザの誤入力を区別できない設計のため、
-// **REQ-S11 (5 回連続失敗で指数バックオフ) が現実の brute force 経路では発動しない**
-// 既知欠陥である (リーダーへ Bug-E-001 として完了報告で報告)。
+// **Bug-E-001 (HIGH) 解決後の本来の意図**: 設計書 §14.4 / EC-10 / TC-E-U16 で
+// 凍結された「`WrongPassword` のみ `record_failure` カウント」契約を、リーダー
+// 決定 (方針B) で `unlock_with_password` 経路の `verify_header_aead` 失敗を
+// `WrongPassword` に意味論再分類することで現実経路に届かせる修正
+// (`9a25aa6` `map_aead_failure_in_unlock_to_wrong_password`) を適用。本 TC は
+// REQ-S11 brute force レート制限が**実機で発動する**ことを機械検証する。
 //
-// 本 TC は **現実の挙動** (`AeadTagMismatch` 経路で failures カウンタが進まない) を
-// 機械検証する。`should_count_failure(WrongPassword) == true` は TC-E-U16 unit で
-// 別途担保済み。
+// 修正前: 通常誤入力は `AeadTagMismatch` で `failures==0` のまま (Bug-E-001)
+// 修正後: 通常誤入力は `WrongPassword` で `failures` がカウントされ、5 回後の
+//        6 回目で `BackoffActive` 入口拒否
 
 #[tokio::test]
-async fn tc_e_i02_aead_tag_mismatch_path_does_not_increment_backoff_counter() {
+async fn tc_e_i02_unlock_backoff_after_5_wrong_password_failures() {
     let (dir, repo) = fresh_repo();
     tighten_perms_unix(dir.path());
     seed_plaintext_vault(&repo, 1);
@@ -217,6 +216,8 @@ async fn tc_e_i02_aead_tag_mismatch_path_does_not_increment_backoff_counter() {
     let cache = VekCache::new();
     let backoff = Mutex::new(UnlockBackoff::new());
 
+    // 5 回連続でわざと違う強パスワードを送信。zxcvbn ゲートを通過する程度の長さで
+    // KEK_pw 不一致 → verify_header_aead 失敗 → WrongPassword 変換 (Bug-E-001 修正) を狙う。
     let wrong_password = "incorrect horse battery staple wrong attempt phrase";
     for i in 0..5 {
         let resp = run_dispatch(
@@ -232,24 +233,56 @@ async fn tc_e_i02_aead_tag_mismatch_path_does_not_increment_backoff_counter() {
         .await;
         match resp {
             IpcResponse::Error(IpcErrorCode::Crypto { reason }) => {
-                // 実装上 verify_header_aead が KEK_pw 不一致を AeadTagMismatch で返す経路。
-                // 設計書 §F-E1 step 4 (a) で「AeadTagMismatch は backoff 対象外」と凍結済。
+                // Bug-E-001 (方針B) 修正後: verify_header_aead 失敗が
+                // map_aead_failure_in_unlock_to_wrong_password で WrongPassword に
+                // 意味論再分類される → IpcErrorCode::Crypto { reason: "wrong-password" }
                 assert_eq!(
-                    reason, "aead-tag-mismatch",
-                    "attempt {i}: expected aead-tag-mismatch (verify_header_aead 経路), got {reason}"
+                    reason, "wrong-password",
+                    "attempt {i}: expected wrong-password (Bug-E-001 修正後の正しい挙動), got {reason}"
                 );
             }
-            other => panic!("attempt {i}: expected Crypto(aead-tag-mismatch), got {other:?}"),
+            other => panic!("attempt {i}: expected Crypto(wrong-password), got {other:?}"),
         }
     }
 
-    // failures カウンタは 0 のまま (AeadTagMismatch は backoff カウント対象外、EC-10 / TC-E-U16)
+    // 5 回連続 wrong-password で failures == 5 (Bug-E-001 修正で record_failure 発火)
     assert_eq!(
         backoff.lock().await.failures(),
-        0,
-        "AeadTagMismatch must NOT increment backoff counter (Bug-E-001: REQ-S11 brute force 抑制が現状動かない既知欠陥)"
+        5,
+        "5 wrong-password failures must increment backoff counter to 5 (REQ-S11 / C-26)"
     );
-    assert!(!cache.is_unlocked().await, "cache must remain locked");
+
+    // 6 回目: ハンドラ入口で BackoffActive 即拒否 (VaultMigration には到達しない)
+    let resp = run_dispatch(
+        &repo,
+        &cache,
+        &backoff,
+        handshake_v2(),
+        IpcRequest::Unlock {
+            master_password: secret(STRONG_PASSWORD), // 6 回目は正パスワードでも届かない
+            recovery: None,
+        },
+    )
+    .await;
+    match resp {
+        IpcResponse::Error(IpcErrorCode::BackoffActive { wait_secs }) => {
+            // 5 失敗 → 30s (BASE 15 * 2^1 = 30、切り上げで 30 or 31)
+            assert!(
+                (30..=31).contains(&wait_secs),
+                "5 failures should yield ~30s backoff, got {wait_secs}"
+            );
+        }
+        other => panic!(
+            "expected BackoffActive(wait_secs=30), got {other:?} \
+             (Bug-E-001 修正未適用の場合は Unlocked / Crypto エラーが返る)"
+        ),
+    }
+
+    // cache は Locked のまま (backoff active 中は正パスワードも届かない)
+    assert!(
+        !cache.is_unlocked().await,
+        "cache must remain locked while backoff active"
+    );
 }
 
 // =====================================================================

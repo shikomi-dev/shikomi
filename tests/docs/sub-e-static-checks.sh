@@ -32,6 +32,12 @@
 #            (Unlock / Lock / ChangePassword / RotateRecovery / Rekey) の
 #            明示列挙 / `ProtocolDowngrade` 拒否経路 / `PreHandshake` 全拒否
 #            の 5 要件を機械検証。
+# - TC-E-S08 (Bug-E-001 方針B解決経路): `unlock_with_password` 経路の
+#            `verify_header_aead` 失敗を `WrongPassword` に意味論再分類する
+#            ヘルパ関数 `map_aead_failure_in_unlock_to_wrong_password` が
+#            shikomi-infra に存在し、`tracing::warn!` で改竄通知を残す経路を
+#            機械検証。Bug-E-001 (REQ-S11 / C-26 brute force backoff の現実
+#            経路発動) を回帰させない構造防衛。
 #
 # Exit codes: 0 all pass / 1 at least one fail.
 
@@ -330,6 +336,69 @@ if [[ -f "$V2_HANDLER_MOD_RS" ]]; then
     fi
 else
     emit "TC-E-S07" "FAIL" "$V2_HANDLER_MOD_RS not found (Sub-E impl 未配備)"
+fi
+
+# ======================================================================
+# TC-E-S08: Bug-E-001 方針B解決経路 (verify_header_aead → WrongPassword 変換 + 改竄ログ)
+# ======================================================================
+VAULT_MIGRATION_SERVICE_RS="$ROOT/crates/shikomi-infra/src/persistence/vault_migration/service.rs"
+if [[ -f "$VAULT_MIGRATION_SERVICE_RS" ]]; then
+    failures=()
+
+    # (a) ヘルパ関数の存在
+    if ! grep -qE "fn map_aead_failure_in_unlock_to_wrong_password" "$VAULT_MIGRATION_SERVICE_RS"; then
+        failures+=("(a) map_aead_failure_in_unlock_to_wrong_password 関数が見当たらない")
+    fi
+
+    # (b) AeadTagMismatch → WrongPassword 変換が含まれる
+    #     awk で関数本体内に AeadTagMismatch arm + WrongPassword 経路が両方あるか確認
+    body=$(awk '
+        /^fn map_aead_failure_in_unlock_to_wrong_password/ { in_fn=1; print; next }
+        in_fn && /^}[[:space:]]*$/ { print; in_fn=0; exit }
+        in_fn { print }
+    ' "$VAULT_MIGRATION_SERVICE_RS")
+    if ! echo "$body" | grep -qE "AeadTagMismatch"; then
+        failures+=("(b) ヘルパ関数本体に AeadTagMismatch arm が見当たらない")
+    fi
+    if ! echo "$body" | grep -qE "WrongPassword"; then
+        failures+=("(b2) ヘルパ関数本体に WrongPassword への変換が見当たらない")
+    fi
+
+    # (c) tracing::warn! で改竄通知を残す経路 (運用診断維持)
+    if ! echo "$body" | grep -qE "tracing::warn!"; then
+        failures+=("(c) ヘルパ関数本体に tracing::warn! 改竄通知ログが見当たらない")
+    fi
+
+    # (d) target に shikomi_infra::vault_migration が指定されている
+    if ! echo "$body" | grep -qE 'target:[[:space:]]*"shikomi_infra::vault_migration"'; then
+        failures+=("(d) tracing::warn! の target が 'shikomi_infra::vault_migration' に設定されていない")
+    fi
+
+    # (e) unlock_internal_with_password から本ヘルパが呼ばれている
+    #     verify_header_aead 呼出と map_err(map_aead_failure_in_unlock_to_wrong_password) が
+    #     近接して存在することを確認 (実装は改行分割されているため単一行 grep ではなく
+    #     `unlock_internal_with_password` 関数本体内に両方が出現することで判定)。
+    unlock_fn_body=$(awk '
+        /fn unlock_internal_with_password/ { in_fn=1; print; next }
+        in_fn && /^[[:space:]]{4}\}[[:space:]]*$/ { print; in_fn=0; exit }
+        in_fn { print }
+    ' "$VAULT_MIGRATION_SERVICE_RS")
+    if ! echo "$unlock_fn_body" | grep -qE "verify_header_aead"; then
+        failures+=("(e1) unlock_internal_with_password 関数本体に verify_header_aead 呼出が見当たらない")
+    fi
+    if ! echo "$unlock_fn_body" | grep -qE "map_aead_failure_in_unlock_to_wrong_password"; then
+        failures+=("(e2) unlock_internal_with_password 関数本体に map_aead_failure_in_unlock_to_wrong_password 呼出が見当たらない (Bug-E-001 回帰経路)")
+    fi
+
+    if [[ ${#failures[@]} -eq 0 ]]; then
+        emit "TC-E-S08" "PASS" "Bug-E-001 方針B解決経路 (AeadTagMismatch→WrongPassword 変換 + tracing::warn 改竄通知 + unlock 経路で map_err 呼出) 全要件 OK"
+    else
+        emit "TC-E-S08" "FAIL" "Bug-E-001 方針B解決経路に欠落あり (${#failures[@]} 件) — REQ-S11 / C-26 brute force backoff 機能不全の回帰経路"
+        for f in "${failures[@]}"; do detail "$f"; done
+        detail "remediation: docs/features/vault-encryption/test-design/sub-e-vek-cache-ipc.md §14.13 Bug-E-001 解決経路 SSoT 参照"
+    fi
+else
+    emit "TC-E-S08" "FAIL" "$VAULT_MIGRATION_SERVICE_RS not found"
 fi
 
 # ======================================================================

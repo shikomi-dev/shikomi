@@ -289,4 +289,55 @@ Summary: 7/7 static checks passed.
 
 - **TC-E-P01 property test**: shikomi-daemon に proptest dev-dep 追加が必要。OS シグナル経路の 1000 ケース不変条件検証は工程5 で補強候補（lifecycle.rs の単体テストで 1 ケース pass 済、現実の integration TC-E-I05 で 100ms 以内 lock 観測済）。
 - **TC-E-E01 田中ペルソナ E2E**: Sub-F (CLI) 完了後に `tokio::test` 経由 in-process 統合再現で実行。
-- **Bug-E-001**: リーダーへ完了報告で報告、工程5 で Sub-D Rev7 / Sub-E Rev2 検討。
+
+#### 14.13.2 Bug-E-001 (HIGH) 解決経路 (リーダー方針B採用、`9a25aa6`)
+
+工程4 で発見した **REQ-S11 / C-26 brute force backoff が現実経路で機能しない**欠陥は、リーダー (キャプテン・アメリカ) 決定の **方針 B (backoff トリガを「KEK_pw 検証経路の失敗」に統一)** で解決した。
+
+##### 修正 commit `9a25aa6` の内容
+
+- `crates/shikomi-infra/src/persistence/vault_migration/service.rs`:
+  - `unlock_internal_with_password` の `verify_header_aead(...)?` を `verify_header_aead(...).map_err(map_aead_failure_in_unlock_to_wrong_password)?` に置換
+  - 新規ヘルパ `map_aead_failure_in_unlock_to_wrong_password`: `MigrationError::Crypto(AeadTagMismatch) → MigrationError::Crypto(WrongPassword)` 変換 + `tracing::warn!` で改竄通知ログを `shikomi_infra::vault_migration` target に分離記録 (運用診断維持)
+  - 他経路 (`encrypt_vault` / `decrypt_vault` / 直接 `verify_header_aead`) は従来通り `AeadTagMismatch` を維持。本ヘルパは `unlock_with_password` の文脈に閉じる
+
+##### マユリ工程4 テスト書き直し (`dd6d2e1` 後、`9a25aa6` 後の commit)
+
+- **TC-E-I02 全面書き直し**: 「`AeadTagMismatch` 経路で `failures==0` 固定化」破棄、本来の意図「5 回 `Crypto{wrong-password}` → `failures=5` → 6 回目 `BackoffActive{wait_secs:30}`」に戻し、PASS 確認
+- **TC-E-I02b 維持**: backoff 入口拒否動作を `UnlockBackoff::record_failure` 直接操作経由で別途担保
+- **TC-E-U16 維持**: `should_count_failure(WrongPassword) == true` 純関数判定を不変、`AeadTagMismatch` は引き続き `false` (本ヘルパは `unlock_with_password` 経由前に `WrongPassword` に変換するため、`should_count_failure` の入力時点では `WrongPassword` になっている設計)
+- **TC-E-S08 新設 (grep gate)**: `tests/docs/sub-e-static-checks.sh` に追加。以下 5 要件を機械検証:
+  1. `map_aead_failure_in_unlock_to_wrong_password` 関数の存在
+  2. 関数本体に `AeadTagMismatch` arm + `WrongPassword` 変換が両方
+  3. `tracing::warn!` 改竄通知ログ
+  4. target が `"shikomi_infra::vault_migration"`
+  5. `unlock_internal_with_password` 関数本体に `verify_header_aead` 呼出 + `map_aead_failure_in_unlock_to_wrong_password` 呼出が両方
+
+##### 担保契約最終状態
+
+| 契約 | 状態 | 検証経路 |
+|---|---|---|
+| **REQ-S11 / C-26** (5 回連続失敗で指数バックオフ発動) | ✅ 現実経路で発動 | TC-E-I02 (integration) + TC-E-I02b (handler entry) + TC-E-U08..U10 (純関数) |
+| C-22 (Locked で read/write 拒否) | ✅ 不変 | TC-E-U01..U05 + TC-E-S01 |
+| C-23 (zeroize 連鎖) | ✅ 不変 | TC-E-U02..U04 |
+| C-24 (idle 15min 自動 lock) | ✅ 不変 | TC-E-I04 + lifecycle::tests |
+| C-25 (OS シグナル 100ms 内 lock) | ✅ 不変 | TC-E-I05 |
+| C-27 (RecoveryRequired 透過) | ✅ 不変 | TC-E-U11 |
+| C-28 / C-29 (handshake 許可リスト + PreHandshake 拒否) | ✅ 不変 | TC-E-I07 / I09 + TC-E-S07 |
+| **Bug-E-001 回帰防衛** | ✅ 構造封鎖 | **TC-E-S08 grep gate** |
+
+##### 最終テスト総数
+
+工程4 完了時点 (commit `9a25aa6` 後 + マユリテスト書き直し後):
+
+| 階層 | 件数 | 結果 |
+|---|---|---|
+| 静的検査 (TC-E-S01..S08) | 8 | **8/8 PASS** |
+| daemon lib unit | 64 | 全 PASS |
+| daemon sub_e_v2_integration | 10 | 全 PASS |
+| core lib (TC-E-U13 含む) | 183 | 全 PASS |
+| infra lib | 103 | 全 PASS |
+| infra vault_migration_integration (Bug-E-001 影響範囲確認) | 5 | 全 PASS |
+| **合計** | **373** | **全 PASS** |
+
+Bug-E-001 (HIGH) は構造的に解決、grep gate で回帰防衛確定。Sub-E Rev2 不要。
