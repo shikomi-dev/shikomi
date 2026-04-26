@@ -56,7 +56,9 @@ async fn spawn_handshake_ok_stub(sock_path: &std::path::Path) {
             // ハンドシェイク受信
             if let Some(Ok(_)) = framed.next().await {
                 let resp = IpcResponse::Handshake {
-                    server_version: IpcProtocolVersion::V1,
+                    // Sub-F (#44) 工程4 Bug-F-004: client は V2 で接続するため
+                    // mock daemon の応答も V2 に追従。
+                    server_version: IpcProtocolVersion::V2,
                 };
                 let bytes = rmp_serde::to_vec(&resp).unwrap();
                 let _ = framed.send(Bytes::from(bytes)).await;
@@ -245,7 +247,8 @@ async fn tc_it_046_list_records_request_response_roundtrip() {
             // 1. handshake
             if let Some(Ok(_)) = framed.next().await {
                 let resp = IpcResponse::Handshake {
-                    server_version: IpcProtocolVersion::V1,
+                    // Sub-F (#44) 工程4 Bug-F-004: V2 client に追従。
+                    server_version: IpcProtocolVersion::V2,
                 };
                 let b = rmp_serde::to_vec(&resp).unwrap();
                 let _ = framed.send(Bytes::from(b)).await;
