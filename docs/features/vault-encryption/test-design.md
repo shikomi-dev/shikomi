@@ -767,6 +767,43 @@ bash tests/docs/sub-0-cross-ref.sh
 | Sub-E (#43) | VEK キャッシュ（`tokio::sync::RwLock<Option<Vek>>`）と `AeadKey` impl の Drop 連鎖統合、IPC V2 でのエラー variant マッピング |
 | Sub-F (#44) | `vault rekey` フロー TC（`NonceLimitExceeded` 検知 → 新 VEK 生成 → 全レコード再暗号化）、MSG-S10 / MSG-S11 文言確定の E2E |
 
-### 12.12 Sub-C 工程4 実施実績
+### 12.12 Sub-C 工程4 実施実績（2026-04-26、PR #55 / `0507705`）
 
-工程4 完了後、Sub-C 実装担当（坂田銀時想定）+ テスト担当（涅マユリ想定）が本ファイルを READ → EDIT で実績を追記する。雛形は Sub-A §10.11 / Sub-B §11.11 に従う。
+| 区分 | TC 数 | pass | 検証手段 |
+|---|---|---|---|
+| ユニット（runtime + KAT） | 18 | 18 | CI `cargo test -p shikomi-infra` で 67 unit pass、Sub-C 関連 22 件確認（aes_gcm 9 + kat 9 + aead_key 4） |
+| 結合（grep + cargo check） | 5 | 5 | `tests/docs/sub-c-static-checks.sh` 4/4 PASS（SKIP→PASS 切替成功） + CI cargo check |
+| property（proptest 1000 ケース）| **2** | **2 PASS** | **Bug-C-001 顛末**: 銀ちゃん impl は単発 fixture のみ、テスト工程で `crates/shikomi-infra/tests/aead_property.rs` を新規実装、Docker `rust:1.95-slim` aarch64 release で 1000 ケース 0.12 秒完走 |
+| E2E | 1 | 1 | CI 8 ジョブ全 SUCCESS、bench-kdf 3 OS 全 PASS（Sub-B 既存契約も維持）|
+| **合計** | **26** | **26 PASS** | CI + Docker proptest + 静的 grep の三系で交叉確認 |
+
+**Bug-C-001 顛末（テスト工程発見）**:
+
+設計書 §12.4 / §12.7 が要求した **proptest 1000 ケース**（TC-C-P01 AAD swap + TC-C-P02 encrypt/decrypt 往復）に対し、銀ちゃん impl PR #55 では：
+
+- **単発 fixture 1 件**で AAD 入れ替え検証 (`decrypt_with_swapped_aad_returns_aead_tag_mismatch`)
+- **単発 fixture 1 件**で encrypt/decrypt 往復検証 (`encrypt_then_decrypt_roundtrip_bit_exact`)
+
+を実装。これは「設計者が想定したケース 1 件で invariant が成立する確認」であり、「ランダム入力空間 1000 ケースで invariant が成立する確率的検証」とは**意味論が異なる**。proptest crate 不在で、shrinking で minimal failing case を提示する経路もゼロ。
+
+**マユリ Boy Scout で補強**:
+
+1. workspace + shikomi-infra dev-dependencies に `proptest = "1"` 追加
+2. `crates/shikomi-infra/tests/aead_property.rs` 新規作成（160 行）
+   - `vek_strategy` / `nonce_strategy` / `aad_strategy` / `plaintext_strategy` で入力空間定義
+   - `ProptestConfig::with_cases(1000)` で**1000 ケース明示**（proptest デフォルト 256 ケースとの乖離を構造防衛）
+3. Docker `rust:1.95-slim` aarch64 release で実行 → **2/2 PASS、所要 0.12 秒**
+
+**proptest 経路で発見した実装の堅牢性**:
+
+- TC-C-P02 (1000 ケース): 任意 plaintext (0..=4096B) + 任意 Vek + 任意 Aad + 任意 nonce で encrypt → decrypt 往復が**全件 bit-exact**。AES-GCM 実装の入力空間網羅性を確認
+- TC-C-P01 (1000 ケース): AAD 入れ替え攻撃 + nonce 入れ替え攻撃を**全件 `Err(AeadTagMismatch)`** で検出
+
+**重大度更新**:
+- Bug-C-001 (proptest 1000 ケース不在): Medium → **Resolved**（テスト工程で proptest 実装を追加、設計と実装の意味論的整合確保）
+
+**新規補助スクリプト・テスト**:
+- `crates/shikomi-infra/tests/aead_property.rs`: TC-C-P01 / P02 実装、1000 ケース proptest
+- `tests/docs/sub-c-static-checks.sh`: TC-C-I01〜I04 grep 検証（4/4 PASS、Sub-A/B 同型）
+
+**全 regression 維持**: lint 20/20 + cross-ref 9/9 + sub-a 3/3 + sub-b 3/3 + sub-c 4/4 = **39/39 PASS**
