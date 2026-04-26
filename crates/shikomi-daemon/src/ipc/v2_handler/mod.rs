@@ -179,11 +179,22 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
         | IpcRequest::AddRecord { .. }
         | IpcRequest::EditRecord { .. }
         | IpcRequest::RemoveRecord { .. } => {
-            if !ctx.cache.is_unlocked().await {
+            // Sub-F (#44) 工程4 Bug-F-004 解消: plaintext vault は VEK cache を介さない
+            // (暗号化されていないので unlock 状態の概念が無い)。protection_mode が
+            // Plaintext の場合は cache check を bypass し V1 ハンドラに委譲する。
+            // C-22 は本来「暗号化 vault が Locked 状態のときに read/write を構造的に
+            // 拒否する」契約なので、plaintext には適用しないのが設計の意図と整合する。
+            // lock は 1 回で取得し、is_plaintext 判定 + 後続 handle_request の
+            // `&mut vault` 引数の両方に再利用する (DRY、二重 lock の race 回避)。
+            let mut vault = ctx.vault.lock().await;
+            let is_plaintext = matches!(
+                vault.protection_mode(),
+                shikomi_core::ProtectionMode::Plaintext
+            );
+            if !is_plaintext && !ctx.cache.is_unlocked().await {
                 return IpcResponse::Error(IpcErrorCode::VaultLocked);
             }
             // V1 ハンドラに委譲 (既存実装は無変更、`Vault` への mut 参照経由)。
-            let mut vault = ctx.vault.lock().await;
             super::handler::handle_request(ctx.repo, &mut vault, request)
         }
 
