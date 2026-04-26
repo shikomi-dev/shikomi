@@ -34,6 +34,16 @@ tracing-test = { workspace = true }
 serial_test  = { workspace = true }
 rusqlite     = { workspace = true }
 uuid         = { workspace = true }
+# Sub-B (#40) BC-3 リリースブロッカ用 KDF ベンチマーク (criterion)。
+# `cargo bench -p shikomi-infra --bench kdf_bench` で起動、
+# `.github/workflows/bench-kdf.yml` の `bench-kdf` ジョブが 3 OS で gating。
+criterion    = { workspace = true }
+
+# Sub-B (#40) BC-3 リリースブロッカ。Argon2id `FROZEN_OWASP_2024_05` の
+# 単一 derive 時間 median を 750ms 閾値 (p95 ≤ 1.0s の proxy) で検証する。
+[[bench]]
+name = "kdf_bench"
+harness = false
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [

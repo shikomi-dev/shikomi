@@ -75,3 +75,8 @@ bip39           = { version = "2",                              features = ["std
 rand_core       = { version = "0.6",                            features = ["getrandom"] }
 getrandom       = "0.2"
 zxcvbn          = { version = "3",    default-features = false, features = ["default"] }
+# Sub-B (#40) BC-3 リリースブロッカ用 KDF ベンチ。`cargo bench -p shikomi-infra
+# --bench kdf_bench` で Argon2id `FROZEN_OWASP_2024_05` / Bip39Pbkdf2Hkdf の
+# 単一 derive 時間を計測し、median を 750 ms (p95 ≤ 1.0 s の proxy) と比較する。
+# `bench-kdf` ワークフロー (`.github/workflows/bench-kdf.yml`) で 3 OS gating。
+criterion       = { version = "0.5", default-features = false }
