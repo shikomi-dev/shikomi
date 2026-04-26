@@ -352,8 +352,14 @@ Phase 1 CLI（`list` / `add` / `edit` / `remove`）の実装に伴い `[workspac
 | tracing init | `tracing-subscriber`（feature `fmt` / `env-filter`） | minor ピン | CLI 起動時に `tracing` subscriber を初期化するため（ログ出力の標準化、RUST_LOG 連携）。`shikomi-core` / `shikomi-infra` 側は `tracing` マクロのみ使用し subscriber 選定は bin 側に任せる |
 | E2E プロセス起動 | `assert_cmd`（dev-dep） | major ピン（v2） | `crates/shikomi-cli/tests/e2e_*.rs` でサブプロセス起動 + stdout / stderr / exit code 検証 |
 | `assert_cmd` 補助 | `predicates`（dev-dep） | major ピン（v3） | `assert_cmd` の assertion 記述で併用する業界標準 |
+| **i18n 翻訳辞書読込（Sub-F #44）**| **`toml`** | minor ピン v0.8+（既存 workspace 依存）| `shikomi-cli/locales/{ja-JP,en-US}/messages.toml` の読込。RustSec advisory-db クリーン（2026-04 時点）、unsafe 経路なし、追加リスクなし |
+| **OS ロケール検出（Sub-F #44）**| **`sys-locale`** | minor ピン v0.3+ | `SHIKOMI_LOCALE` env 未指定時の OS ロケール検出（macOS `defaults` / Windows `GetUserDefaultLocaleName` / Linux `LANG` env のラッパ）。**RustSec advisory-db 照合（2026-04 時点）**: active な advisory なし、unsafe 経路なし。1 年以内 commit 確認済 |
+| **PDF 出力（Sub-F #44、MSG-S18）**| **`printpdf`** | major ピン v0.7+ | `vault {encrypt, rekey, rotate-recovery} --output print` でハイコントラスト PDF を stdout にメモリ生成（中間ファイル不在）。**RustSec advisory-db 照合（2026-04 時点）**: active な advisory なし、純 Rust（unsafe FFI 経路なし）、1 年以内 commit 確認済。WCAG 2.1 AA 対応の最大 36pt + 黒地白文字を `printpdf::Mm` 等で凍結 |
+| **点字 BRF 出力（Sub-F #44、MSG-S18）**| **自前 wordlist 変換テーブル**（追加 crate なし）| - | `liblouis-rs` / 同等 FFI bindings は **不採用**（unsafe FFI 経路を増やさない設計判断、§4.3.2 暗号クリティカル方針との整合）。BIP-39 24 語の Grade 2 英語点字は 24 行のシンプル変換テーブルで完全表現可能、軽量で監査容易。実装は `shikomi-cli/src/accessibility/braille_brf.rs` 内に閉じる |
 
 **CI との連携**: 本 feature の契約（`SecretString::expose_secret()` を `shikomi-cli/src/` 内で呼ばない / panic hook で `tracing::*` を呼ばず payload を参照しない）は `scripts/ci/audit-secret-paths.sh` で静的検証する（`TC-CI-012〜015`）。audit ワークフロー（`.github/workflows/audit.yml`）に組込み済み。
+
+**Sub-F #44 で追加する 4 行**（`toml` は既存、`sys-locale` / `printpdf` / liblouis 不採用方針）の根拠詳細は `docs/features/vault-encryption/detailed-design/cli-subcommands.md` §セキュリティ設計 §新規依存の監査 を参照。**unsafe FFI を拒否する設計判断**は服部工程2 内部レビュー指摘（liblouis FFI の C ライブラリリンクで新規 unsafe 経路が開く重大変更）を反映。
 
 ### 4.7 `shikomi-infra` 暗号アダプタ層で追加する crate（feature `vault-encryption` で導入）
 

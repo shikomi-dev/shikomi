@@ -72,7 +72,7 @@ Sub-F は MSG-S07 / S11 / S14 / S18 / S20 の CLI 最終文言、MSG-S03 / S04 /
 | MSG-S07 | `rekey.completed` / `rekey.completed_gui` | 再暗号化レコード数 + 新 24 語 + cache_relocked == false 時 MSG-S20 連結。終了コード 0（C-31）|
 | MSG-S11 | `nonce_limit_exceeded` / `nonce_limit_exceeded_gui` | `vault rekey` 誘導、残操作猶予数値非表示、終了コード 1 |
 | MSG-S14 | `decrypt.confirmation` | DECRYPT 二段確認 + `subtle::ConstantTimeEq` + paste 抑制（C-34）+ 大文字検証、`--force` 提供しない（C-20）|
-| MSG-S18 | `recovery_show.print` / `braille` / `audio` | `--print` PDF / `--braille` BRF / `--audio` OS TTS、WCAG 2.1 AA、自動切替 `SHIKOMI_ACCESSIBILITY=1` env |
+| MSG-S18 | `output_target.print` / `braille` / `audio` | `--output print` PDF / `--output braille` BRF / `--output audio` OS TTS、WCAG 2.1 AA、自動切替 `SHIKOMI_ACCESSIBILITY=1` env、**Rev1 で `recovery-show` 廃止 → `encrypt/rekey/rotate-recovery --output` フラグ統合** |
 | MSG-S20 | `cache_relock_failed` / `cache_relock_failed_gui` | 「操作完了 + 再 unlock 必要」を Fail Kindly で連結、終了コード 0、新 24 語先表示の不変条件 (c)（`detailed-design/cli-subcommands.md` §i18n 戦略責務分離）|
 
 #### Sub-F の CLI 文言補強（Sub-E 指針継承）
@@ -207,6 +207,6 @@ i18n 辞書の格納場所と key 命名規則は Sub-F 工程で確定する。
 | `requirements-analysis.md` §受入基準 #9（過信なく / 過小評価なく伝わる） | MSG-S10（断定禁止 + バックアップ復元）/ MSG-S16（限界説明 + 明示合意） |
 | `requirements-analysis.md` §非機能要件「ユーザ理解担保 / 暗号化モード切替時の限界説明」 | MSG-S16（4 点限界説明 + `--accept-limits` / モーダル明示同意） |
 | `requirements-analysis.md` §非機能要件「ユーザ理解担保 / 保護モード可視化」 | MSG-S17 GUI バッジ + REQ-S16 CLI `[encrypted]` / `[plaintext]` バナー |
-| `requirements-analysis.md` §非機能要件「アクセシビリティ / リカバリ 24 語の視覚障害ユーザ向け代替経路（WCAG 2.1 AA）」 | MSG-S18 `--print` / `--braille` / `--audio` 代替経路 |
+| `requirements-analysis.md` §非機能要件「アクセシビリティ / リカバリ 24 語の視覚障害ユーザ向け代替経路（WCAG 2.1 AA）」 | MSG-S18 `--output {screen\|print\|braille\|audio}` 代替経路（**Rev1 で recovery-show 廃止 → encrypt/rekey/rotate-recovery `--output` フラグ統合**、ペガサス致命指摘 ① 解消） |
 | **田中ペルソナ A（CLI を読めない非エンジニア）の Fail Kindly 守護**（脅威モデル L1〜L4 横断、`threat-model.md` §7.0 既定 Fail Kindly） | CLI / GUI 二経路分離（全 MSG-S03/S04/S05/S07/S09/S15/S19/S20）、田中ジャーニー §1〜6 守護ポイント |
 | **Lie-Then-Surprise 防止**（Sub-E 工程5 ペガサス致命指摘で追加要請、Fail Kindly 補強） | MSG-S20 + `cache_relocked: bool` 応答スキーマ + C-30/C-31/C-32 不変条件 |

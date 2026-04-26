@@ -235,16 +235,16 @@
 
 ### REQ-S15 / REQ-S16: vault 管理サブコマンド + 保護モード可視化（Sub-F 主機能）
 
-詳細は `detailed-design/cli-subcommands.md` 参照。本書では概要フローのみ。
+詳細は `detailed-design/cli-subcommands.md` 参照（**Rev1 で recovery-show 廃止 + `--output` フラグ統合 + 終了コード SSoT 参照**）。本書では概要フローのみ。**終了コード割当は `detailed-design/cli-subcommands.md` §終了コード SSoT を SSoT 参照**、本書での再定義はしない。
 
-#### F-F1: `vault encrypt`（CLI → daemon）
+#### F-F1: `vault encrypt --output`（CLI → daemon、24 語生成 + 出力経路選択統合）
 
-1. clap で `Subcommand::Vault(VaultSubcommand::Encrypt(EncryptArgs { accept_limits }))` を受領
+1. clap で `Subcommand::Vault(VaultSubcommand::Encrypt(EncryptArgs { accept_limits, output }))` を受領
 2. `--accept-limits` フラグなしなら MSG-S16「暗号化モード初回切替時の限界説明」を stderr に表示 + 「`理解しました [y/N]` を入力してください」プロンプト → ユーザが `y` 回答しない場合は終了コード 1 で fail fast
-3. `input::password::prompt` でマスターパスワード入力（TTY 非エコー読取）+ 確認入力一致を `subtle::ConstantTimeEq` で判定
+3. `input::password::prompt` でマスターパスワード入力（**`/dev/tty` 強制経路、stdin パイプ拒否 C-38**、非エコー読取）+ 確認入力一致を `subtle::ConstantTimeEq` で判定
 4. `IpcClient::connect` → handshake V2 → `IpcRequest::Encrypt { master_password, accept_limits }` 送信（Sub-E 経由 Sub-D `encrypt_vault`）
 5. **失敗時** `IpcResponse::Error(IpcErrorCode::Crypto { reason: "weak-password" })` → MSG-S08 + 終了コード 1
-6. **成功時** `IpcResponse::Encrypted { disclosure: RecoveryWords }` 受領 → MSG-S06 警告連結 → `presenter::recovery_disclosure::display(disclosure)` で 24 語表示 + Drop zeroize 連鎖（C-19）→ MSG-S01 完了通知 → 終了コード 0
+6. **成功時** `IpcResponse::Encrypted { disclosure: RecoveryWords }` 受領 → MSG-S06 警告連結 → `presenter::recovery_disclosure::display(disclosure, output_target)` で **`--output` フラグの 4 経路（Screen/Print/Braille/Audio）に分岐して 24 語を出力** + Drop zeroize 連鎖（C-19）→ MSG-S01 完了通知 → `--output != Screen` 時は MSG-S18 アクセシビリティ案内連結 → 終了コード 0
 
 #### F-F2: `vault decrypt`（CLI 二段確認 → daemon）
 
@@ -260,7 +260,7 @@
 2. `recovery == false` なら `input::password::prompt` でマスターパスワード入力、`recovery == true` なら `input::mnemonic::prompt` で 24 語入力 + `bip39::Mnemonic::parse_in` で検証
 3. `IpcClient::connect` → handshake V2 → `IpcRequest::Unlock { master_password, recovery: Option<RecoveryMnemonic> }` 送信
 4. **成功時** `IpcResponse::Unlocked` → MSG-S03 → 終了コード 0
-5. **失敗時** `IpcError::BackoffActive { wait_secs }` → MSG-S09(a) + 待機時間案内 → 終了コード 2 / `IpcError::RecoveryRequired` → MSG-S09(a) リカバリ経路案内 → 終了コード 5 / `MigrationError::Crypto(InvalidMnemonic)` → MSG-S12 → 終了コード 1
+5. **失敗時** `IpcError::BackoffActive { wait_secs }` → MSG-S09(a) + 待機時間案内 → **終了コード 2**（`detailed-design/cli-subcommands.md` §終了コード SSoT、BackoffActive=2）/ `IpcError::RecoveryRequired` → MSG-S09(a) リカバリ経路案内 → **終了コード 5**（同上、RecoveryRequired=5）/ `MigrationError::Crypto(InvalidMnemonic)` → MSG-S12 → 終了コード 1
 
 #### F-F4: `vault lock`（CLI → daemon）
 
@@ -277,43 +277,39 @@
 5. **成功時** `IpcResponse::PasswordChanged` → MSG-S05「VEK 不変、再 unlock 不要」明示 → 終了コード 0
 6. **失敗時** MSG-S08 弱パスワード / MSG-S09(a) 旧パスワード違い → 終了コード 1
 
-#### F-F6: `vault recovery-show`（CLI 内 + アクセシビリティ分岐）
+#### F-F6: `vault rekey --output`（CLI → daemon、cache_relocked 分岐、Rev1 で旧 F-F7 から繰り上げ）
 
-1. clap で `Subcommand::Vault(VaultSubcommand::RecoveryShow(RecoveryShowArgs { print, braille, audio }))` を受領
-2. **本フローは IPC を呼ばない**: `encrypt` 直後（F-F1）に取得した `disclosure` を**プロセス内のみ**で消費する経路（C-19、daemon 側で `RecoveryDisclosure` 構築済フラグを持ち、2 度目以降は `IpcErrorCode::Internal { reason: "recovery-already-disclosed" }` で拒否、C-35）
-3. **アクセシビリティモード判定**: `SHIKOMI_ACCESSIBILITY=1` env / OS スクリーンリーダー検出 / `--print` / `--braille` / `--audio` フラグのいずれか → `accessibility::print_pdf::output` / `braille_brf::output` / `audio_tts::output` 分岐
-4. **通常経路**: `presenter::recovery_disclosure::display` で 24 語表示 + MSG-S06 警告連結 + MSG-S18 アクセシビリティ案内 → Drop zeroize 連鎖
-5. **2 度目以降の呼出**は MSG-S09 系で fail fast、終了コード 1（C-19 / C-35）
-
-#### F-F7: `vault rekey`（CLI → daemon、cache_relocked 分岐）
-
-1. clap で `Subcommand::Vault(VaultSubcommand::Rekey)` を受領
-2. `input::password::prompt` でマスターパスワード入力
+1. clap で `Subcommand::Vault(VaultSubcommand::Rekey(OutputArgs { output }))` を受領
+2. `input::password::prompt` でマスターパスワード入力（C-38 `/dev/tty` 強制）
 3. `IpcClient::connect` → handshake V2 → `IpcRequest::Rekey { master_password }` 送信（Sub-E §F-E5 atomic 化）
 4. `IpcResponse::Rekeyed { records_count, words, cache_relocked }` 受領
-5. `presenter::recovery_disclosure::display(words)` で**新 24 語を先に表示**（rekey の主目的、ux-and-msg.md §文言の不変条件 (c)）+ MSG-S06 警告連結
+5. `presenter::recovery_disclosure::display(words, output_target)` で**新 24 語を先に出力**（rekey の主目的、ux-and-msg.md §文言の不変条件 (c)、`--output` フラグの 4 経路に分岐）+ MSG-S06 警告連結
 6. MSG-S07 完了通知（再暗号化レコード数 = `records_count`）
-7. **`cache_relocked == false` 時**: `presenter::cache_relocked_warning::display` で MSG-S20 連結 + 「次の操作前に `shikomi vault unlock`」案内 + （オプション）TTY 検出時に再 unlock プロンプト自動起動（C-32 能動的提示、Sub-F 工程5 UX レビュー後確定）→ **終了コード 0**（C-31 / C-36）
+7. **`cache_relocked == false` 時**: `presenter::cache_relocked_warning::display` で MSG-S20 連結 + 「次の操作前に `shikomi vault unlock`」案内 → **終了コード 0**（C-31 / C-36）
 8. **`cache_relocked == true` 時**: 終了コード 0（通常経路）
+9. `--output != Screen` 時は MSG-S18 アクセシビリティ案内連結
 
-#### F-F8: `vault rotate-recovery`（CLI → daemon、cache_relocked 分岐）
+#### F-F7: `vault rotate-recovery --output`（CLI → daemon、cache_relocked 分岐、Rev1 で旧 F-F8 から繰り上げ）
 
-1. clap で `Subcommand::Vault(VaultSubcommand::RotateRecovery)` を受領
-2. `input::password::prompt` でマスターパスワード再認証入力
+1. clap で `Subcommand::Vault(VaultSubcommand::RotateRecovery(OutputArgs { output }))` を受領
+2. `input::password::prompt` でマスターパスワード再認証入力（C-38）
 3. `IpcClient::connect` → handshake V2 → `IpcRequest::RotateRecovery { master_password }` 送信（Sub-E §F-E4）
 4. `IpcResponse::RecoveryRotated { words, cache_relocked }` 受領
-5. `presenter::recovery_disclosure::display(words)` で**新 24 語を先に表示**（rotate-recovery の主目的）+ MSG-S06 警告連結
+5. `presenter::recovery_disclosure::display(words, output_target)` で**新 24 語を先に出力** + MSG-S06 警告連結
 6. MSG-S19 完了通知
-7. **`cache_relocked == false` 時**: F-F7 と同経路で MSG-S20 連結 + 再 unlock 案内 → 終了コード 0
+7. **`cache_relocked == false` 時**: F-F6 と同経路で MSG-S20 連結 + 再 unlock 案内 → 終了コード 0
 8. **`cache_relocked == true` 時**: 終了コード 0
+9. `--output != Screen` 時は MSG-S18 アクセシビリティ案内連結
 
-#### F-F9: 既存 `add` / `list` / `edit` / `remove` のロック時挙動（REQ-S16 整合）
+#### F-F8: 既存 `add` / `list` / `edit` / `remove` のロック時挙動（REQ-S16 整合、Rev1 で旧 F-F9 から繰り上げ）
 
 1. `usecase::{add,list,edit,remove}::execute` 実行
 2. `IpcClient::send_request(IpcRequest::ListRecords / AddRecord / ...)` 送信
 3. **`IpcResponse::Error(IpcErrorCode::VaultLocked)` 受領時**: MSG-S09(c)「アイドル 15min / スクリーンロック / サスペンドで自動 lock しました、再度 `vault unlock` を実行してください」+ 終了コード 3 で fail fast、レコード内容は応答に含まれず情報漏洩なし
-4. **`IpcResponse::Records { records, protection_mode }` 受領時** (`usecase::list`): `presenter::mode_banner::display(protection_mode)` でヘッダバナー（`[plaintext]` / `[encrypted, locked]` / `[encrypted, unlocked]` / `[unknown]`、ANSI カラー + 文字二重符号化、`NO_COLOR` env 尊重）→ レコード一覧出力 → 終了コード 0
+4. **`IpcResponse::Records { records, protection_mode }` 受領時** (`usecase::list`): `presenter::list::display(records, protection_mode)` で **`mode_banner::display(protection_mode)` を必須呼出**（C-37、ヘッダバナー `[plaintext]` / `[encrypted, locked]` / `[encrypted, unlocked]` / `[unknown]`、ANSI カラー + 文字二重符号化、`NO_COLOR` env 尊重）→ レコード一覧出力 → 終了コード 0
 5. **`protection_mode == Unknown` 時**: バナー `[unknown]` 表示 + 終了コード 3 で fail-secure（一覧表示停止、REQ-S16 整合）
+
+**廃止フロー**: 旧 Rev0 F-F6 `vault recovery-show` は Rev1 で**廃止**。24 語の表示経路は F-F1 / F-F6 / F-F7 の `--output` フラグに統合（プロセス境界をまたいだ in-process state 共有は技術的に不可能、ペガサス致命指摘 ① 解消）。
 
 ## シーケンス図
 
