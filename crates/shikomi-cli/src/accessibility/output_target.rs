@@ -77,9 +77,9 @@ mod tests {
         assert_eq!(resolve(OutputTarget::Audio), OutputTarget::Audio);
     }
 
-    /// 注: `resolve(Screen)` の env-driven 分岐は env mutation を含むため、
-    /// `accessibility_env_enabled` の pure 関数テストで網羅し、`resolve` 自身の
-    /// env-driven 分岐は integration test (`tests/it_accessibility_resolve.rs` 等)
-    /// で `Command::env` 経由の分離プロセスとして検証する設計とする
-    /// (`unsafe_code = "deny"` workspace 規約 + TC-CI-026 整合)。
+    // 注: `resolve(Screen)` の env-driven 分岐は env mutation を含むため、
+    // `accessibility_env_enabled` の pure 関数テストで網羅し、`resolve` 自身の
+    // env-driven 分岐は integration test (`tests/it_accessibility_resolve.rs` 等)
+    // で `Command::env` 経由の分離プロセスとして検証する設計とする
+    // (`unsafe_code = "deny"` workspace 規約 + TC-CI-026 整合)。
 }
