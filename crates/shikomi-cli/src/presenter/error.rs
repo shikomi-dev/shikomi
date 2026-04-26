@@ -151,6 +151,13 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "re-run with --yes to confirm deletion",
             "削除を確認するには --yes を付けて再実行してください",
         ),
+        // Sub-F (#44) Phase 5 / C-38: stdin パイプ経由のパスワード入力を構造的に拒否。
+        CliError::NonInteractivePassword => lit(
+            "refusing to read password from non-tty stdin",
+            "非対話モードではパスワード入力を拒否します",
+            "run from a terminal (TTY); piping passwords via stdin is not supported (C-38)",
+            "ターミナル (TTY) から実行してください。stdin パイプ経由のパスワード入力は未対応です (C-38)",
+        ),
         CliError::Persistence(pe) => render_persistence_lines(pe),
         CliError::Domain(domain) => (
             format!("internal bug: {domain}"),
@@ -177,6 +184,60 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
                 "https://github.com/shikomi-dev/shikomi/issues に報告してください",
             )
         }
+        // Sub-F (#44) Phase 2: vault サブコマンド経路の MSG-S 系文言。
+        // i18n 辞書 `messages.toml` 移行は Phase 6/7 で `Localizer` に集約予定。
+        CliError::VaultLocked => lit(
+            "vault is locked",
+            "vault がロックされています",
+            "run `shikomi vault unlock` to unlock the vault",
+            "`shikomi vault unlock` でロックを解除してください",
+        ),
+        CliError::WrongPassword => lit(
+            "wrong password",
+            "パスワードが違います",
+            "retry, or use `shikomi vault unlock --recovery` if you have the 24 recovery words",
+            "再入力してください。リカバリ用 24 語があれば `shikomi vault unlock --recovery` も使えます",
+        ),
+        CliError::BackoffActive { wait_secs } => (
+            format!("unlock blocked by backoff for {wait_secs}s"),
+            format!("連続失敗のため {wait_secs} 秒待機してください"),
+            "wait until the backoff window ends, then retry".to_owned(),
+            "バックオフ期間の経過後に再試行してください".to_owned(),
+        ),
+        CliError::RecoveryRequired => lit(
+            "recovery path required",
+            "リカバリ経路での解除が必要です",
+            "retry with `shikomi vault unlock --recovery` and the 24 recovery words",
+            "リカバリ用 24 語を使い `shikomi vault unlock --recovery` で再試行してください",
+        ),
+        CliError::ProtocolDowngrade => lit(
+            "ipc protocol downgrade detected",
+            "IPC プロトコルの降格が検出されました",
+            "rebuild shikomi-cli and shikomi-daemon to the same version",
+            "shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください",
+        ),
+        CliError::Crypto { reason } => (
+            format!("crypto error: {reason}"),
+            format!("暗号エラー: {reason}"),
+            "see the documentation for `shikomi vault {encrypt,unlock,decrypt}` failure modes"
+                .to_owned(),
+            "`shikomi vault {encrypt,unlock,decrypt}` の失敗事由をドキュメントで確認してください"
+                .to_owned(),
+        ),
+        CliError::UnexpectedIpcResponse { request_kind } => (
+            format!("unexpected ipc response for {request_kind}"),
+            format!("{request_kind} に対する想定外の IPC 応答"),
+            "rebuild shikomi-cli and shikomi-daemon to the same version".to_owned(),
+            "shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください".to_owned(),
+        ),
+        // Sub-F (#44) Phase 3 / REQ-S16 Fail-Secure: 保護モード判定不能。
+        // CLI は exit 3 で fail-fast し、レコード一覧を一切表示しない。
+        CliError::ProtectionModeUnknown => lit(
+            "vault protection mode is unknown",
+            "vault の保護モードが不明です",
+            "the vault header may be corrupted; restore from backup or contact support",
+            "vault ヘッダが破損している可能性があります。バックアップから復元するか、サポートに連絡してください",
+        ),
     }
 }
 

@@ -25,6 +25,9 @@ clap          = { workspace = true }
 anyhow        = { workspace = true }
 is-terminal   = { workspace = true }
 rpassword     = { workspace = true }
+# 工程5 服部指摘 (BLOCKER 3) 解消: accessibility 経路で 24 語 byte 列を
+# `Zeroizing<Vec<u8>>` で構築し drop 時に自動 zeroize する目的。
+zeroize       = { workspace = true }
 time          = { workspace = true }
 uuid          = { workspace = true }
 tracing       = { workspace = true }
@@ -37,6 +40,17 @@ tokio-util    = { workspace = true }
 rmp-serde     = { workspace = true }
 bytes         = { workspace = true }
 futures-util  = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# Sub-F (#44) Phase 5 / C-41: core dump 抑制（Linux: prctl(PR_SET_DUMPABLE, 0) /
+# macOS: setrlimit(RLIMIT_CORE, 0)）。`nix` 0.29 (workspace) は既存 features に
+# `process` / `resource` を含まないため、Phase 5 専用に `libc` 直接呼出で実装する。
+# 依存ツリー追加は本 1 件のみ、workspace 横断影響なし。
+libc          = "0.2"
+# Sub-F (#44) Phase 6 / C-A05: `--output {print,braille}` 経路の umask(0o077)
+# 内部適用 (`accessibility::umask::with_secure_umask`)。`nix::sys::stat::umask`
+# は workspace 既定 features (`fs`) で利用可能、追加 features 不要。
+nix           = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys   = { workspace = true }

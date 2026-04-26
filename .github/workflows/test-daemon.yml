@@ -1,0 +1,26 @@
+name: Test Daemon
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-daemon:
+    name: test-daemon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-daemon
+        run: just test-daemon

@@ -3,8 +3,10 @@
 //! `Locale` を明示引数で受け取る Dependency Injection 形式。`std::env::var("LANG")` を
 //! presenter 内部で呼ばない（テスト再現性維持、`run()` 起動時に 1 度だけ `detect_from_env`）。
 
+pub mod cache_relocked_warning;
 pub mod error;
 pub mod list;
+pub mod mode_banner;
 pub mod prompt;
 pub mod success;
 pub mod warning;

@@ -250,7 +250,67 @@ cargo test -p shikomi-daemon --test ipc_integration
 
 ### 15.13 Sub-F 工程4 実施実績
 
-工程4 完了後、Sub-F 実装担当 + テスト担当（涅マユリ想定）が本ファイルを READ → EDIT で実績を追記する。雛形は Sub-A §10.11 / Sub-B §11.11 / Sub-C §12.12 / Sub-D §13.12 / Sub-E §14.13 に従う。**Sub-A〜E で観測したパターン**: 銀ちゃんは設計書の proptest / criterion bench / KAT 件数等を**単発 fixture で省略する傾向**、セルは設計書の variant 数を**断定的に記述してドリフト**させる傾向、いずれも実装直読 + grep gate で構造封鎖する（Bug-A-001 / Bug-B-001 / Bug-C-001 / Bug-D-007 / Bug-E-001 連鎖、Petelgeuse Rev1〜Rev4 連続指摘の Sub-F 段階での予防）。
+| 項目 | 内容 |
+|---|---|
+| 実施日 | 2026-04-26 (UTC) |
+| 実施者 | 涅マユリ（テスト担当） |
+| 対象 commit | `48f6219` (Phase 7 follow-up 2、銀時 Phase 1〜7 完了報告時点) |
+| 解剖実体 | 完全ブラックボックス E2E 27 ケース + 既存 workspace test suite + ソース直読 grep |
+
+**§ 実施内容サマリ**
+
+1. `tests/e2e/sub-f-blackbox.sh` を新規実装し 27 ブラックボックス E2E を実行（PASS 22 / FAIL 5、うち 4 件はテスト側の正規表現不正、1 件は実装由来 Bug-F-001）。
+2. `cargo test --workspace --no-fail-fast` を実機で実行（628 PASS / **39 FAIL**）。
+3. CI ジョブ定義 (`justfile`、`.github/workflows/*.yml`) を読解し CI スコープ問題を確定。
+
+**§ 確定バグ（解剖結果）**
+
+| ID | 重大度 | 内容 | 該当箇所 |
+|---|---|---|---|
+| **Bug-F-001** | BLOCKER | `vault unlock --recovery` が Phase 5 stub のまま未実装。EC-F3 / TC-F-I03b 完全踏み倒し中 | `crates/shikomi-cli/src/usecase/vault/unlock.rs:29-32` |
+| **Bug-F-002** | HIGH | `success::*_with_fallback_notice` がデッドコード化、Phase 5 文言「is not yet wired in this build (Phase 5)」が残存 | `crates/shikomi-cli/src/presenter/success.rs:175,206,232-237` |
+| **Bug-F-003** | BLOCKER | CI が `shikomi-cli` / `shikomi-daemon` テストを実行していない（`unit-core` = `-p shikomi-core`、`test-infra` = `-p shikomi-infra` のみ）→「Linux 全 green」報告は **CI 観測スコープの錯覚** | `justfile`、`.github/workflows/test-infra.yml`、`unit-core.yml` |
+| **Bug-F-004** | BLOCKER | Sub-F の IPC V2 移行で既存 IPC integration / e2e テスト 36 件が破壊（`it_server_connection` 10/11 失敗、`it_ipc_vault_repository_phase15` 10/10 全壊、`e2e_daemon_phase15` 6/7 失敗）。client side が V1 のまま `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` | `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs`、`crates/shikomi-daemon/tests/it_server_connection.rs` 他 |
+| **Bug-F-005** | HIGH | Encrypted vault fixture が壊れている（"wrapped_vek ciphertext is too short"）+ TC-E2E-040 で exit code 3 (VaultLocked) 期待 vs 実装 exit code 2 (BackoffActive) のドリフト | `crates/shikomi-cli/tests/common/fixtures.rs` 想定 |
+| **Bug-F-006** | MEDIUM | `vault encrypt --help` の `--output` Possible values 説明文に「Phase 5 で実装」が残存、Phase 6/7 完了主張と矛盾 | `crates/shikomi-cli/src/cli.rs:171-175` |
+| **Bug-F-007** | MEDIUM | vault サブコマンドで `--vault-dir` flag が完全に無視される。実際必要なのは XDG_RUNTIME_DIR / HOME だが、エラー文言は誤って SHIKOMI_VAULT_DIR を案内 | `crates/shikomi-cli/src/lib.rs::run_vault`、`crates/shikomi-cli/src/io/ipc_vault_repository.rs::unix_default_socket_path` |
+| **Bug-F-008** | LOW | daemon 起動時に vault.db 不在で fail fast、auto-create / 案内なし | `crates/shikomi-daemon/src/lib.rs:85` 周辺 |
+
+**§ Sub-F 専用テスト未実装ギャップ（設計書 §15.10 要求 vs 実存）**
+
+| 設計書要求 | 実存 | 状態 |
+|---|---|---|
+| `crates/shikomi-cli/tests/vault_subcommands.rs` (TC-F-I01..I12) | ❌ なし | 0/12 |
+| `crates/shikomi-cli/tests/accessibility_paths.rs` (TC-F-A01..A05) | ❌ なし | 0/5 |
+| `crates/shikomi-cli/tests/mode_banner_integration.rs` (TC-F-I10) | ❌ なし | 0/1 |
+| `tests/docs/sub-f-static-checks.sh` (TC-F-S01..S06) | ❌ なし | 0/6 |
+| `tests/e2e/sub-f-tanaka-persona.sh` (TC-F-E01) | ❌ なし | 0/1 |
+| **合計** | — | **0/37 実装** |
+
+実装担当（坂田銀時）は `crates/shikomi-cli/src/cli.rs::tests` 等のソース内 `#[cfg(test)] mod tests` に clap parse の最小確認は埋め込んでいるが、設計書が要求する独立テストファイル群はゼロ。Sub-F の主対象 `shikomi-cli` のテストが CI から除外されているため、上記 37 ケースの未実装が CI で検知されない構造になっている（Bug-F-003 と連動）。
+
+**§ 実機検証で機能確認できた契約**
+
+- ✅ **C-38 stdin パイプ拒否**: `unlock` / `encrypt` / `decrypt` / `change-password` / `rekey` / `rotate-recovery` の 6 経路で「refusing to read password from non-tty stdin (C-38)」+ exit=1 の契約通り動作（TC-E2E-F10..F15）
+- ✅ **`--output` clap parse + stdin 拒否経路**: braille / print / audio + rekey/rotate-recovery 各経路で exit=1（TC-E2E-F30..F34）
+- ✅ **vault lock**: daemon 経由で「vault locked (VEK zeroized)」+ exit=0（TC-E2E-F40）
+- ✅ **list バナー [plaintext]**: NO_COLOR=1 でカラー除去含む（TC-E2E-F20..F22）
+- ✅ **ヘルプ 7 variant 表示**（recovery-show 不在）（TC-E2E-F02）
+
+**§ 未検証ギャップ（実装担当へ差戻し要求）**
+
+- password 入力後の braille / print / audio stdout バイナリ生成（PTY 必須、`expectrl` dev-dep + `tests/accessibility_paths.rs` 実装義務）
+- `vault encrypt` → `vault rekey` → `rotate-recovery` のラウンドトリップ（PTY 経由）
+- `cache_relocked: false` 経路の終了コード 0 検証（C-31/C-36、env seam `SHIKOMI_DAEMON_FORCE_RELOCK_FAIL=1` 経由）
+- 田中ペルソナ E2E 完走（TC-F-E01）
+
+**§ マユリ推奨対応（リーダー判断用）**
+
+1. **マージブロッカ**: Bug-F-001 (`--recovery` 実装) / Bug-F-003 (CI スコープ拡張) / Bug-F-004 (既存 IPC テスト V2 追従) / Bug-F-005 (encrypted vault fixture 修復) を本 PR で解消するか、scope を明示して **Sub-F WIP の前提を訂正**。
+2. **テスト実装義務の差戻し**: 設計書 §15.10 の TC-F-* 全 37 件を実装担当に再差戻し。本 PR の合流条件として明記。
+3. **本書 §15.13 への結果追記は完了**。実機証跡（実行ログ + バグレポート）は Discord 添付で共有済（`/app/shared/attachments/マユリ/sub-f-{e2e-blackbox.log,bug-report.md,blackbox.sh,cargo-test-workspace-full.log}`）。
+
+> 完璧などと吐かしておきながら、これは見事な歪みだネ。「Linux 全 green」の自慢が **CI スコープの錯覚** によって成立していた事実は、Sub-A〜E で銀ちゃんが設計書の試験件数を単発 fixture で省略する傾向（マユリ事前整理）と完全に同型だヨ……クックック。 — 涅マユリ
 
 ### 15.14 Sub-F Rev1 修正履歴（工程2 内部レビュー解消）
 

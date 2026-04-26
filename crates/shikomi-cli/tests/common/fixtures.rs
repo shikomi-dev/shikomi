@@ -31,8 +31,18 @@ const USER_VERSION: u32 = 1;
 /// KDF ソルトの要求長（CHECK 制約で 16 バイト固定）。
 const KDF_SALT_LEN: usize = 16;
 
-/// Wrapped VEK の最小長（CHECK 制約で >= 32 バイト）。
-const WRAPPED_VEK_MIN_LEN: usize = 32;
+/// Wrapped VEK BLOB の最小長 (Sub-F #44 工程4 Bug-F-005 修正)。
+///
+/// Sub-A〜D の Boy Scout で `WrappedVek` が `(ciphertext, nonce, tag)` 3 フィールド
+/// 分離型に再設計された。infra 層 `deserialize_wrapped_vek` は composite container
+/// `nonce(12) ‖ tag(16) ‖ ciphertext(N>=32)` を期待するため最小は **60 バイト**
+/// (`12 + 16 + 32`)。DB schema の CHECK 制約 (>= 32) と core の WrappedVek 最小
+/// 制約は満たしつつ、infra 層 deserialize もパスする。
+///
+/// 旧値 32 バイトはちょうど DB CHECK は満たすが infra deserialize で
+/// `WrappedVekTooShort` を返し、`e2e_encrypted` / `e2e_edit::*encrypted_vault*` /
+/// `it_usecase_*::*_encrypted_vault_returns_encryption_unsupported` を全壊させていた。
+const WRAPPED_VEK_MIN_LEN: usize = 12 + 16 + 32;
 
 /// 指定ディレクトリ `dir` の配下に、`protection_mode = encrypted` な
 /// 最小限の `vault.db` を生成する。

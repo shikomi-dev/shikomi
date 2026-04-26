@@ -77,10 +77,12 @@ async fn connect_framed(sock_path: &std::path::Path) -> Framed<UnixStream, Lengt
     Framed::new(stream, codec())
 }
 
-/// ハンドシェイク V1 1 往復を完了させる。
+/// ハンドシェイク 1 往復を完了させる (Sub-F #44 工程4 Bug-F-004 で V2 に追従)。
 async fn client_handshake_v1(framed: &mut Framed<UnixStream, LengthDelimitedCodec>) {
     let req = IpcRequest::Handshake {
-        client_version: IpcProtocolVersion::V1,
+        // Sub-F Phase 1 で `IpcProtocolVersion::current()` が V2 になったため、
+        // 既存テストヘルパも V2 で送る (関数名は呼出側影響回避のため維持)。
+        client_version: IpcProtocolVersion::V2,
     };
     let bytes = rmp_serde::to_vec(&req).unwrap();
     framed
@@ -182,7 +184,8 @@ async fn tc_it_010_handshake_then_list_empty() {
     send_request(&mut framed, &IpcRequest::ListRecords).await;
     let resp = recv_response(&mut framed).await;
     match resp {
-        IpcResponse::Records(v) => assert!(v.is_empty()),
+        // Sub-F (#44): `Records` 構造体化、`protection_mode` は破棄 (Plaintext 確認は別経路)
+        IpcResponse::Records { records, .. } => assert!(records.is_empty()),
         other => panic!("expected Records, got {other:?}"),
     }
     drop(framed);
@@ -217,7 +220,7 @@ async fn tc_it_011_add_then_list_roundtrip() {
     send_request(&mut framed, &IpcRequest::ListRecords).await;
     let list_resp = recv_response(&mut framed).await;
     match list_resp {
-        IpcResponse::Records(v) => {
+        IpcResponse::Records { records: v, .. } => {
             assert_eq!(v.len(), 1);
             assert_eq!(v[0].id, added_id);
             assert_eq!(v[0].label.as_str(), "L");
@@ -347,15 +350,15 @@ async fn tc_it_020_unknown_version_bytes_returns_mismatch_then_closes() {
     let handle = spawn_test_server(&dir).await;
     let mut framed = connect_framed(&handle.socket_path).await;
 
-    // "v1" → "v9" に書換えて未知 variant を作る
+    // "v2" → "v9" に書換えて未知 variant を作る (Sub-F #44 工程4 Bug-F-004 で V2 に追従)。
     let mut bytes = rmp_serde::to_vec(&IpcRequest::Handshake {
-        client_version: IpcProtocolVersion::V1,
+        client_version: IpcProtocolVersion::V2,
     })
     .unwrap();
-    if let Some(pos) = bytes.windows(2).position(|w| w == b"v1") {
+    if let Some(pos) = bytes.windows(2).position(|w| w == b"v2") {
         bytes[pos + 1] = b'9';
     } else {
-        panic!("could not find v1 bytes in serialized request: {bytes:?}");
+        panic!("could not find v2 bytes in serialized request: {bytes:?}");
     }
 
     framed.send(Bytes::from(bytes)).await.expect("send");
@@ -369,7 +372,7 @@ async fn tc_it_020_unknown_version_bytes_returns_mismatch_then_closes() {
     let resp: IpcResponse = rmp_serde::from_slice(&first).expect("decode response");
     match resp {
         IpcResponse::ProtocolVersionMismatch { server, client } => {
-            assert_eq!(server, IpcProtocolVersion::V1, "server side is V1");
+            assert_eq!(server, IpcProtocolVersion::V2, "server side is V2");
             assert_eq!(
                 client,
                 IpcProtocolVersion::Unknown,
@@ -459,7 +462,7 @@ async fn tc_it_025_broken_connection_does_not_affect_other_connection() {
     send_request(&mut framed_b, &IpcRequest::ListRecords).await;
     let resp_b = recv_response(&mut framed_b).await;
     match resp_b {
-        IpcResponse::Records(_) => {} // 成功
+        IpcResponse::Records { .. } => {} // 成功 (Sub-F: 構造体化)
         other => panic!("expected Records on B, got {other:?}"),
     }
     drop(framed_a);

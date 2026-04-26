@@ -17,7 +17,9 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use shikomi_cli::io::ipc_client::IpcClient;
 use shikomi_cli::io::ipc_vault_repository::IpcVaultRepository;
-use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest, IpcResponse, MAX_FRAME_LENGTH};
+use shikomi_core::ipc::{
+    IpcProtocolVersion, IpcRequest, IpcResponse, ProtectionModeBanner, MAX_FRAME_LENGTH,
+};
 use shikomi_infra::persistence::PersistenceError;
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
@@ -54,7 +56,9 @@ async fn spawn_handshake_ok_stub(sock_path: &std::path::Path) {
             // ハンドシェイク受信
             if let Some(Ok(_)) = framed.next().await {
                 let resp = IpcResponse::Handshake {
-                    server_version: IpcProtocolVersion::V1,
+                    // Sub-F (#44) 工程4 Bug-F-004: client は V2 で接続するため
+                    // mock daemon の応答も V2 に追従。
+                    server_version: IpcProtocolVersion::V2,
                 };
                 let bytes = rmp_serde::to_vec(&resp).unwrap();
                 let _ = framed.send(Bytes::from(bytes)).await;
@@ -243,14 +247,18 @@ async fn tc_it_046_list_records_request_response_roundtrip() {
             // 1. handshake
             if let Some(Ok(_)) = framed.next().await {
                 let resp = IpcResponse::Handshake {
-                    server_version: IpcProtocolVersion::V1,
+                    // Sub-F (#44) 工程4 Bug-F-004: V2 client に追従。
+                    server_version: IpcProtocolVersion::V2,
                 };
                 let b = rmp_serde::to_vec(&resp).unwrap();
                 let _ = framed.send(Bytes::from(b)).await;
             }
-            // 2. ListRecords → Records(空)
+            // 2. ListRecords → Records(空) — Sub-F (#44) 構造体化対応
             if let Some(Ok(_)) = framed.next().await {
-                let resp = IpcResponse::Records(vec![]);
+                let resp = IpcResponse::Records {
+                    records: vec![],
+                    protection_mode: ProtectionModeBanner::Plaintext,
+                };
                 let b = rmp_serde::to_vec(&resp).unwrap();
                 let _ = framed.send(Bytes::from(b)).await;
             }
@@ -265,7 +273,7 @@ async fn tc_it_046_list_records_request_response_roundtrip() {
         .expect("send");
     let resp = client.recv_response().await.expect("recv");
     match resp {
-        IpcResponse::Records(v) => assert!(v.is_empty()),
+        IpcResponse::Records { records, .. } => assert!(records.is_empty()),
         other => panic!("expected Records, got {other:?}"),
     }
 }

@@ -49,7 +49,17 @@ test-infra:
     cargo test -p shikomi-infra
 
 test-cli:
-    cargo test -p shikomi-cli
+    cargo test --no-fail-fast -p shikomi-cli
+
+# Sub-F (#44) 工程4 マユリ Bug-F-003 解消: shikomi-daemon 専用テスト CI ジョブ。
+# 既存 `unit-core` / `test-infra` で network / IPC 経路がカバーされていなかったため、
+# `cargo test --workspace` 観測ギャップを埋める目的で独立ジョブ化。
+# `--no-fail-fast` で 1 件失敗時も後続テストを継続実行し、CI ログで全 fail 詳細を観測可能化。
+# `-p shikomi-cli` を同時指定: e2e_daemon の `tc_e2e_080_*` 等が assert_cmd 経由で
+# `shikomi` (cli bin) を起動するため `CARGO_BIN_EXE_shikomi` が必要 (cross-package
+# bin 依存)。daemon パッケージ単独だと unset で全 e2e fail する。
+test-daemon:
+    cargo test --no-fail-fast -p shikomi-daemon -p shikomi-cli
 
 # ------------------------------------------------------------------ bench
 

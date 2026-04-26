@@ -33,10 +33,26 @@ fail() {
 }
 
 # --- TC-CI-013 ------------------------------------------------------
-echo "[TC-CI-013] expose_secret 呼び出しが shikomi-cli/src/ に 0 件であることを確認"
-if matches="$(grep -rn 'expose_secret' crates/shikomi-cli/src/)"; then
-    echo "$matches"
-    fail "TC-CI-013 FAIL: crates/shikomi-cli/src/ 配下に expose_secret 呼び出しが存在します"
+# 例外:
+# - crates/shikomi-cli/src/accessibility/{print_pdf,braille_brf,audio_tts}.rs:
+#   工程5 服部指摘 (BLOCKER 3) 解消で `expose_secret() -> &[u8]` を直接消費し
+#   `Zeroizing<Vec<u8>>` で構築する経路に再設計した (中間 String 経由を排除し
+#   24 語が heap に zeroize されないまま残留する経路を構造的に遮断する目的)。
+#   これらは zeroize 維持のための明示的な byte access であり、
+#   shikomi-cli 内で ban する一般原則の例外として明文化する。
+# - doc コメント / 行コメント中の `expose_secret` 文字列は `\.expose_secret(`
+#   の関数呼出形式のみを検出することで除外する (false positive 防止)。
+echo "[TC-CI-013] expose_secret 呼出が shikomi-cli/src/ に 0 件 (accessibility 経路の zeroize 経由を除く)"
+if matches="$(grep -rnE '\.expose_secret\(' crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/print_pdf.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/braille_brf.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/audio_tts.rs' \
+    || true)"; then
+    if [[ -n "$matches" ]]; then
+        echo "$matches"
+        fail "TC-CI-013 FAIL: 許可リスト (accessibility/{print_pdf,braille_brf,audio_tts}.rs) 以外で expose_secret 呼出が存在します"
+    fi
 fi
 echo "[TC-CI-013] PASS"
 
@@ -150,14 +166,20 @@ fi
 echo "[TC-CI-023/024] PASS"
 
 # --- TC-CI-026 ------------------------------------------------------
-echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs (shikomi-cli)"
+# 例外:
+# - crates/shikomi-cli/src/io/windows_sid.rs: Windows Win32 Security FFI (Phase 1)
+# - crates/shikomi-cli/src/hardening/core_dump.rs: C-41 core dump 抑制 (Sub-F Phase 5)
+#   `libc::prctl(PR_SET_DUMPABLE, 0)` / `libc::setrlimit(RLIMIT_CORE, 0)` の FFI
+#   呼出に必要な最小 unsafe。ファイル単位で `#![allow(unsafe_code)]` を明示。
+echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs and hardening/core_dump.rs (shikomi-cli)"
 if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/ \
     --include='*.rs' \
     | grep -v 'crates/shikomi-cli/src/io/windows_sid.rs' \
+    | grep -v 'crates/shikomi-cli/src/hardening/core_dump.rs' \
     || true)"; then
     if [[ -n "$matches" ]]; then
         echo "$matches"
-        fail "TC-CI-026 FAIL: crates/shikomi-cli/src/io/windows_sid.rs 以外で unsafe ブロックが存在します"
+        fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs) 以外で unsafe ブロックが存在します"
     fi
 fi
 echo "[TC-CI-026] PASS"

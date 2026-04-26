@@ -37,13 +37,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use shikomi_core::ipc::{IpcRequest, IpcResponse, RecordSummary, SerializableSecretBytes};
+use shikomi_core::ipc::{
+    IpcRequest, IpcResponse, ProtectionModeBanner, RecordSummary, SerializableSecretBytes,
+};
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
 use shikomi_infra::persistence::PersistenceError;
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 
 use super::ipc_client::IpcClient;
+use crate::error::CliError;
 
 // -------------------------------------------------------------------
 // IpcVaultRepository
@@ -104,16 +107,28 @@ impl IpcVaultRepository {
         &self.socket_path
     }
 
-    /// daemon にレコード summary 列を要求する（`--ipc list` の主経路）。
+    /// daemon にレコード summary 列 + 保護モードを要求する（`--ipc list` の主経路）。
     ///
-    /// `IpcRequest::ListRecords` を 1 往復し、`Records` variant を抽出して返す。
-    /// daemon 側の暗号化検出 / その他エラーは `PersistenceError` に写像する。
+    /// `IpcRequest::ListRecords` を 1 往復し、`Records { records, protection_mode }`
+    /// variant を `ListSummariesOutcome` として返す。daemon 側の暗号化検出 /
+    /// その他エラーは `PersistenceError` に写像する。
+    ///
+    /// **Sub-F (#44) Phase 3 / C-37**: `protection_mode` は CLI 側 `presenter::list`
+    /// に必須引数として渡す責務 (REQ-S16 / 型レベル強制)。本メソッドは構造体で
+    /// 両フィールドを返すことで、呼出側が `protection_mode` を捨てる経路を
+    /// 構造的に困難化する (Default 値・`Option` を持たせない設計)。
     ///
     /// # Errors
     /// IPC 失敗 / 暗号化 vault 検出 / 不正応答時に `PersistenceError`。
-    pub fn list_summaries(&self) -> Result<Vec<RecordSummary>, PersistenceError> {
+    pub fn list_summaries(&self) -> Result<ListSummariesOutcome, PersistenceError> {
         match self.round_trip(&IpcRequest::ListRecords)? {
-            IpcResponse::Records(s) => Ok(s),
+            IpcResponse::Records {
+                records,
+                protection_mode,
+            } => Ok(ListSummariesOutcome {
+                records,
+                protection_mode,
+            }),
             IpcResponse::Error(code) => Err(PersistenceError::from(code)),
             _ => Err(unexpected_response("ListRecords")),
         }
@@ -199,6 +214,220 @@ impl IpcVaultRepository {
         })?;
         self.runtime.block_on(client.round_trip(request))
     }
+
+    // ---------------- Sub-F (#44) Phase 2: vault サブコマンド V2 経路 ----------------
+    //
+    // 各メソッドは IPC 1 往復で完結し、`IpcResponse` を vault サブコマンド usecase
+    // 層が必要とする戻り値型に変換する。エラーは `IpcErrorCode` → `CliError` を
+    // `From<IpcErrorCode> for CliError` 経由で写像し、ExitCode SSoT への一本道を担保。
+    //
+    // 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
+    // §処理フロー詳細（F-F1〜F-F8）
+
+    /// `vault encrypt` 往復 (F-F1)。新生成 24 語を返す（C-19 所有権消費）。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn encrypt(
+        &self,
+        master_password: SecretString,
+        accept_limits: bool,
+    ) -> Result<Vec<SerializableSecretBytes>, CliError> {
+        let request = IpcRequest::Encrypt {
+            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            accept_limits,
+        };
+        match self.round_trip_for_vault(&request, "vault.encrypt")? {
+            IpcResponse::Encrypted { disclosure } => Ok(disclosure),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.encrypt",
+            }),
+        }
+    }
+
+    /// `vault decrypt` 往復 (F-F2)。`confirmed` は CLI 側で `DECRYPT` 入力検証済の証跡。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn decrypt(&self, master_password: SecretString, confirmed: bool) -> Result<(), CliError> {
+        let request = IpcRequest::Decrypt {
+            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            confirmed,
+        };
+        match self.round_trip_for_vault(&request, "vault.decrypt")? {
+            IpcResponse::Decrypted => Ok(()),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.decrypt",
+            }),
+        }
+    }
+
+    /// `vault unlock` 往復 (F-F3、password 経路 / `--recovery` 経路の両対応)。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn unlock(
+        &self,
+        master_password: SecretString,
+        recovery: Option<Vec<SerializableSecretBytes>>,
+    ) -> Result<(), CliError> {
+        let request = IpcRequest::Unlock {
+            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            recovery,
+        };
+        match self.round_trip_for_vault(&request, "vault.unlock")? {
+            IpcResponse::Unlocked => Ok(()),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.unlock",
+            }),
+        }
+    }
+
+    /// `vault lock` 往復 (F-F4)。VEK 即 zeroize。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn lock(&self) -> Result<(), CliError> {
+        match self.round_trip_for_vault(&IpcRequest::Lock, "vault.lock")? {
+            IpcResponse::Locked => Ok(()),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.lock",
+            }),
+        }
+    }
+
+    /// `vault change-password` 往復 (F-F5、O(1)、VEK 不変)。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn change_password(&self, old: SecretString, new: SecretString) -> Result<(), CliError> {
+        let request = IpcRequest::ChangePassword {
+            old: SerializableSecretBytes::from_secret_string(old),
+            new: SerializableSecretBytes::from_secret_string(new),
+        };
+        match self.round_trip_for_vault(&request, "vault.change_password")? {
+            IpcResponse::PasswordChanged => Ok(()),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.change_password",
+            }),
+        }
+    }
+
+    /// `vault rekey` 往復 (F-F6)。新 24 語 + `cache_relocked` フラグを返す。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn rekey(&self, master_password: SecretString) -> Result<RekeyOutcome, CliError> {
+        let request = IpcRequest::Rekey {
+            master_password: SerializableSecretBytes::from_secret_string(master_password),
+        };
+        match self.round_trip_for_vault(&request, "vault.rekey")? {
+            IpcResponse::Rekeyed {
+                records_count,
+                words,
+                cache_relocked,
+            } => Ok(RekeyOutcome {
+                records_count,
+                words,
+                cache_relocked,
+            }),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.rekey",
+            }),
+        }
+    }
+
+    /// `vault rotate-recovery` 往復 (F-F7)。新 24 語 + `cache_relocked` フラグを返す。
+    ///
+    /// # Errors
+    /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
+    pub fn rotate_recovery(
+        &self,
+        master_password: SecretString,
+    ) -> Result<RotateRecoveryOutcome, CliError> {
+        let request = IpcRequest::RotateRecovery {
+            master_password: SerializableSecretBytes::from_secret_string(master_password),
+        };
+        match self.round_trip_for_vault(&request, "vault.rotate_recovery")? {
+            IpcResponse::RecoveryRotated {
+                words,
+                cache_relocked,
+            } => Ok(RotateRecoveryOutcome {
+                words,
+                cache_relocked,
+            }),
+            IpcResponse::Error(code) => Err(CliError::from(code)),
+            _ => Err(CliError::UnexpectedIpcResponse {
+                request_kind: "vault.rotate_recovery",
+            }),
+        }
+    }
+
+    /// vault サブコマンド経路の round-trip helper。
+    ///
+    /// `round_trip` の `PersistenceError` を `CliError` へ写像する薄ラッパ。
+    /// 本 helper を経由する全ての V2 メソッドは `IpcResponse::Error` のハンドリングを
+    /// 個別に行うため、ここではトランスポート層エラーのみを写像する責務に絞る。
+    fn round_trip_for_vault(
+        &self,
+        request: &IpcRequest,
+        _request_kind: &'static str,
+    ) -> Result<IpcResponse, CliError> {
+        self.round_trip(request).map_err(CliError::from)
+    }
+}
+
+// -------------------------------------------------------------------
+// Sub-F (#44) Phase 3: list_summaries の戻り値型
+// -------------------------------------------------------------------
+
+/// `IpcVaultRepository::list_summaries` の戻り値（records + protection_mode）。
+///
+/// Sub-F (#44) C-37 で `presenter::list::render_list` のシグネチャに
+/// `protection_mode: ProtectionModeBanner` を必須引数化したことに伴い、
+/// daemon 応答 `IpcResponse::Records { records, protection_mode }` を本構造体に
+/// 1:1 写像して呼出側に渡す。フィールドはどちらも `pub`、`Default` 実装は持たせず、
+/// 呼出側が `protection_mode` を黙殺できないようにする (REQ-S16 / 型レベル強制)。
+#[derive(Debug, Clone)]
+pub struct ListSummariesOutcome {
+    /// daemon から返された機密非含有 summary 列 (name / id / kind / 時刻のみ)。
+    pub records: Vec<RecordSummary>,
+    /// 保護モード (Plaintext / EncryptedLocked / EncryptedUnlocked / Unknown)。
+    /// `Unknown` は CLI 側 `lib::run_list` で exit 3 fail-fast (REQ-S16 Fail-Secure)。
+    pub protection_mode: ProtectionModeBanner,
+}
+
+// -------------------------------------------------------------------
+// Sub-F (#44) Phase 2: vault サブコマンド戻り値型
+// -------------------------------------------------------------------
+
+/// `IpcVaultRepository::rekey` の戻り値（24 語 + `cache_relocked`）。
+///
+/// `cache_relocked: false` 時の MSG-S07/S20 連結表示は Phase 4 で実装。
+/// Phase 2 は本構造体のみ提供し、usecase 側は `cache_relocked` を握り潰さず保持する。
+#[derive(Debug)]
+pub struct RekeyOutcome {
+    /// 再暗号化されたレコード件数。
+    pub records_count: usize,
+    /// 新 BIP-39 24 語（rekey + recovery rotation 1 atomic で更新済）。
+    pub words: Vec<SerializableSecretBytes>,
+    /// 再 unlock の成否（false 時は MSG-S20 連結表示、C-31/C-36）。
+    pub cache_relocked: bool,
+}
+
+/// `IpcVaultRepository::rotate_recovery` の戻り値（24 語 + `cache_relocked`）。
+#[derive(Debug)]
+pub struct RotateRecoveryOutcome {
+    /// 新 BIP-39 24 語。
+    pub words: Vec<SerializableSecretBytes>,
+    /// 再 unlock の成否（false 時は MSG-S20 連結表示、C-31/C-36）。
+    pub cache_relocked: bool,
 }
 
 #[cfg(unix)]

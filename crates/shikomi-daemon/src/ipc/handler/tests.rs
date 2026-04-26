@@ -102,7 +102,9 @@ fn test_list_empty_vault_returns_empty_records() {
     let mut vault = empty_vault();
     let res = handle_request(&repo, &mut vault, IpcRequest::ListRecords);
     match res {
-        IpcResponse::Records(v) => assert!(v.is_empty()),
+        // Sub-F (#44): `Records` 構造体化、`protection_mode` は本テストでは検査せず
+        // (Plaintext vault が確実、`handler::list` は Plaintext を返す経路)。
+        IpcResponse::Records { records, .. } => assert!(records.is_empty()),
         other => panic!("expected Records, got {other:?}"),
     }
 }
@@ -126,7 +128,10 @@ fn test_list_mixed_records_secret_masked_and_text_previewed() {
     vault.add_record(secret).unwrap();
 
     let res = handle_request(&repo, &mut vault, IpcRequest::ListRecords);
-    let IpcResponse::Records(summaries) = res else {
+    let IpcResponse::Records {
+        records: summaries, ..
+    } = res
+    else {
         panic!("expected Records");
     };
     assert_eq!(summaries.len(), 2);

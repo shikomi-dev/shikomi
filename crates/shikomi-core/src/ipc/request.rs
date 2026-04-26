@@ -98,6 +98,30 @@ pub enum IpcRequest {
         /// マスターパスワード（再認証用）。
         master_password: SerializableSecretBytes,
     },
+
+    // ---------------- Sub-F (#44) IPC V2 拡張 ----------------
+    /// **V2 only (Sub-F)**: 平文 vault → 暗号化 vault 初回マイグレーション (F-F1)。
+    /// daemon は Sub-D `VaultMigration::encrypt_vault` を呼出、新 24 語を `Encrypted`
+    /// レスポンスで返却。
+    Encrypt {
+        /// マスターパスワード (Sub-A `MasterPassword::new` の強度ゲート対象)。
+        master_password: SerializableSecretBytes,
+        /// `--accept-limits` フラグ (REQ-S08 強度ゲート緩和の明示同意)。
+        accept_limits: bool,
+    },
+
+    /// **V2 only (Sub-F)**: 暗号化 vault → 平文 vault 戻し (F-F2)。
+    /// daemon は Sub-D `VaultMigration::decrypt_vault` を呼出。**`DecryptConfirmation`
+    /// は CLI 側で `subtle::ConstantTimeEq` 比較 + paste 抑制 + 大文字検証を済ませた**
+    /// 結果として **`confirmed: true`** で IPC に乗る (Sub-D Rev2 凍結契約、daemon 側で
+    /// `DecryptConfirmation::confirm()` を構築する経路)。
+    Decrypt {
+        /// マスターパスワード。
+        master_password: SerializableSecretBytes,
+        /// 確認入力検証通過済みフラグ (CLI 側で `DECRYPT` 文字列 + paste 抑制 +
+        /// 大文字一致を確認済の証跡。`false` の場合 daemon は受理拒否)。
+        confirmed: bool,
+    },
 }
 
 impl IpcRequest {
@@ -115,11 +139,14 @@ impl IpcRequest {
             Self::ChangePassword { .. } => "change_password",
             Self::RotateRecovery { .. } => "rotate_recovery",
             Self::Rekey { .. } => "rekey",
+            Self::Encrypt { .. } => "encrypt",
+            Self::Decrypt { .. } => "decrypt",
         }
     }
 
-    /// V2 専用 variant か（V1 サブセットなら false、V2 新規 5 件なら true）。
+    /// V2 専用 variant か（V1 サブセットなら false、V2 新規 7 件なら true）。
     /// handshake 許可リスト検証 (C-28) で `client_version` との組合せを判定する用途。
+    /// Sub-F で `Encrypt` / `Decrypt` 2 件追加 (合計 7 件)。
     #[must_use]
     pub fn is_v2_only(&self) -> bool {
         matches!(
@@ -129,6 +156,8 @@ impl IpcRequest {
                 | Self::ChangePassword { .. }
                 | Self::RotateRecovery { .. }
                 | Self::Rekey { .. }
+                | Self::Encrypt { .. }
+                | Self::Decrypt { .. }
         )
     }
 }

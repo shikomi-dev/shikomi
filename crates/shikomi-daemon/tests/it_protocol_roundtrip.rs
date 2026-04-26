@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use shikomi_core::ipc::{
-    IpcErrorCode, IpcProtocolVersion, IpcRequest, IpcResponse, RecordSummary,
+    IpcErrorCode, IpcProtocolVersion, IpcRequest, IpcResponse, ProtectionModeBanner, RecordSummary,
     SerializableSecretBytes, MAX_FRAME_LENGTH,
 };
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretBytes};
@@ -158,15 +158,23 @@ fn tc_it_005_roundtrip_records_response_preserves_projections() {
             value_masked: false,
         },
     ];
-    let resp = IpcResponse::Records(summaries.clone());
+    // Sub-F (#44): `Records` 構造体化 (`{ records, protection_mode }`)。
+    let resp = IpcResponse::Records {
+        records: summaries.clone(),
+        protection_mode: ProtectionModeBanner::Plaintext,
+    };
     let bytes = rmp_serde::to_vec(&resp).unwrap();
     let decoded: IpcResponse = rmp_serde::from_slice(&bytes).unwrap();
     match decoded {
-        IpcResponse::Records(got) => {
+        IpcResponse::Records {
+            records: got,
+            protection_mode,
+        } => {
             assert_eq!(got.len(), 3);
             assert_eq!(got[1].value_preview, None);
             assert!(got[1].value_masked);
             assert_eq!(got[0].value_preview.as_deref(), Some("hello"));
+            assert_eq!(protection_mode, ProtectionModeBanner::Plaintext);
         }
         other => panic!("expected Records, got {other:?}"),
     }

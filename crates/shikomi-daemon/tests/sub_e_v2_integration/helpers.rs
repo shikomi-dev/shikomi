@@ -91,8 +91,12 @@ pub fn secret(s: &str) -> SerializableSecretBytes {
 
 /// テスト用に `V2Context` を構築して `dispatch_v2` を呼ぶ。
 ///
-/// 本テスト群では V1 委譲経路 (`ListRecords` 等) は使わないため `vault: Mutex<Vault>` は
-/// 空の plaintext で OK (V2 専用 variant + handshake 経路のみ検証する)。
+/// Sub-F (#44) 工程4 Bug-F-004: V1 委譲経路 (`ListRecords` 等) で
+/// `protection_mode` 判定が入ったため、disk 上の vault と memory 上の vault の
+/// `protection_mode` が乖離するとテストが失敗する。`repo.load()` で disk から
+/// vault を毎回再構築し、`encrypt_existing_vault` 等で disk を変更したテストでも
+/// memory 側に追従させる (test fixture と production daemon の vault load 経路を
+/// 同一視させる)。disk に vault.db が無ければ空 plaintext で fallback。
 pub async fn run_dispatch(
     repo: &SqliteVaultRepository,
     cache: &VekCache,
@@ -107,9 +111,16 @@ pub async fn run_dispatch(
     let gate = ZxcvbnGate::default();
     let migration = VaultMigration::new(repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
-    let header =
-        VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc()).unwrap();
-    let vault = Mutex::new(Vault::new(header));
+    let vault_state = match repo.load() {
+        Ok(v) => v,
+        Err(_) => {
+            let header =
+                VaultHeader::new_plaintext(VaultVersion::CURRENT, OffsetDateTime::now_utc())
+                    .unwrap();
+            Vault::new(header)
+        }
+    };
+    let vault = Mutex::new(vault_state);
 
     let ctx = V2Context {
         repo,
