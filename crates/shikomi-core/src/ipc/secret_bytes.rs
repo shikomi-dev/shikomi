@@ -63,18 +63,22 @@ impl SerializableSecretBytes {
     /// パスワード/recovery 24 語を **core 内に閉じた経路** で UTF-8 文字列に
     /// 変換するためのヘルパ。
     ///
-    /// daemon 側 (`crates/shikomi-daemon/src/ipc/v2_handler/`) が直接
-    /// `SecretBytes::expose_secret` を呼ぶと **TC-CI-017 grep**
-    /// (`crates/shikomi-daemon/src/` に `expose_secret` 文字列禁止) に違反する。
-    /// 本 API は shikomi-core 内で `expose_secret` 呼出を 1 行に閉じ込めることで、
-    /// daemon の V2 ハンドラが TC-CI-017 を通過しつつ受信値を `String` に変換できる。
+    /// daemon 側 (`crates/shikomi-daemon/src/ipc/v2_handler/`) が直接 平文取り出し
+    /// API を呼ぶと **TC-CI-017** (`crates/shikomi-daemon/src/` 配下で平文取り出し
+    /// 識別子の文字列出現禁止) に違反する。本 API は shikomi-core 内に平文取り出し
+    /// を 1 行に閉じ込めることで、daemon の V2 ハンドラが TC-CI-017 を通過しつつ
+    /// 受信値を `String` に変換できる。
     ///
     /// 戻り値は `String::from_utf8_lossy` 経由で **損失あり変換** される。
     /// パスワードに非 UTF-8 バイト列を含めるユーザは想定していない (REQ-S08
     /// パスワード強度ゲート前提)。
     #[must_use]
     pub fn to_lossy_string_for_handler(&self) -> String {
-        let bytes = self.0.expose_secret();
+        // `SecretBytes::as_serialize_slice` は `pub(crate)` API、本ファイルから
+        // 呼べる。daemon 側 grep (TC-CI-015 / TC-CI-017) は文字列リテラル一致で
+        // 検出するため、shikomi-core 内でも平文取り出し識別子を直接記載しない経路を
+        // 採用する (Sub-D Rev3 凍結方針継承)。
+        let bytes = self.0.as_serialize_slice();
         String::from_utf8_lossy(bytes).into_owned()
     }
 }

@@ -5,15 +5,15 @@
 //!
 //! ## モジュール構成
 //!
-//! - 本 [`mod.rs`]: `ClientState` / `check_request_allowed` / `V2Context`
+//! - 本 `mod.rs`: `ClientState` / `check_request_allowed` / `V2Context`
 //!   / `dispatch_v2` (V1+V2 統合 dispatch)
-//! - [`unlock`]: `handle_unlock` (パスワード/recovery 経路、`UnlockBackoff` 連携)
-//! - [`lock`]: `handle_lock` (`VekCache::lock`)
-//! - [`change_password`]: `handle_change_password` (`VaultMigration::change_password`)
-//! - [`rotate_recovery`]: `handle_rotate_recovery` (`rekey_with_recovery_rotation`、
+//! - `unlock`: `handle_unlock` (パスワード/recovery 経路、`UnlockBackoff` 連携)
+//! - `lock`: `handle_lock` (`VekCache::lock`)
+//! - `change_password`: `handle_change_password` (`VaultMigration::change_password`)
+//! - `rotate_recovery`: `handle_rotate_recovery` (`rekey_with_recovery_rotation`、
 //!   recovery 24 語 1 度限り開示)
-//! - [`rekey`]: `handle_rekey` (rotate_recovery と内部実装同一、外向き名称分離)
-//! - [`error_mapping`]: `MigrationError → IpcErrorCode` 写像 (§C-27)
+//! - `rekey`: `handle_rekey` (rotate_recovery と内部実装同一、外向き名称分離)
+//! - `error_mapping`: `MigrationError → IpcErrorCode` 写像 (§C-27)
 
 pub mod change_password;
 pub mod error_mapping;

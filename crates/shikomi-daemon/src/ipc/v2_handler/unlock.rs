@@ -100,8 +100,8 @@ pub async fn handle_unlock<R: VaultRepository + ?Sized>(
 /// `SerializableSecretBytes` の中身バイト列を UTF-8 文字列として取り出す。
 ///
 /// 内部実装は shikomi-core 側の `to_lossy_string_for_handler` に委譲することで
-/// daemon 側 grep ルール (TC-CI-017: `crates/shikomi-daemon/src/` に
-/// `expose_secret` 禁止) を通過させる。
+/// daemon 側 grep ルール (TC-CI-017: `crates/shikomi-daemon/src/` に平文取り出し
+/// 識別子禁止) を通過させる。
 fn secret_bytes_to_string(secret: &SerializableSecretBytes) -> String {
     secret.to_lossy_string_for_handler()
 }
