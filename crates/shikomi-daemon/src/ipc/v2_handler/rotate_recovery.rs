@@ -83,6 +83,5 @@ pub async fn handle_rotate_recovery<R: VaultRepository + ?Sized>(
 }
 
 fn secret_bytes_to_string(secret: &SerializableSecretBytes) -> String {
-    let bytes = secret.inner().expose_secret();
-    String::from_utf8_lossy(bytes).to_string()
+    secret.to_lossy_string_for_handler()
 }

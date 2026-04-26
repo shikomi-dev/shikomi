@@ -58,6 +58,25 @@ impl SerializableSecretBytes {
         let bytes = clone_secret_string_bytes(&secret);
         Self(SecretBytes::from_vec(bytes))
     }
+
+    /// **Sub-E (#43) 専用**: daemon の V2 ハンドラが IPC 経由で受け取った
+    /// パスワード/recovery 24 語を **core 内に閉じた経路** で UTF-8 文字列に
+    /// 変換するためのヘルパ。
+    ///
+    /// daemon 側 (`crates/shikomi-daemon/src/ipc/v2_handler/`) が直接
+    /// `SecretBytes::expose_secret` を呼ぶと **TC-CI-017 grep**
+    /// (`crates/shikomi-daemon/src/` に `expose_secret` 文字列禁止) に違反する。
+    /// 本 API は shikomi-core 内で `expose_secret` 呼出を 1 行に閉じ込めることで、
+    /// daemon の V2 ハンドラが TC-CI-017 を通過しつつ受信値を `String` に変換できる。
+    ///
+    /// 戻り値は `String::from_utf8_lossy` 経由で **損失あり変換** される。
+    /// パスワードに非 UTF-8 バイト列を含めるユーザは想定していない (REQ-S08
+    /// パスワード強度ゲート前提)。
+    #[must_use]
+    pub fn to_lossy_string_for_handler(&self) -> String {
+        let bytes = self.0.expose_secret();
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 }
 
 impl Clone for SerializableSecretBytes {

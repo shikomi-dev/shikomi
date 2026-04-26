@@ -99,11 +99,11 @@ pub async fn handle_unlock<R: VaultRepository + ?Sized>(
 
 /// `SerializableSecretBytes` の中身バイト列を UTF-8 文字列として取り出す。
 ///
-/// IPC 経由で受け取ったパスワードは `SecretBytes` (=`Vec<u8>`) として運ばれるため、
-/// `String` 化する必要がある (`MasterPassword::new` シグネチャ要件)。
+/// 内部実装は shikomi-core 側の `to_lossy_string_for_handler` に委譲することで
+/// daemon 側 grep ルール (TC-CI-017: `crates/shikomi-daemon/src/` に
+/// `expose_secret` 禁止) を通過させる。
 fn secret_bytes_to_string(secret: &SerializableSecretBytes) -> String {
-    let bytes = secret.inner().expose_secret();
-    String::from_utf8_lossy(bytes).to_string()
+    secret.to_lossy_string_for_handler()
 }
 
 /// `Vec<SerializableSecretBytes>` (24 個) を `[String; 24]` に変換する。

@@ -103,6 +103,10 @@ pub fn check_request_allowed(state: ClientState, request: &IpcRequest) -> Result
                 // fail-secure: 未知バージョンは全拒否
                 Err(IpcErrorCode::ProtocolDowngrade)
             }
+            // `#[non_exhaustive]` cross-crate 防御的 wildcard: 将来 V3 追加時は
+            // 本行で fail-secure 拒否、許可リスト表を SSoT で更新するまで未承認バージョン
+            // として扱う (Sub-D Rev3 凍結方針継承)。
+            _ => Err(IpcErrorCode::ProtocolDowngrade),
         },
     }
 }

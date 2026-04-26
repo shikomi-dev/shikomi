@@ -55,6 +55,12 @@ pub fn migration_error_to_ipc(err: MigrationError) -> IpcErrorCode {
             reason: format!("atomic-write-{stage}"),
         },
         MigrationError::RecoveryRequired => IpcErrorCode::RecoveryRequired,
+        // `#[non_exhaustive]` cross-crate 防御的 wildcard (Sub-D Rev3 凍結方針継承):
+        // 将来 `MigrationError` に variant 追加された場合、本行で fail-secure で受け、
+        // テスト工程でTC が追加分を機械検出する想定。
+        _ => IpcErrorCode::Internal {
+            reason: "unknown-migration-error".to_owned(),
+        },
     }
 }
 
@@ -68,6 +74,8 @@ fn crypto_error_to_ipc(err: CryptoError) -> IpcErrorCode {
         CryptoError::InvalidMnemonic => "invalid-mnemonic",
         CryptoError::KdfFailed { .. } => "kdf-failed",
         CryptoError::VerifyRequired => "verify-required",
+        // `#[non_exhaustive]` cross-crate 防御的 wildcard (Sub-D Rev3 凍結方針継承)。
+        _ => "unknown-crypto-error",
     };
     IpcErrorCode::Crypto {
         reason: reason.to_owned(),
