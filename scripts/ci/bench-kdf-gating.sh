@@ -59,9 +59,13 @@ extract_ns() {
 ARGON2_NS=$(extract_ns "argon2id_derive_kek_pw_frozen_owasp_2024_05")
 BIP39_NS=$(extract_ns "bip39_derive_kek_recovery_24_words")
 
-# ms 換算 (整数除算、切り捨て)
-ARGON2_MS=$((ARGON2_NS / 1_000_000))
-BIP39_MS=$((BIP39_NS / 1_000_000))
+# ms 換算 (整数除算、切り捨て)。
+# `1000000` のリテラルにアンダースコアを使わない: bash 5.x (Linux) は arithmetic
+# 内の `1_000_000` を syntax error として拒否、bash 3.2 (macOS デフォルト) は
+# 古いパーサで underscore を無視し `1000000` と等価扱いするため OS 間で挙動が
+# 分岐する。CI 移植性のためアンダースコアを除去して `1000000` と書き下す。
+ARGON2_MS=$((ARGON2_NS / 1000000))
+BIP39_MS=$((BIP39_NS / 1000000))
 
 echo
 echo "Argon2id derive_kek_pw (FROZEN_OWASP_2024_05): ${ARGON2_MS} ms (raw: ${ARGON2_NS} ns)"
