@@ -82,3 +82,8 @@ zxcvbn          = { version = "3",    default-features = false, features = ["def
 criterion       = { version = "0.5", default-features = false }
 # Sub-C (#41) AEAD アダプタ。AES-256-GCM (RustCrypto)、tech-stack §4.7 凍結。
 aes-gcm         = { version = "0.10", default-features = false, features = ["alloc", "aes", "zeroize"] }
+# Sub-C (#41) test-design TC-C-P01 / TC-C-P02 用 proptest。1000 ケースで
+# AAD 入れ替え検出 + encrypt/decrypt 往復不変条件を property 検証する。
+# Bug-C-001 顛末: 銀ちゃん impl は単発 fixture 検証のみで proptest 不在、
+# テスト工程でマユリが Boy Scout 補強として 1000 ケース proptest を追加。
+proptest        = { version = "1", default-features = false, features = ["std"] }
