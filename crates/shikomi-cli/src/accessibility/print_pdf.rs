@@ -118,20 +118,15 @@ pub fn build_pdf_bytes(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> 
     Zeroizing::new(pdf)
 }
 
-/// PDF Content Stream を構築する (黒背景 + 白テキスト 24 行)。
-///
-/// PDF 描画コマンド:
-/// - `q` / `Q`: graphics state save / restore
-/// - `0 0 0 rg`: fill color black
-/// - `0 0 595 842 re f`: 黒矩形で background (A4 全面)
-/// - `1 1 1 rg`: fill color white
-/// - `BT ... ET`: text block
-/// - `/F1 18 Tf`: font Helvetica, size 18pt
-/// - `Td`, `Tj`: text positioning + show
-/// PDF Content Stream を `Zeroizing<Vec<u8>>` で構築する。
+/// PDF Content Stream を `Zeroizing<Vec<u8>>` で構築する (黒背景 + 白テキスト 24 行)。
 ///
 /// 工程5 BLOCKER 3 解消: `SerializableSecretBytes::expose_secret() -> &[u8]` を
 /// 直接消費し、中間 `String` を作らない。byte 単位で PDF text escape を実施。
+///
+/// PDF 描画コマンド (`q` graphics state save、`0 0 0 rg` fill color black、
+/// `0 0 595 842 re f` 黒矩形で background A4 全面、`1 1 1 rg` fill color white、
+/// `BT ... ET` text block、`/F1 18 Tf` font Helvetica 18pt、`Td`/`Tj` text
+/// positioning + show) を順次バイト列に書出す。
 fn build_content_stream(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> {
     let mut s: Vec<u8> = Vec::new();
     // 1. graphics state save + 黒背景描画
