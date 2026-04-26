@@ -225,6 +225,26 @@ pub enum CryptoError {
     /// MSG-S12 に変換される (詳細: `detailed-design/errors-and-contracts.md` L118)。
     #[error("invalid BIP-39 mnemonic: wordlist mismatch or checksum failure")]
     InvalidMnemonic,
+
+    /// **Sub-D Rev6 新規 (Sub-E 工程3 Boy Scout 要求)**: マスターパスワード認証失敗。
+    ///
+    /// `VaultMigration::unlock_with_password` で AEAD unwrap が tag-mismatch だった場合に、
+    /// 「KEK_pw 派生に使ったパスワードが間違っていた」と意味論的に確定するための専用
+    /// variant。`AeadTagMismatch` (vault.db 改竄の可能性) と分離し、Sub-E
+    /// `UnlockBackoff::record_failure` を **本 variant のみ**でカウントする。
+    ///
+    /// 設計根拠: Sub-E 工程2 服部指摘 (`detailed-design/vek-cache-and-ipc.md` §F-E1
+    /// step 4): `Crypto(_)` ワイルドカード backoff は (a) L2 攻撃者が vault.db
+    /// 5 連破損で正規ユーザの unlock を DoS する経路、(b) ディスク破損 / 実装バグでも
+    /// 5 回再試行で誤検出、(c) backoff の本来目的 (パスワード違いに対する brute force
+    /// レート制限) と乖離する、の 3 点で却下。`WrongPassword` のみ backoff カウント、
+    /// 他の `Crypto(_)` variant は即返却で fail fast。
+    ///
+    /// MSG マッピング: `IpcError::Crypto { reason: "wrong-password" }` → MSG-S09 (a)
+    /// パスワード違いカテゴリ「次の入力まで約 N 秒お待ちください。リカバリ用 24 語
+    /// でのアンロックもできます」。
+    #[error("master password authentication failed (wrong password)")]
+    WrongPassword,
 }
 
 /// `CryptoError::KdfFailed` の KDF 種別を表す。Sub-B で source エラーを差別化する用途。

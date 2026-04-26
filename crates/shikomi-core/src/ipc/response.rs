@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::vault::id::RecordId;
 
 use super::error_code::IpcErrorCode;
+use super::secret_bytes::SerializableSecretBytes;
 use super::summary::RecordSummary;
 use super::version::IpcProtocolVersion;
 
@@ -52,6 +53,29 @@ pub enum IpcResponse {
     },
     /// 各種失敗（ハードコード固定文言の `IpcErrorCode` のみ）。
     Error(IpcErrorCode),
+
+    // ---------------- Sub-E (#43) IPC V2 拡張 ----------------
+    /// **V2**: `Unlock` 成功。VEK 自体は IPC に乗せず、daemon 内 `VekCache` のみ保持。
+    Unlocked,
+    /// **V2**: `Lock` 成功（VEK zeroize 完了）。
+    Locked,
+    /// **V2**: `ChangePassword` 成功（O(1)、VEK 不変）。
+    PasswordChanged,
+    /// **V2**: `RotateRecovery` 成功。新 24 語を**初回 1 度のみ**返却
+    /// （`RecoveryDisclosure::disclose` 所有権消費の IPC 経路実装）。
+    /// 受信側は読了後即 zeroize する責務（C-25 同型、Sub-A `RecoveryWords` 哲学継承）。
+    RecoveryRotated {
+        /// 新 BIP-39 24 語（順序保持、空白区切りでなく Vec で構造化）。
+        /// daemon 側 zeroize 経路: F-E4 step 9 (a)〜(d) 全段防衛で型レベル強制。
+        words: Vec<SerializableSecretBytes>,
+    },
+    /// **V2**: `Rekey` 成功。再暗号化レコード件数 + 新 24 語を返却。
+    Rekeyed {
+        /// 再暗号化されたレコード件数。
+        records_count: usize,
+        /// 新 BIP-39 24 語（rekey + recovery rotation 1 atomic で更新済、F-E5）。
+        words: Vec<SerializableSecretBytes>,
+    },
 }
 
 impl IpcResponse {
@@ -66,6 +90,11 @@ impl IpcResponse {
             Self::Edited { .. } => "edited",
             Self::Removed { .. } => "removed",
             Self::Error(_) => "error",
+            Self::Unlocked => "unlocked",
+            Self::Locked => "locked",
+            Self::PasswordChanged => "password_changed",
+            Self::RecoveryRotated { .. } => "recovery_rotated",
+            Self::Rekeyed { .. } => "rekeyed",
         }
     }
 }

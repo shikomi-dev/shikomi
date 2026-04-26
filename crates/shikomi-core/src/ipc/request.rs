@@ -58,6 +58,46 @@ pub enum IpcRequest {
         /// 対象 ID。
         id: RecordId,
     },
+
+    // ---------------- Sub-E (#43) IPC V2 拡張 ----------------
+    /// **V2 only**: vault のロック解除。daemon 内 `VekCache` を `Unlocked` 遷移させる。
+    /// `recovery: Some` の場合は recovery 24 語経路で unlock。
+    ///
+    /// daemon ハンドラは handshake で `client_version == V2` を確認済の場合のみ受理。
+    /// V1 client が送信した場合は `IpcErrorCode::ProtocolDowngrade` 拒否（C-28）。
+    Unlock {
+        /// マスターパスワード（IPC 専用 secret 経路、Drop 時 zeroize）。
+        master_password: SerializableSecretBytes,
+        /// recovery 24 語（Some なら recovery 経路、None ならパスワード経路）。
+        ///
+        /// 24 個の文字列を保持（BIP-39 wordlist 検証は daemon 側 Sub-D 経由で実施）。
+        recovery: Option<Vec<SerializableSecretBytes>>,
+    },
+
+    /// **V2 only**: vault を明示ロック。VEK を即 zeroize。
+    Lock,
+
+    /// **V2 only**: マスターパスワード変更（O(1)、VEK 不変、`wrapped_VEK_by_pw` のみ再 wrap）。
+    ChangePassword {
+        /// 旧マスターパスワード。
+        old: SerializableSecretBytes,
+        /// 新マスターパスワード。
+        new: SerializableSecretBytes,
+    },
+
+    /// **V2 only**: recovery 24 語ローテーション（rekey と組み合わせ atomic 化、F-E5）。
+    /// daemon は `VaultMigration::rekey_with_recovery_rotation` を呼出、新 24 語を応答に含める。
+    RotateRecovery {
+        /// マスターパスワード（再認証用）。
+        master_password: SerializableSecretBytes,
+    },
+
+    /// **V2 only**: VEK 入替 + recovery rotation atomic 実行（F-E5）。
+    /// `RotateRecovery` と内部実装は同一、外向き名称を使い分け（明示的 rekey 用途）。
+    Rekey {
+        /// マスターパスワード（再認証用）。
+        master_password: SerializableSecretBytes,
+    },
 }
 
 impl IpcRequest {
@@ -70,7 +110,26 @@ impl IpcRequest {
             Self::AddRecord { .. } => "add_record",
             Self::EditRecord { .. } => "edit_record",
             Self::RemoveRecord { .. } => "remove_record",
+            Self::Unlock { .. } => "unlock",
+            Self::Lock => "lock",
+            Self::ChangePassword { .. } => "change_password",
+            Self::RotateRecovery { .. } => "rotate_recovery",
+            Self::Rekey { .. } => "rekey",
         }
+    }
+
+    /// V2 専用 variant か（V1 サブセットなら false、V2 新規 5 件なら true）。
+    /// handshake 許可リスト検証 (C-28) で `client_version` との組合せを判定する用途。
+    #[must_use]
+    pub fn is_v2_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Unlock { .. }
+                | Self::Lock
+                | Self::ChangePassword { .. }
+                | Self::RotateRecovery { .. }
+                | Self::Rekey { .. }
+        )
     }
 }
 
