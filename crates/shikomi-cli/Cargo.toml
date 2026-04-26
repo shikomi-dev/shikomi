@@ -25,6 +25,9 @@ clap          = { workspace = true }
 anyhow        = { workspace = true }
 is-terminal   = { workspace = true }
 rpassword     = { workspace = true }
+# 工程5 服部指摘 (BLOCKER 3) 解消: accessibility 経路で 24 語 byte 列を
+# `Zeroizing<Vec<u8>>` で構築し drop 時に自動 zeroize する目的。
+zeroize       = { workspace = true }
 time          = { workspace = true }
 uuid          = { workspace = true }
 tracing       = { workspace = true }
