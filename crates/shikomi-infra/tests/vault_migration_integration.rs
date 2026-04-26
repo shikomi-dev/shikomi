@@ -75,7 +75,9 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
     let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
     // encrypt 実行 → RecoveryDisclosure を取得（disclose せず drop）
-    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+    let _disclosure = migration
+        .encrypt_vault(STRONG_PASSWORD.to_string())
+        .unwrap();
 
     // unlock で VEK を取得し、同じ vault を再 load して records を確認
     let _vek = migration
@@ -88,7 +90,11 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
     let repo2 = shikomi_infra::persistence::SqliteVaultRepository::new().unwrap();
     std::env::remove_var("SHIKOMI_VAULT_DIR");
     let loaded = repo2.load().unwrap();
-    assert_eq!(loaded.records().len(), 5, "records count must survive encrypt → unlock");
+    assert_eq!(
+        loaded.records().len(),
+        5,
+        "records count must survive encrypt → unlock"
+    );
 }
 
 /// TC-D-I02: encrypt_vault → decrypt_vault で平文 vault 復元（DecryptConfirmation 経由）.
@@ -106,7 +112,9 @@ fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
     let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
     // 暗号化
-    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+    let _disclosure = migration
+        .encrypt_vault(STRONG_PASSWORD.to_string())
+        .unwrap();
 
     // 復号 (DecryptConfirmation は二段確認証跡)
     let confirmation = shikomi_infra::persistence::vault_migration::DecryptConfirmation::confirm();
@@ -152,7 +160,9 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
     let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
     // 暗号化
-    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+    let _disclosure = migration
+        .encrypt_vault(STRONG_PASSWORD.to_string())
+        .unwrap();
 
     // 1 回 unlock して動作確認
     let _vek_before = migration
@@ -200,7 +210,9 @@ fn tc_d_i04_rekey_then_decrypt_vault_all_records_succeed() {
     let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
     // 1) encrypt
-    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+    let _disclosure = migration
+        .encrypt_vault(STRONG_PASSWORD.to_string())
+        .unwrap();
 
     // 2) rekey (Bug-D-002 修正後: wrapped_vek_by_pw 新 KEK で再ラップ + records 新 VEK で再暗号化)
     migration
@@ -250,7 +262,9 @@ fn tc_d_i05_req_p11_v1_accepted_via_vault_migration() {
     let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
 
     // encrypt → 暗号化 vault が VaultVersion::CURRENT (==v1) で書込まれる
-    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+    let _disclosure = migration
+        .encrypt_vault(STRONG_PASSWORD.to_string())
+        .unwrap();
 
     // 同 vault を load して暗号化モードであることが受け入れられる
     let _guard = ENV_MUTEX.lock().unwrap();

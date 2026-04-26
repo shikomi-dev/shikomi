@@ -48,20 +48,16 @@ fn make_repo(dir: &std::path::Path) -> SqliteVaultRepository {
 
 /// 任意の `Record` strategy（label 1..=64 ASCII / value 0..=512 ASCII）.
 fn record_strategy() -> impl Strategy<Value = Record> {
-    (
-        "[a-zA-Z0-9_-]{1,64}",
-        "[a-zA-Z0-9 ._-]{0,512}",
-    )
-        .prop_map(|(label, value)| {
-            let now = OffsetDateTime::now_utc();
-            Record::new(
-                RecordId::new(Uuid::now_v7()).unwrap(),
-                RecordKind::Secret,
-                RecordLabel::try_new(label).unwrap(),
-                RecordPayload::Plaintext(SecretString::from_string(value)),
-                now,
-            )
-        })
+    ("[a-zA-Z0-9_-]{1,64}", "[a-zA-Z0-9 ._-]{0,512}").prop_map(|(label, value)| {
+        let now = OffsetDateTime::now_utc();
+        Record::new(
+            RecordId::new(Uuid::now_v7()).unwrap(),
+            RecordKind::Secret,
+            RecordLabel::try_new(label).unwrap(),
+            RecordPayload::Plaintext(SecretString::from_string(value)),
+            now,
+        )
+    })
 }
 
 /// 1..=16 件の records 集合.
