@@ -38,6 +38,13 @@ rmp-serde     = { workspace = true }
 bytes         = { workspace = true }
 futures-util  = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# Sub-F (#44) Phase 5 / C-41: core dump 抑制（Linux: prctl(PR_SET_DUMPABLE, 0) /
+# macOS: setrlimit(RLIMIT_CORE, 0)）。`nix` 0.29 (workspace) は既存 features に
+# `process` / `resource` を含まないため、Phase 5 専用に `libc` 直接呼出で実装する。
+# 依存ツリー追加は本 1 件のみ、workspace 横断影響なし。
+libc          = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys   = { workspace = true }
 

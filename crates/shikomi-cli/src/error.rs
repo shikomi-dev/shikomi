@@ -111,6 +111,13 @@ pub enum CliError {
     /// §終了コード SSoT exit 3)。`shikomi list` は実行せず即座に fail-fast。
     #[error("vault protection mode is unknown; refusing to list records (fail-secure)")]
     ProtectionModeUnknown,
+
+    // ---------------- Sub-F (#44) Phase 5: stdin 拒否 / TTY 強制 (C-38) ----------------
+    /// stdin が非 TTY の状態でパスワード / 24 語入力が要求された
+    /// (C-38、`echo pw | shikomi vault unlock` の history / scrollback 漏洩防止)。
+    /// 設計書 §終了コード SSoT exit 1 (UserError)。
+    #[error("refusing to read password from non-tty stdin (run from a terminal)")]
+    NonInteractivePassword,
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -213,6 +220,7 @@ impl From<&CliError> for ExitCode {
             | CliError::RecordNotFound(_)
             | CliError::VaultNotInitialized(_)
             | CliError::NonInteractiveRemove
+            | CliError::NonInteractivePassword
             | CliError::DaemonNotRunning(_)
             | CliError::ProtocolVersionMismatch { .. }
             | CliError::Crypto { .. } => Self::UserError,
@@ -261,6 +269,15 @@ mod tests {
     fn test_exit_code_non_interactive_remove_maps_to_user_error() {
         assert_eq!(
             ExitCode::from(&CliError::NonInteractiveRemove),
+            ExitCode::UserError
+        );
+    }
+
+    /// Sub-F (#44) Phase 5 / C-38: 非 TTY パスワード入力は exit 1 に写像される。
+    #[test]
+    fn test_exit_code_non_interactive_password_maps_to_user_error() {
+        assert_eq!(
+            ExitCode::from(&CliError::NonInteractivePassword),
             ExitCode::UserError
         );
     }

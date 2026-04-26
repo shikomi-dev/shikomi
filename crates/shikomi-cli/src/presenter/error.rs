@@ -151,6 +151,13 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "re-run with --yes to confirm deletion",
             "削除を確認するには --yes を付けて再実行してください",
         ),
+        // Sub-F (#44) Phase 5 / C-38: stdin パイプ経由のパスワード入力を構造的に拒否。
+        CliError::NonInteractivePassword => lit(
+            "refusing to read password from non-tty stdin",
+            "非対話モードではパスワード入力を拒否します",
+            "run from a terminal (TTY); piping passwords via stdin is not supported (C-38)",
+            "ターミナル (TTY) から実行してください。stdin パイプ経由のパスワード入力は未対応です (C-38)",
+        ),
         CliError::Persistence(pe) => render_persistence_lines(pe),
         CliError::Domain(domain) => (
             format!("internal bug: {domain}"),

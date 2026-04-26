@@ -12,6 +12,8 @@ pub mod cli;
 #[doc(hidden)]
 pub mod error;
 #[doc(hidden)]
+pub mod hardening;
+#[doc(hidden)]
 pub mod input;
 #[doc(hidden)]
 pub mod io;
@@ -199,6 +201,12 @@ fn decide_kind_for_input(
 #[must_use]
 pub fn run() -> ExitCode {
     std::panic::set_hook(Box::new(panic_hook));
+
+    // Sub-F (#44) Phase 5 / C-41: core dump 抑制を最早期に呼び出す。失敗しても
+    // 起動を止めない (Fail Kindly)、ただし warn ログで観測可能化する。
+    if let Err(e) = hardening::core_dump::suppress() {
+        tracing::warn!(error = %e, "core dump suppression failed; continuing without it");
+    }
 
     let locale = Locale::detect_from_env();
     // set は初回のみ成功。テスト中の再入は無視してよい。
