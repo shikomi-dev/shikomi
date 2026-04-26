@@ -120,7 +120,9 @@ mod tests {
     fn atomic_write_failed_displays_stage() {
         let e = MigrationError::AtomicWriteFailed {
             stage: AtomicWriteStage::Rename,
-            source: std::io::Error::new(std::io::ErrorKind::Other, "boom"),
+            // clippy::io_other_error (clippy::all level deny): `Error::new(Other, ...)` の代わりに
+            // `Error::other(...)` を使う (std 1.74+ の short-cut API)。
+            source: std::io::Error::other("boom"),
         };
         let msg = format!("{e}");
         assert!(msg.contains("rename"));
