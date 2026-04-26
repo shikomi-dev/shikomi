@@ -203,6 +203,19 @@ vault unlock 経路の VEK 復元関数。Sub-C で adapter 経路を確定、Su
 
 - **Sub-B（完了）**: `KdfErrorKind::Argon2id` / `KdfErrorKind::Pbkdf2` / `KdfErrorKind::Hkdf` の各 source エラー型詳細、`VekProvider` の `Argon2idHkdfVekProvider` 具象実装シグネチャ確定
 - **Sub-C（完了）**: `CryptoError::AeadTagMismatch` の発火経路詳細（`AesGcmAeadAdapter::{encrypt_record, decrypt_record, wrap_vek, unwrap_vek}`）、`verify_aead_decrypt(|| ...)` クロージャ内での `aes_gcm::aead::AeadInPlace::decrypt_in_place_detached` 呼出パターン、`AeadKey` trait 経由のクロージャインジェクション、`derive_new_wrapped_*` の AES-GCM wrap 経路、`unwrap_vek_with_*` の Vek 復元 + 長さ検証 Fail Fast
-- **Sub-D**: `CryptoError::WeakPassword` から MSG-S08 への変換層、`warning=None` / i18n 戦略（`password.md` §`warning=None` 契約 / §i18n 戦略責務分離 を実装に落とし込む）。`HeaderAeadKey::AeadKey` impl 追加（Boy Scout）。vault リポジトリ層での `NonceCounter::increment` 統合
-- **Sub-E**: VEK キャッシュ寿命と `Drop` 連鎖の統合、IPC V2 でのエラー variant マッピング
-- **Sub-F**: CLI サブコマンドからの `CryptoOutcome<T>` ハンドリング、終了コード割当、MSG-S11 nonce 上限到達文言確定
+- **Sub-D**: 以下の **5 系列**を responsibility として明示。引継ぎ表をそのままチェックリスト化し、Sub-D 設計時に取りこぼしを防ぐ。
+  1. `CryptoError::WeakPassword` から **MSG-S08** への変換層、`warning=None` / i18n 戦略（`password.md` §`warning=None` 契約 / §i18n 戦略責務分離 を実装に落とし込む）
+  2. **`CryptoError::AeadTagMismatch` から MSG-S10 への Fail Kindly 変換層**（**Sub-C 工程5 ペガサス指摘で本項目追加**）。文言設計指針：
+     - **過信防止**: 「**vault.db 改竄の可能性があります**」のように**断定しない**（発火源は悪意ある改竄だけでなくディスク破損 / 実装バグも含むため、「攻撃された」と断定すると過剰恐怖を煽る）
+     - **過小評価回避**: 「ディスク破損 / 実装バグの可能性もあり、**いずれにせよ vault.db を信頼してはなりません**」と**改竄シナリオを最低 1 つは明示**（「ファイルが壊れたかも」だけだと L1 攻撃の脅威が伝わらない）
+     - **次の一手**: 「**バックアップから復元してください**」を必ず提示（Fail Kindly の核心、エラー表示で終わらせない）
+     - **田中ペルソナ向け GUI モーダル経路**: CLI を読めないユーザのため、`shikomi-gui`（Tauri WebView）の常駐表示要素 + モーダルで MSG-S10 を表示。CLI 経路では `shikomi vault unlock` 実行時の stderr に同等文言、GUI 経路では明示的合意取得モーダル（`MSG-S16` 同型のレイアウト）。両経路で文言統一（i18n 翻訳辞書経由、`requirements.md` MSG-S10 行で確定）
+  3. **`CryptoError::NonceLimitExceeded` から MSG-S11 へのユーザ誘導層**（**Sub-C 工程5 ペガサス指摘で本項目追加**）。文言設計指針：
+     - **`vault rekey` フロー誘導**: 「nonce 上限に到達しました。**`shikomi vault rekey` を実行**して新しい鍵で再暗号化してください」（Sub-F の rekey CLI 経路を案内）
+     - **GUI ボタン誘導文言**: GUI では「**鍵を再生成する**」ボタンを提示、ボタン押下で Sub-F の rekey フローを起動（`shikomi-gui` 経路、CLI を読めないペルソナ A 田中対応）
+     - **残操作猶予の数値非表示**: 「あと N 回暗号化できます」のような残数値表示を**禁止**（攻撃面情報漏洩回避、`NonceCounter::current()` の値は内部状態で外部に見せない、`nonce-and-aead.md` §nonce_counter 統合契約と整合）
+     - **rekey の所要時間目安は提示可**: 「再暗号化には全レコード件数に応じた時間がかかります」のような UX ヒントは OK（操作完了予測のため）
+  4. **`HeaderAeadKey::AeadKey` impl 追加**（Boy Scout、Sub-C で予告済）。`crypto-types.md` `HeaderAeadKey` セクションに `impl AeadKey for HeaderAeadKey` 行を Sub-C 同形パターンで追記
+  5. **vault リポジトリ層での `NonceCounter::increment` 統合**（`nonce-and-aead.md` §nonce_counter 統合契約 を実装に落とし込む）。`encrypt_record` 呼出前の `nonce_counter.increment()?` を `repository-and-migration.md` の処理フロー図に明示、PR レビューチェックリストで取りこぼし防止
+- **Sub-E**: VEK キャッシュ寿命と `Drop` 連鎖の統合、IPC V2 でのエラー variant マッピング、MSG-S09 カテゴリ別ヒント（パスワード違い / IPC 接続不能 / キャッシュ揮発タイムアウト）の Fail Kindly 文言確定
+- **Sub-F**: CLI サブコマンドからの `CryptoOutcome<T>` ハンドリング、終了コード割当、**Sub-D で凍結した MSG-S10 / MSG-S11 の文言を CLI 経路で実装**（GUI 経路と文言統一、i18n 翻訳辞書経由）。`vault rekey` フローで `NonceLimitExceeded` 検知 → 新 VEK 生成 → 全レコード再暗号化
