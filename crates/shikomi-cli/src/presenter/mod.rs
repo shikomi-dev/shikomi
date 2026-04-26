@@ -5,6 +5,7 @@
 
 pub mod error;
 pub mod list;
+pub mod mode_banner;
 pub mod prompt;
 pub mod success;
 pub mod warning;

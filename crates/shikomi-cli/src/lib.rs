@@ -359,21 +359,55 @@ fn emit_error_and_exit(err: &CliError, locale: Locale) -> ExitCode {
 // -------------------------------------------------------------------
 
 fn run_list(handle: &RepositoryHandle, locale: Locale, quiet: bool) -> Result<(), CliError> {
-    let views = match handle {
+    // Sub-F (#44) Phase 3 / C-37: 両経路で `protection_mode` を必ず算出する。
+    // - Sqlite 経路: 上流で Encrypted は `EncryptionUnsupported` で fail-fast 済み
+    //   (`usecase::list::list_records` line 30) のため、本経路に到達した時点で
+    //   保護モードは Plaintext 確定。
+    // - IPC 経路: daemon が `IpcResponse::Records.protection_mode` で 4 variant の
+    //   いずれかを返す。`Unknown` は REQ-S16 Fail-Secure で exit 3 fail-fast。
+    let (views, protection_mode) = match handle {
         RepositoryHandle::Sqlite(repo) => {
             let vault_dir = repo.paths().dir().to_path_buf();
-            usecase::list::list_records(repo, &vault_dir)?
+            let views = usecase::list::list_records(repo, &vault_dir)?;
+            (views, shikomi_core::ipc::ProtectionModeBanner::Plaintext)
         }
         RepositoryHandle::Ipc(ipc) => {
-            let summaries = ipc.list_summaries()?;
-            usecase::list::summaries_to_views(&summaries)
+            let outcome = ipc.list_summaries()?;
+            let views = usecase::list::summaries_to_views(&outcome.records);
+            (views, outcome.protection_mode)
         }
     };
+
+    // REQ-S16 Fail-Secure: 保護モード判定不能なら exit 3 で fail-fast、
+    // レコード一覧は一切表示しない (情報漏洩経路を構造的に遮断)。
+    if matches!(
+        protection_mode,
+        shikomi_core::ipc::ProtectionModeBanner::Unknown
+    ) {
+        return Err(CliError::ProtectionModeUnknown);
+    }
+
     if !quiet {
-        let rendered = presenter::list::render_list(&views, locale);
+        // `NO_COLOR` (https://no-color.org) / 非 TTY / `--quiet` はカラー無効化。
+        // `--quiet` は既に分岐済みのため、ここでは env + TTY のみ判定する。
+        let color_enabled = is_color_enabled();
+        let rendered = presenter::list::render_list(&views, protection_mode, color_enabled, locale);
         print_stdout(&rendered);
     }
     Ok(())
+}
+
+/// `NO_COLOR` 環境変数 / stdout が非 TTY のいずれかが真ならカラー無効化。
+///
+/// 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
+/// §`ProtectionModeBanner` enum「`NO_COLOR` 環境変数 / 非 TTY / `--quiet` 時は
+/// カラー無効化、文字のみ表示」
+fn is_color_enabled() -> bool {
+    use is_terminal::IsTerminal;
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::io::stdout().is_terminal()
 }
 
 fn run_add(
@@ -609,8 +643,13 @@ fn lookup_label_for_remove(
             Ok(Some(label))
         }
         RepositoryHandle::Ipc(ipc) => {
-            let summaries = ipc.list_summaries()?;
-            let label = summaries
+            // Sub-F (#44) Phase 3: `list_summaries` は `ListSummariesOutcome` を返す。
+            // ここでは label プレビューのみ必要なので `protection_mode` は破棄する
+            // (本関数は `usecase::remove` の確認プロンプト用ヘルパであり、保護モード
+            // バナーの責務は `usecase::list` 経路に閉じている)。
+            let outcome = ipc.list_summaries()?;
+            let label = outcome
+                .records
                 .iter()
                 .find(|s| &s.id == id)
                 .map(|s| s.label.as_str().to_owned())

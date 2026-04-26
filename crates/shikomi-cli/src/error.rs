@@ -104,6 +104,13 @@ pub enum CliError {
         /// 直前に送出したリクエスト種別（static 文字列）。
         request_kind: &'static str,
     },
+
+    // ---------------- Sub-F (#44) Phase 3: 保護モードバナー ----------------
+    /// daemon が `protection_mode = Unknown` を返した
+    /// (vault.db ヘッダ破損等、REQ-S16 Fail-Secure、`cli-subcommands.md`
+    /// §終了コード SSoT exit 3)。`shikomi list` は実行せず即座に fail-fast。
+    #[error("vault protection mode is unknown; refusing to list records (fail-secure)")]
+    ProtectionModeUnknown,
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -215,8 +222,10 @@ impl From<&CliError> for ExitCode {
             | CliError::WrongPassword
             | CliError::BackoffActive { .. }
             | CliError::UnexpectedIpcResponse { .. } => Self::SystemError,
-            // exit 3: 暗号化未対応 / vault Locked （Sub-F SSoT）
-            CliError::EncryptionUnsupported | CliError::VaultLocked => Self::EncryptionUnsupported,
+            // exit 3: 暗号化未対応 / vault Locked / 保護モード Unknown（Sub-F SSoT）
+            CliError::EncryptionUnsupported
+            | CliError::VaultLocked
+            | CliError::ProtectionModeUnknown => Self::EncryptionUnsupported,
             // exit 4: プロトコル非互換 (handshake 段 fail fast)
             CliError::ProtocolDowngrade => Self::ProtocolDowngrade,
             // exit 5: recovery 経路必須

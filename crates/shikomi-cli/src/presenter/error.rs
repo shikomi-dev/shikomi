@@ -223,6 +223,14 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "rebuild shikomi-cli and shikomi-daemon to the same version".to_owned(),
             "shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください".to_owned(),
         ),
+        // Sub-F (#44) Phase 3 / REQ-S16 Fail-Secure: 保護モード判定不能。
+        // CLI は exit 3 で fail-fast し、レコード一覧を一切表示しない。
+        CliError::ProtectionModeUnknown => lit(
+            "vault protection mode is unknown",
+            "vault の保護モードが不明です",
+            "the vault header may be corrupted; restore from backup or contact support",
+            "vault ヘッダが破損している可能性があります。バックアップから復元するか、サポートに連絡してください",
+        ),
     }
 }
 

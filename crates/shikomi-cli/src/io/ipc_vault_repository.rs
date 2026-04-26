@@ -37,7 +37,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use shikomi_core::ipc::{IpcRequest, IpcResponse, RecordSummary, SerializableSecretBytes};
+use shikomi_core::ipc::{
+    IpcRequest, IpcResponse, ProtectionModeBanner, RecordSummary, SerializableSecretBytes,
+};
 use shikomi_core::{RecordId, RecordKind, RecordLabel, SecretString};
 use shikomi_infra::persistence::PersistenceError;
 use time::OffsetDateTime;
@@ -105,22 +107,28 @@ impl IpcVaultRepository {
         &self.socket_path
     }
 
-    /// daemon にレコード summary 列を要求する（`--ipc list` の主経路）。
+    /// daemon にレコード summary 列 + 保護モードを要求する（`--ipc list` の主経路）。
     ///
-    /// `IpcRequest::ListRecords` を 1 往復し、`Records` variant を抽出して返す。
-    /// daemon 側の暗号化検出 / その他エラーは `PersistenceError` に写像する。
+    /// `IpcRequest::ListRecords` を 1 往復し、`Records { records, protection_mode }`
+    /// variant を `ListSummariesOutcome` として返す。daemon 側の暗号化検出 /
+    /// その他エラーは `PersistenceError` に写像する。
+    ///
+    /// **Sub-F (#44) Phase 3 / C-37**: `protection_mode` は CLI 側 `presenter::list`
+    /// に必須引数として渡す責務 (REQ-S16 / 型レベル強制)。本メソッドは構造体で
+    /// 両フィールドを返すことで、呼出側が `protection_mode` を捨てる経路を
+    /// 構造的に困難化する (Default 値・`Option` を持たせない設計)。
     ///
     /// # Errors
     /// IPC 失敗 / 暗号化 vault 検出 / 不正応答時に `PersistenceError`。
-    pub fn list_summaries(&self) -> Result<Vec<RecordSummary>, PersistenceError> {
+    pub fn list_summaries(&self) -> Result<ListSummariesOutcome, PersistenceError> {
         match self.round_trip(&IpcRequest::ListRecords)? {
-            // Sub-F (#44): `Records` 構造体化に伴い destructure。`protection_mode` は
-            // 本メソッドでは破棄、後続 Phase 3 で `presenter::mode_banner::display`
-            // 経路に流す責務を `usecase::list` 側に集約する (C-37 必須呼出)。
             IpcResponse::Records {
                 records,
-                protection_mode: _,
-            } => Ok(records),
+                protection_mode,
+            } => Ok(ListSummariesOutcome {
+                records,
+                protection_mode,
+            }),
             IpcResponse::Error(code) => Err(PersistenceError::from(code)),
             _ => Err(unexpected_response("ListRecords")),
         }
@@ -373,6 +381,26 @@ impl IpcVaultRepository {
     ) -> Result<IpcResponse, CliError> {
         self.round_trip(request).map_err(CliError::from)
     }
+}
+
+// -------------------------------------------------------------------
+// Sub-F (#44) Phase 3: list_summaries の戻り値型
+// -------------------------------------------------------------------
+
+/// `IpcVaultRepository::list_summaries` の戻り値（records + protection_mode）。
+///
+/// Sub-F (#44) C-37 で `presenter::list::render_list` のシグネチャに
+/// `protection_mode: ProtectionModeBanner` を必須引数化したことに伴い、
+/// daemon 応答 `IpcResponse::Records { records, protection_mode }` を本構造体に
+/// 1:1 写像して呼出側に渡す。フィールドはどちらも `pub`、`Default` 実装は持たせず、
+/// 呼出側が `protection_mode` を黙殺できないようにする (REQ-S16 / 型レベル強制)。
+#[derive(Debug, Clone)]
+pub struct ListSummariesOutcome {
+    /// daemon から返された機密非含有 summary 列 (name / id / kind / 時刻のみ)。
+    pub records: Vec<RecordSummary>,
+    /// 保護モード (Plaintext / EncryptedLocked / EncryptedUnlocked / Unknown)。
+    /// `Unknown` は CLI 側 `lib::run_list` で exit 3 fail-fast (REQ-S16 Fail-Secure)。
+    pub protection_mode: ProtectionModeBanner,
 }
 
 // -------------------------------------------------------------------
