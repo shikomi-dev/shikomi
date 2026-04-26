@@ -224,7 +224,8 @@ impl VaultEncryptedHeader {
 
         // created_at の i64 マイクロ秒変換 (Aad と同じ規約)。
         // 範囲外時はゼロ埋めで防衛的フォールバック (構造的に到達しない、time crate 限界外)。
-        let micros = i128::from(self.created_at.unix_timestamp_nanos()) / 1_000;
+        // unix_timestamp_nanos() は既に i128 を返すため i128::from() は冗長 (clippy::useless_conversion)。
+        let micros = self.created_at.unix_timestamp_nanos() / 1_000;
         let micros_i64 = i64::try_from(micros).unwrap_or(0);
         out.extend_from_slice(&micros_i64.to_be_bytes());
 
