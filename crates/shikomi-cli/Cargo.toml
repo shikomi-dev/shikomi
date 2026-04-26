@@ -44,6 +44,10 @@ futures-util  = { workspace = true }
 # `process` / `resource` を含まないため、Phase 5 専用に `libc` 直接呼出で実装する。
 # 依存ツリー追加は本 1 件のみ、workspace 横断影響なし。
 libc          = "0.2"
+# Sub-F (#44) Phase 6 / C-A05: `--output {print,braille}` 経路の umask(0o077)
+# 内部適用 (`accessibility::umask::with_secure_umask`)。`nix::sys::stat::umask`
+# は workspace 既定 features (`fs`) で利用可能、追加 features 不要。
+nix           = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys   = { workspace = true }
