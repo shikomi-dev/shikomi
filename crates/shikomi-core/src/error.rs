@@ -217,6 +217,14 @@ pub enum CryptoError {
     /// 通常は `pub(in crate::crypto::verified)` 可視性でコンパイル時に防がれる。
     #[error("Plaintext requires Verified<_> wrapper")]
     VerifyRequired,
+
+    /// **Sub-B 新規**: BIP-39 mnemonic の wordlist / checksum / 単語数検証失敗。
+    ///
+    /// `Bip39Pbkdf2Hkdf::derive_kek_recovery` が `bip39::Mnemonic::parse_in` で
+    /// `Err` を受け取った場合に生成される。Sub-D の `vault unlock --recovery` 経路で
+    /// MSG-S12 に変換される (詳細: `detailed-design/errors-and-contracts.md` L118)。
+    #[error("invalid BIP-39 mnemonic: wordlist mismatch or checksum failure")]
+    InvalidMnemonic,
 }
 
 /// `CryptoError::KdfFailed` の KDF 種別を表す。Sub-B で source エラーを差別化する用途。

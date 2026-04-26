@@ -35,7 +35,7 @@ pub struct KdfSalt {
 }
 
 impl KdfSalt {
-    /// バイトスライスから `KdfSalt` を構築する。
+    /// バイトスライスから `KdfSalt` を構築する (永続化からの復元用)。
     ///
     /// # Errors
     /// `bytes.len() != 16` の場合 `DomainError::InvalidVaultHeader(KdfSaltLength)` を返す。
@@ -51,6 +51,15 @@ impl KdfSalt {
         let mut inner = [0u8; KDF_SALT_LEN];
         inner.copy_from_slice(bytes);
         Ok(Self { inner })
+    }
+
+    /// 16 byte 配列から直接構築する (Sub-B `Rng::generate_kdf_salt` の CSPRNG 経路で使用)。
+    ///
+    /// 引数が `[u8; 16]` のため**型レベルで長さが強制され失敗しない**。`AuthTag::from_array`
+    /// と同型の API。`try_new(&[u8])` は永続化からの復元用 (長さが runtime 値) として残す。
+    #[must_use]
+    pub fn from_array(bytes: [u8; KDF_SALT_LEN]) -> Self {
+        Self { inner: bytes }
     }
 
     /// 内包する 16 バイト配列への参照を返す。

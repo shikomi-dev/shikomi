@@ -48,8 +48,22 @@ impl RecoveryMnemonic {
         }
     }
 
-    /// crate 内部からのみ単語配列への参照を取り出す (Sub-B BIP-39 検証用)。
-    pub(crate) fn expose_within_crate(&self) -> &[String; MNEMONIC_WORD_COUNT] {
+    /// 単語配列への参照を取り出す (Sub-B `Bip39Pbkdf2Hkdf::derive_kek_recovery` 専用)。
+    ///
+    /// 可視性: `pub` (`shikomi-infra::crypto::kdf` への正規入力経路)。
+    ///
+    /// 可視性ポリシーの差別化 (Sub-B Rev2 で凍結、`detailed-design/password.md`
+    /// §`MasterPassword` 参照):
+    /// - `Vek` / `Kek<_>` / `HeaderAeadKey::expose_within_crate` は **`pub(crate)`**
+    ///   (鍵バイトは外部 crate に渡さない、`shikomi-core::crypto` 内部閉じ)
+    /// - `MasterPassword::expose_secret_bytes` / `RecoveryMnemonic::expose_words`
+    ///   は **`pub`** (KDF 入力として `shikomi-infra` アダプタへの正規経路として開放)
+    ///
+    /// **呼び出して良いのは `shikomi-infra::crypto::kdf` モジュールのみ**。
+    /// CLI / GUI / daemon の bin crate から本メソッドを呼ぶことは禁止
+    /// (CI grep による静的検出対象、`detailed-design/kdf.md` §`Bip39Pbkdf2Hkdf` 参照)。
+    #[must_use]
+    pub fn expose_words(&self) -> &[String; MNEMONIC_WORD_COUNT] {
         self.words.expose_secret()
     }
 
@@ -88,9 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn expose_within_crate_returns_24_word_array_in_order() {
+    fn expose_words_returns_24_word_array_in_order() {
         let m = RecoveryMnemonic::from_words(dummy_words());
-        let words = m.expose_within_crate();
+        let words = m.expose_words();
         assert_eq!(words.len(), MNEMONIC_WORD_COUNT);
         assert_eq!(words[0], "word00");
         assert_eq!(words[23], "word23");

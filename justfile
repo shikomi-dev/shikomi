@@ -51,6 +51,15 @@ test-infra:
 test-cli:
     cargo test -p shikomi-cli
 
+# ------------------------------------------------------------------ bench
+
+# Sub-B (#40) BC-3 リリースブロッカ — KDF 性能ベンチ gating。
+# `crates/shikomi-infra/benches/kdf_bench.rs` を criterion で起動し、median を
+# 750 ms 閾値 (p95 ≤ 1.0 s の proxy) と比較する。詳細は kdf.md §性能契約 / 同
+# スクリプト冒頭コメント。
+bench-kdf:
+    bash scripts/ci/bench-kdf-gating.sh
+
 # ------------------------------------------------------------------ audit
 
 # cargo deny + secret 経路監査 (確定 B: cargo-deny-action 廃止、統一経路)

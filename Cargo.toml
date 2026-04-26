@@ -66,3 +66,17 @@ predicates      = "3"
 # `read_password`（rpassword）の非エコー経路を実観測する。`MIT OR Apache-2.0`、
 # 依存数 < 10、2024+ メンテ。Windows は `cfg(unix)` ガードで skip。
 expectrl        = "0.8"
+# Sub-B (#40) vault 暗号化 KDF / RNG / 強度ゲート用 crate（tech-stack.md §4.7）。
+# 全て pure Rust、shikomi-infra のみが依存（shikomi-core は no-I/O 制約継承）。
+argon2          = { version = "0.5",  default-features = false, features = ["alloc", "std", "zeroize"] }
+hkdf            = { version = "0.12", default-features = false, features = ["std"] }
+sha2            = { version = "0.10", default-features = false, features = ["std"] }
+bip39           = { version = "2",                              features = ["std", "zeroize"] }
+rand_core       = { version = "0.6",                            features = ["getrandom"] }
+getrandom       = "0.2"
+zxcvbn          = { version = "3",    default-features = false, features = ["default"] }
+# Sub-B (#40) BC-3 リリースブロッカ用 KDF ベンチ。`cargo bench -p shikomi-infra
+# --bench kdf_bench` で Argon2id `FROZEN_OWASP_2024_05` / Bip39Pbkdf2Hkdf の
+# 単一 derive 時間を計測し、median を 750 ms (p95 ≤ 1.0 s の proxy) と比較する。
+# `bench-kdf` ワークフロー (`.github/workflows/bench-kdf.yml`) で 3 OS gating。
+criterion       = { version = "0.5", default-features = false }

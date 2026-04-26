@@ -129,6 +129,7 @@
 - **意味論的区別**: `SecretBytes` は「任意長の秘密バイト列」。`Vek` は「**32 byte 固定の VEK 本体**」。型シグネチャ上で「VEK を渡す」と「任意秘密を渡す」が混同されると、Sub-B の `wrap_with_kek_pw(vek: &SecretBytes, kek: &Kek<KekKindPw>) -> WrappedVek` のような関数でうっかり `MasterPassword` を渡しても通ってしまう
 - **Drop 時 zeroize の経路保証**: `SecretBytes` の Drop は内部 `String` の zeroize を経由する間接経路。`Vek` は **`[u8;32]` を直接 `Zeroizing<[u8;32]>` で保持**することで、`Drop` 時の zeroize 範囲が静的に確定する（ヒープ上の連続 32 byte のみ）
 - **`expose_within_crate()` の境界制御**: `Vek` 内部の `[u8;32]` 取り出しは `pub(crate)` 可視性に制限。**外部 crate からは取り出せない**ため、誤って `bin` crate（CLI / GUI）が VEK 生バイトを触る経路を**型レベルで禁止**。Sub-B / Sub-D の AEAD 操作実装のみが crate 内アクセス可能
+- **可視性ポリシー差別化**: 鍵バイト型（`Vek` / `Kek<_>` / `HeaderAeadKey`）は `pub(crate)` で外部非公開、KDF 入力型（`MasterPassword` / `RecoveryMnemonic`）は `pub` で shikomi-infra への正規経路として開放。差別化の根拠と判断基準は `password.md` §可視性ポリシー差別化（鍵バイト vs KDF 入力）に集約（Sub-B Rev2 工程5 服部・ペテルギウス指摘で明文化）
 
 ### なぜ `Kek<Kind>` を phantom-typed にするか
 
