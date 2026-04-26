@@ -33,10 +33,26 @@ fail() {
 }
 
 # --- TC-CI-013 ------------------------------------------------------
-echo "[TC-CI-013] expose_secret 呼び出しが shikomi-cli/src/ に 0 件であることを確認"
-if matches="$(grep -rn 'expose_secret' crates/shikomi-cli/src/)"; then
-    echo "$matches"
-    fail "TC-CI-013 FAIL: crates/shikomi-cli/src/ 配下に expose_secret 呼び出しが存在します"
+# 例外:
+# - crates/shikomi-cli/src/accessibility/{print_pdf,braille_brf,audio_tts}.rs:
+#   工程5 服部指摘 (BLOCKER 3) 解消で `expose_secret() -> &[u8]` を直接消費し
+#   `Zeroizing<Vec<u8>>` で構築する経路に再設計した (中間 String 経由を排除し
+#   24 語が heap に zeroize されないまま残留する経路を構造的に遮断する目的)。
+#   これらは zeroize 維持のための明示的な byte access であり、
+#   shikomi-cli 内で ban する一般原則の例外として明文化する。
+# - doc コメント / 行コメント中の `expose_secret` 文字列は `\.expose_secret(`
+#   の関数呼出形式のみを検出することで除外する (false positive 防止)。
+echo "[TC-CI-013] expose_secret 呼出が shikomi-cli/src/ に 0 件 (accessibility 経路の zeroize 経由を除く)"
+if matches="$(grep -rnE '\.expose_secret\(' crates/shikomi-cli/src/ \
+    --include='*.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/print_pdf.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/braille_brf.rs' \
+    | grep -v 'crates/shikomi-cli/src/accessibility/audio_tts.rs' \
+    || true)"; then
+    if [[ -n "$matches" ]]; then
+        echo "$matches"
+        fail "TC-CI-013 FAIL: 許可リスト (accessibility/{print_pdf,braille_brf,audio_tts}.rs) 以外で expose_secret 呼出が存在します"
+    fi
 fi
 echo "[TC-CI-013] PASS"
 
