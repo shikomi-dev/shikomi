@@ -197,14 +197,28 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
 | `VaultMigration::rekey` | `pub` | `(&self, current_password: &str) -> Result<usize, MigrationError>` | F-D4 nonce overflow / 明示 rekey 経路。新 VEK 生成 → 全レコード再暗号化、戻り値は再暗号化件数 |
 | `VaultMigration::change_password` | `pub` | `(&self, current_password: &str, new_password: &str) -> Result<(), MigrationError>` | F-D5 マスターパスワード変更（O(1)、VEK 不変、`wrapped_VEK_by_pw` のみ再生成）|
 
-### `DecryptConfirmation`（型レベル二段確認の証跡）
+### `DecryptConfirmation`（型レベル二段確認の証跡、Sub-D Rev2 で Clean Arch 観点に整合）
 
-- `pub struct DecryptConfirmation { _private: () }`（外部 crate からの直接構築禁止）
-- `pub fn confirm(yes_keyword: &str, password_reentry: &str, expected_password: &MasterPassword) -> Result<DecryptConfirmation, ConfirmError>`
-  - `yes_keyword` が `"DECRYPT"` 文字列リテラルと一致すること（`subtle::ConstantTimeEq` 経由で比較）
-  - `password_reentry` が `expected_password.expose_secret_bytes()` と一致すること（`ConstantTimeEq` 経由）
-  - 両方通過した場合のみ `DecryptConfirmation { _private: () }` を返す
-- **`--force` フラグでも `confirm` を省略不可**（型シグネチャで `decrypt_vault` の引数に強制、Sub-F CLI 実装でも回避経路を作れない）
+<!-- Boy Scout Rule (Sub-D Rev2 / 工程5 ペテルギウス指摘): 旧設計の `confirm(yes_keyword, password_reentry, expected_password) -> Result<_, ConfirmError>` は **`subtle::ConstantTimeEq` を shikomi-infra に持ち込む経路**を内包し Clean Architecture 違反。実装段階で「**確認ロジック自体は Sub-F CLI/GUI 層が担当、shikomi-infra には通過証跡だけを型レベルで閉じ込める**」判断に変更し、シグネチャを `pub fn confirm() -> Self` に簡略化。`ConfirmError` variant も削除（Sub-F 側エラーに移譲）。型レベル強制（C-20）は `_private: ()` 非可視性フィールド + `decrypt_vault` 引数必須の 2 軸で維持される。 -->
+
+- `pub struct DecryptConfirmation { _private: () }`（外部 crate からの直接構築禁止、`_private` 非 `pub` フィールドで `E0451` private field error）
+- `pub fn confirm() -> Self`（**Sub-D Rev2 で簡略化**、引数ゼロ、`Result` を返さない）
+- **呼出側（Sub-F CLI / GUI）責務**: 本関数を呼ぶ前に以下を Sub-F 側で実装する（shikomi-infra に持ち込まない）:
+  1. ユーザに `"DECRYPT"` 大文字英字を**手入力**させる（コピペ防止のため UI で paste 抑制、`subtle::ConstantTimeEq` で比較）
+  2. パスワード再入力させ `expected_password.expose_secret_bytes()` と `subtle::ConstantTimeEq` で比較
+  3. 両方通過後に本関数を呼び `DecryptConfirmation` を取得
+  4. `VaultMigration::decrypt_vault(_, confirm)` の引数として渡す
+- **`--force` フラグでも `decrypt_vault` の `confirmation: DecryptConfirmation` 引数を省略不可**（型シグネチャで強制、Sub-F CLI 実装でも回避経路を作れない、C-20 維持）
+- **二段確認失敗時のエラー処理は Sub-F 内部のエラー型で表現**（旧 `ConfirmError` / `MigrationError::ConfirmationRequired` は不要、Sub-F が独自に MSG-S14 再表示経路を構築）
+
+### Clean Architecture 観点の責務分離（Sub-D Rev2 で明文化）
+
+| 責務 | 担当 | 理由 |
+|---|---|---|
+| 二段確認の通過証跡型 (`DecryptConfirmation`) | **shikomi-infra（Sub-D）** | `decrypt_vault` の引数として型レベル強制が必要、core/infra 境界を跨ぐ証跡型 |
+| `"DECRYPT"` キーワード入力 UI / コピペ抑制 | **Sub-F（CLI / GUI）** | UI 入力ロジックは presentation 層、shikomi-infra に持ち込まない |
+| パスワード再入力 + `subtle::ConstantTimeEq` 比較 | **Sub-F（CLI / GUI）** | 同上、`subtle` を shikomi-infra deps に追加しない（既存 `aes-gcm` 経由 transitive のみ） |
+| 確認失敗時のエラー表示 + 再試行 UX | **Sub-F（CLI / GUI）** | MSG-S14 確認モーダルの再表示は presentation 層責務、Sub-F 独自エラー型で表現 |
 
 ## 平文⇄暗号化マイグレーションフロー
 
@@ -272,7 +286,7 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
 1. CLI / GUI で「**暗号保護を外しますか？ vault.db が物理ディスク奪取で平文化される脅威に晒されます**」確認モーダル（MSG-S14）
 2. ユーザに `DECRYPT` という大文字英字を**手入力**させる（コピペ防止のため UI で一時的に paste 抑制）
 3. パスワード再入力（unlock 時と同じパスワード、`subtle::ConstantTimeEq` で比較）
-4. `let confirmation = DecryptConfirmation::confirm("DECRYPT", &reentered_password, &master_password)?;` — Sub-D 型レベル証跡
+4. **Sub-F CLI / GUI 内**: `"DECRYPT"` キーワード入力 + パスワード再入力の二段確認を `subtle::ConstantTimeEq` で実施 → 両方通過後 `let confirmation = DecryptConfirmation::confirm();` で型レベル証跡を構築（Sub-D Rev2 で Clean Arch 観点から `confirm` シグネチャを引数ゼロに簡略化、確認ロジックは Sub-F 責務）
 
 #### 復号 + マイグレーションフェーズ
 
@@ -338,7 +352,7 @@ classDiagram
         +Crypto_CryptoError
         +Persistence_PersistenceError
         +AtomicWriteFailed_stage
-        +ConfirmationRequired
+        // (Sub-D Rev2 で削除: ConfirmationRequired)
         +PlaintextNotUtf8
         +RecoveryAlreadyConsumed
     }
@@ -350,7 +364,7 @@ classDiagram
 | `Crypto(CryptoError)` | `#[error(transparent)]` | KDF / AEAD 失敗の透過、`AeadTagMismatch` / `NonceLimitExceeded` を含む | MSG-S10 / MSG-S11 |
 | `Persistence(PersistenceError)` | `#[error(transparent)]` | `repo.load` / `repo.save` 失敗 | 既存 MSG（vault-persistence 側） |
 | `AtomicWriteFailed { stage, source }` | `#[error("vault migration atomic write failed at stage {stage}")]` | マイグレーション中の atomic write 失敗、原状復帰済み明示 | MSG-S13 |
-| `ConfirmationRequired` | `#[error("decrypt confirmation required")]` | `DecryptConfirmation::confirm` 未通過 | UI 経路で MSG-S14 確認モーダルを再表示 |
+<!-- Sub-D Rev2 で削除: ConfirmationRequired variant 不要。理由: `confirm()` 引数ゼロ化により ConfirmError 経路が消滅、二段確認失敗時のエラー処理は Sub-F 内部のエラー型で完結（MSG-S14 確認モーダル再表示は presentation 層責務）。 -->
 | `PlaintextNotUtf8` | `#[error("decrypted plaintext is not valid UTF-8")]` | 復号成功したが UTF-8 不正（ありえない経路、Sub-C `Verified<Plaintext>` を構築できた時点で AEAD 検証は通っているが、UTF-8 検証は別レイヤー） | 開発者向けエラー（基本的にユーザに見せない、`MSG-S10` カテゴリに統合可） |
 | `RecoveryAlreadyConsumed` | `#[error("recovery disclosure already consumed")]` | `RecoveryDisclosure::disclose` 2 回目呼出（型レベルで防げない move 後の使用は compile_fail だが、`drop_without_disclose` 後の disclose を runtime で防ぐ）| 開発者向けエラー |
 
@@ -426,7 +440,7 @@ REQ-S13「初回 1 度表示」の**型レベル強制**。`RecoveryMnemonic::ex
 
 ### なぜ `vault decrypt` で型レベル二段確認を要求するか
 
-REQ-S07 / Issue #42 §マイグレーション方針で「`--force` でも 1 段は省略不可」が凍結。CLI 実装側 (Sub-F) がうっかり省略する経路を**型シグネチャで物理封鎖**する。`DecryptConfirmation::confirm` を通らずに `decrypt_vault` が呼べないため、Sub-F 実装担当が `--force` で confirmation を bypass しようとしても compile_fail。
+REQ-S07 / Issue #42 §マイグレーション方針で「`--force` でも 1 段は省略不可」が凍結。CLI 実装側 (Sub-F) がうっかり省略する経路を**型シグネチャで物理封鎖**する。`DecryptConfirmation::confirm()` を通らずに `decrypt_vault` が呼べないため、Sub-F 実装担当が `--force` で confirmation を bypass しようとしても compile_fail。**Sub-D Rev2 で `confirm` シグネチャを引数ゼロに簡略化したが、型レベル強制は維持**: `_private: ()` 非可視性 + `decrypt_vault` 引数必須の 2 軸で外部 crate からの construction 経路を構造封鎖。確認ロジック自体（`subtle::ConstantTimeEq` 比較）は Sub-F CLI/GUI 層に責務移譲（Clean Arch、shikomi-infra に UI ロジック侵入させない）。
 
 ### なぜ `Aad` を enum 化するか
 
@@ -439,7 +453,7 @@ REQ-S07 / Issue #42 §マイグレーション方針で「`--force` でも 1 段
 | **C-17**: ヘッダ AEAD タグの AAD はヘッダ全フィールドの正規化バイト列を含む | `VaultEncryptedHeader::canonical_bytes_for_aad` 実装で全フィールド連結を強制、各フィールド境界はテストで bit-exact 検証 | ユニットテスト + property test |
 | **C-18**: `vault_header.kdf_params` 改竄はヘッダ AEAD タグ検証で検出 | C-17 経路で AAD に `kdf_params` を含める | property test（kdf_params の任意 byte 書換 → AEAD 検証失敗）|
 | **C-19**: `RecoveryDisclosure::disclose` は 1 度しか呼べない | `disclose(self)` で所有権消費 | compile_fail doc test |
-| **C-20**: `vault decrypt` は `DecryptConfirmation` を引数で要求、`--force` でも省略不可 | `VaultMigration::decrypt_vault(.., confirmation: DecryptConfirmation)` シグネチャ強制 | compile_fail doc test（confirmation なしでの呼出禁止）|
+| **C-20**: `vault decrypt` は `DecryptConfirmation` を引数で要求、`--force` でも省略不可 | `VaultMigration::decrypt_vault(.., confirmation: DecryptConfirmation)` シグネチャ強制 + `_private: ()` 非可視性で外部 crate 直接構築禁止（Sub-D Rev2 で `confirm()` 引数ゼロ化、確認ロジックは Sub-F 責務移譲）| compile_fail doc test（confirmation なしでの呼出禁止 + 外部 crate からの `_private: ()` 直接構築禁止 E0451）|
 | **C-21**: 平文⇄暗号化マイグレーション中の atomic write 失敗で原状復帰 | `vault-persistence` の `.new` cleanup 経路に委譲、`MigrationError::AtomicWriteFailed` で fail fast | integration test（SIGKILL 論理等価フック、`vault-persistence` TC-I06 同型）|
 
 ## Sub-D → 後続 Sub への引継ぎ
@@ -456,7 +470,7 @@ REQ-S07 / Issue #42 §マイグレーション方針で「`--force` でも 1 段
 
 1. **MSG-S07 文言確定**: `vault rekey` 完了時の再暗号化レコード数表示
 2. **MSG-S11 文言確定**: nonce 上限到達時の `vault rekey` 誘導文言（残操作猶予数値非表示、Sub-C Rev1 凍結指針）
-3. **MSG-S14 確認モーダル**: `vault decrypt` 実行前のリスク明示、`DecryptConfirmation::confirm` への `"DECRYPT"` キーワード入力 UI
+3. **MSG-S14 確認モーダル**: `vault decrypt` 実行前のリスク明示、`"DECRYPT"` キーワード入力 UI + パスワード再入力（`subtle::ConstantTimeEq` 比較）+ 両方通過後 `DecryptConfirmation::confirm()` 呼出（Sub-D Rev2 で確認ロジック自体を Sub-F 責務に移譲）
 4. **MSG-S18 アクセシビリティ代替経路**: `vault recovery-show --print` PDF / `--braille` .brf 出力経路実装
 5. **`shikomi list` ヘッダ**: `[plaintext]` / `[encrypted]` バナー（REQ-S16）の `protection_mode` 判定
 

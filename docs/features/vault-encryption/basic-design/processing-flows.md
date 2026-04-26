@@ -160,7 +160,7 @@
 
 1. CLI / GUI で MSG-S14 確認モーダル（暗号保護除去のリスク 3 点明示）
 2. ユーザに `"DECRYPT"` キーワード入力 + パスワード再入力を要求
-3. `DecryptConfirmation::confirm("DECRYPT", &reentered, &master_password)?` で型レベル証跡構築（C-20、`--force` でも省略不可）
+3. **Sub-F CLI / GUI 内で**: `subtle::ConstantTimeEq` で `"DECRYPT"` キーワード + パスワード再入力の両方一致を判定 → 通過後 `let confirmation = DecryptConfirmation::confirm();` で型レベル証跡構築（C-20、`--force` でも省略不可、Sub-D Rev2 で確認ロジック自体を Sub-F 責務に移譲、shikomi-infra は通過証跡型のみ提供 / Clean Arch 維持）
 4. `unlock_with_password` で復号 + VEK 取得
 5. 全 `EncryptedRecord` を `decrypt_record` で復号（タグ失敗時 MSG-S10）→ `PlaintextRecord` 構築
 6. `SqliteVaultRepository::save(&plaintext_vault)?`（atomic write、`protection_mode='plaintext'` に切替）
