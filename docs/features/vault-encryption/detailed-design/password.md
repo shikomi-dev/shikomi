@@ -4,6 +4,7 @@
 <!-- 配置先: docs/features/vault-encryption/detailed-design/password.md -->
 <!-- 主担当: Sub-A (#39) で trait + Feedback 構造体、Sub-B (#40) で ZxcvbnGate 具象実装、Sub-D (#42) で `vault encrypt` 入口統合 + MSG-S08 文言。 -->
 <!-- Boy Scout Rule (Sub-B): zxcvbn 実装の担当 Sub を Sub-D → Sub-B に再分配（ZxcvbnGate は shikomi-infra::crypto::password 配下の暗号アダプタ層、Sub-D の vault リポジトリ責務とは独立、Clean Arch 境界整合）。 -->
+<!-- Boy Scout Rule (Sub-B Rev2 / 工程5 服部・ペテルギウス指摘): `MasterPassword::expose_secret_bytes_within_crate` は `pub(crate)` では shikomi-infra から呼出不能、`pub` 必須のため関数名を `expose_secret_bytes` に rename し可視性 `pub` に格上げ。可視性ポリシーの差別化意図（鍵バイト = `pub(crate)`、KDF 入力 = `pub` の正規経路）を §可視性ポリシー差別化 に明文化。-->
 
 ## 対象型
 
@@ -24,9 +25,34 @@
 |-------|------|------------|--------|
 | `MasterPassword::new` | `pub` | `(s: String, gate: &dyn PasswordStrengthGate) -> Result<MasterPassword, CryptoError>` | `gate.validate(&s)` が `Ok(())` を返した場合のみ `MasterPassword` を構築。`Err` の場合 `CryptoError::WeakPassword(WeakPasswordFeedback)` を返し、入力 `s` は呼び出し直後に `zeroize` 推奨（呼び出し側責務、Sub-D 設計時に明示） |
 
-### 公開しない経路
+### KDF 入力アクセサ（shikomi-infra への正規経路）
 
-- `expose_secret_bytes_within_crate(&self) -> &[u8]`: `pub(crate)`、Sub-B の Argon2id 入力に渡す経路用
+- `expose_secret_bytes(&self) -> &[u8]`: **`pub`**、Sub-B `Argon2idAdapter::derive_kek_pw` への入力として shikomi-infra から呼び出される**正規経路**。可視性ポリシーは本ファイル §可視性ポリシー差別化（鍵バイトと KDF 入力の差別化）を参照。**外部 bin crate（shikomi-cli / shikomi-gui / shikomi-daemon）からの呼出は禁止**だが、これは型レベル強制ではなく**設計契約 + PR レビューで担保**（rename 前の `_within_crate` 接尾辞による誤誘導を解消、Sub-B Rev2 工程5 服部・ペテルギウス指摘）
+
+### 可視性ポリシー差別化（鍵バイト vs KDF 入力）
+
+shikomi-core が外部 crate に開放するアクセサは **`pub(crate)` と `pub` を意図的に使い分ける**。両者の判断基準を以下に固定する：
+
+| 型 | アクセサ | 可視性 | 理由 |
+|---|---|---|---|
+| `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey` | `expose_within_crate` | **`pub(crate)`** | **鍵バイト**（KEK / VEK / Header AEAD 鍵）は外部 crate（shikomi-infra / shikomi-cli / shikomi-gui）に**生バイトとして渡さない**。AEAD 検証経路は `verify_aead_decrypt_with` のクロージャ越境（`nonce-and-aead.md` §代替案 A 物理結合）または `Verified<Plaintext>` 抽象化で間接アクセスに限定（`crypto-types.md` §`expose_within_crate()` の境界制御） |
+| `MasterPassword` | `expose_secret_bytes` | **`pub`** | **KDF 入力**（パスワード bytes）は Sub-B `Argon2idAdapter::derive_kek_pw` への**正規経路**として shikomi-infra から呼出。`pub(crate)` では crate 越境不可なため `pub` 必須 |
+| `RecoveryMnemonic` | `expose_words` | **`pub`** | **KDF 入力**（24 語配列）は Sub-B `Bip39Pbkdf2Hkdf::derive_kek_recovery` への**正規経路**として shikomi-infra から呼出。同上 |
+
+#### 差別化の根拠
+
+1. **鍵バイト（VEK / KEK / Header AEAD 鍵）の外部漏洩は致命的**: AEAD 操作（暗号化・復号・鍵 wrap）の生鍵を bin crate に渡せば、CLI / GUI 実装ミスで鍵がログ・stdout・クリップボードに漏れるリスクが**型レベルで防げない**。`pub(crate)` で crate 内に閉じ込め、`Verified<Plaintext>` または検証関数のクロージャ越境で抽象化する
+2. **KDF 入力は派生元情報、外部経路で必要**: パスワード bytes / 24 語配列は **shikomi-infra の Argon2id / BIP-39 アダプタが消費する**ため、crate 越境必須。`pub(crate)` に絞れば shikomi-infra から呼べず、KDF アダプタが shikomi-core 内に侵入する Clean Arch 違反を招く
+3. **bin crate からの誤呼出は PR レビューで防ぐ**: `MasterPassword::expose_secret_bytes` を shikomi-cli / shikomi-gui が直接呼ぶことは設計契約違反。型レベル強制不可だが、(a) `tech-stack.md` §依存方向ルール、(b) Sub-D / Sub-F PR レビュー時の「`expose_secret_bytes` / `expose_words` 呼出元 grep 確認」をチェックリスト化、(c) **アクセサ名から `_within_crate` 接尾辞を削除**することで「crate 内のみ」という嘘の暗黙契約を解消
+
+#### 関連 CI 検証
+
+- `scripts/ci/sub-b-static-checks.sh` に「shikomi-cli / shikomi-gui / shikomi-daemon 内で `expose_secret_bytes` / `expose_words` の呼出が存在しない」grep gate を追加（Sub-B Rev2 以降の Boy Scout で `sub-b-static-checks.sh` 拡張、または Sub-D 設計時に CI ジョブ化）
+
+#### Sub-A 既存契約との整合
+
+- `Vek` / `Kek` / `HeaderAeadKey` の `expose_within_crate` は**従来通り `pub(crate)` 維持**（`crypto-types.md` 変更なし）
+- 関数名の `_within_crate` 接尾辞は「`pub(crate)` 可視性」を表す命名規約として **`Vek` / `Kek` / `HeaderAeadKey` でのみ継続使用**。`MasterPassword` / `RecoveryMnemonic` では削除（rename 後）
 
 ### 提供トレイト
 

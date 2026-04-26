@@ -26,6 +26,10 @@
 |-------|------|------------|--------|
 | `RecoveryMnemonic::from_words` | `pub` | `[String; 24]` を受取り `Result<RecoveryMnemonic, CryptoError>` | 配列長は型で 24 強制。各単語の BIP-39 wordlist 検証 / チェックサム検証は Sub-B（`bip39` crate）に委譲（Sub-A の `from_words` は文字列長 / ASCII 性のみ軽量検証） |
 
+### KDF 入力アクセサ（shikomi-infra への正規経路）
+
+- `expose_words(&self) -> &[String; 24]`: **`pub`**、Sub-B `Bip39Pbkdf2Hkdf::derive_kek_recovery` への入力として shikomi-infra から呼び出される**正規経路**。可視性ポリシーは `password.md` §可視性ポリシー差別化（鍵バイト = `pub(crate)` / KDF 入力 = `pub` の差別化）を参照。**外部 bin crate からの直接呼出は禁止**だが、これは型レベル強制ではなく**設計契約 + PR レビューで担保**（Sub-B Rev2 工程5 服部・ペテルギウス指摘で `_within_crate` 接尾辞を削除し可視性 `pub` を明文化）
+
 ### Drop 契約
 
 - `Zeroizing<[String; 24]>` の `Drop` で各 `String` のヒープバッファが zeroize される
