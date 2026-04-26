@@ -332,11 +332,7 @@ pub fn make_default_os_lock_signal() -> Box<dyn OsLockSignal> {
     {
         Box::new(LinuxLockSignal::new())
     }
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "linux"
-    )))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let (mock, _tx) = MockLockSignal::new();
         Box::new(mock)

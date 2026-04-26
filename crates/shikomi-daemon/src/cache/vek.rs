@@ -270,6 +270,9 @@ mod tests {
         let cache_a = VekCache::new();
         let cache_b = cache_a.clone();
         cache_a.unlock(dummy_vek()).await.unwrap();
-        assert!(cache_b.is_unlocked().await, "clone must share inner Arc state");
+        assert!(
+            cache_b.is_unlocked().await,
+            "clone must share inner Arc state"
+        );
     }
 }
