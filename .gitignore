@@ -1,1 +1,8 @@
 .cargo/config.toml
+
+# Rust build artifacts
+target/
+**/target/
+
+# OS specific
+.DS_Store
