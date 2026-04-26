@@ -27,10 +27,13 @@ getrandom     = { workspace = true }
 zxcvbn        = { workspace = true }
 secrecy       = { workspace = true }
 zeroize       = { workspace = true }
-# Sub-C (#41) AEAD アダプタ (AES-256-GCM)。`subtle` は aes-gcm が transitive で
-# 引くため**直接追加しない** (nonce-and-aead.md §`subtle` v2.5+ 制約: tag 比較は
-# aes-gcm 内部の constant-time 経路に委譲)。
+# Sub-C (#41) AEAD アダプタ (AES-256-GCM)。aes-gcm が transitive で `subtle` を
+# 引いていたが、Sub-E (#43) `verify_password` で **VEK の bit-exact 比較** を
+# `subtle::ConstantTimeEq` 経由で実施する責務が `vek-cache-and-ipc.md` §F-E4 step 2
+# で確定したため、direct dep として明示昇格する (transitive 依存は version 漂流
+# リスクがあるため Sub-E では direct で固定する)。
 aes-gcm       = { workspace = true }
+subtle        = { workspace = true }
 
 [dev-dependencies]
 tempfile     = { workspace = true }
