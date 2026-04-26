@@ -70,11 +70,11 @@
 6. `PermissionGuard::verify_file(self.paths.vault_db())` — 失敗なら `InvalidPermission` を即 return
 7. `Connection::open_with_flags(self.paths.vault_db(), OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX)` — 失敗は `Sqlite` で return
 8. `PRAGMA application_id` を `query_row`、取得値が `SchemaSql::APPLICATION_ID` でなければ `SchemaMismatch`
-9. `PRAGMA user_version` を `query_row`、取得値が `[USER_VERSION_SUPPORTED_MIN, USER_VERSION_SUPPORTED_MAX]` 範囲外なら `SchemaMismatch`
+9. `PRAGMA user_version` を `query_row`、取得値が `[USER_VERSION_SUPPORTED_MIN, USER_VERSION_SUPPORTED_MAX]` 範囲外なら **`UnsupportedYet { feature: "vault schema version", supported_range: (V_MIN, V_MAX), actual }`**（Sub-D Rev、REQ-P11 意味論変更）。範囲内なら通常経路継続（v1 暗号化スキーマも受入対象）
 10. `SELECT_VAULT_HEADER` を実行、0 行なら `Corrupted { reason: MissingVaultHeader }`、2 行以上は `CHECK(id=1)` により物理的に起きないが防御で `Corrupted { reason: InvalidRowCombination }`
-11. `Mapping::row_to_vault_header(&row)` で `VaultHeader` を再構築（失敗は `Corrupted { reason: ..., source: Some(domain_error) }` に統合、`classes.md` §設計判断 §12 参照）
-12. `VaultHeader::protection_mode() == ProtectionMode::Encrypted` なら **`UnsupportedYet { feature: "encrypted vault persistence", tracking_issue: TRACKING_ISSUE_ENCRYPTED_VAULT }` を即 return**（step 11 で得た `header` を使わず、records を読まない）
-13. `Vault::new(header)` で集約を構築
+11. `Mapping::row_to_vault_header(&row)` で `VaultHeader` を再構築（失敗は `Corrupted { reason: ..., source: Some(domain_error) }` に統合、`classes.md` §設計判断 §12 参照）。**暗号化モード時は `VaultEncryptedHeader`（`kdf_salt` / `wrapped_vek_by_pw` / `wrapped_vek_by_recovery` / `nonce_counter` / `kdf_params` / `header_aead_envelope`）を構築、AEAD 検証 / wrap_VEK 復号は `vault-persistence` の責務外**（呼出側 = `VaultMigration` service が担う、`vault-encryption/detailed-design/repository-and-migration.md` §設計判断 §単一リポジトリ vs 暗号化専用リポジトリ で凍結）
+12. **（Sub-D Rev で削除）** 旧: `protection_mode == Encrypted` で `UnsupportedYet` 即 return。新: 暗号化モードも通常経路で進行。**`vault-persistence` は暗号化に「無知」のまま据え置き**（責務境界、Issue #42 凍結）、暗号文は不透明 BLOB として読み出すのみ
+13. `Vault::new(header)` で集約を構築（plaintext / encrypted 両モード対応）
 14. `SELECT_RECORDS_ORDERED` を実行、各行を `Mapping::row_to_record` で `Record` に変換
 15. 各 `Record` を `Vault::add_record` で集約に追加（**ドメイン側でモード整合とID重複が検証される**）。失敗は `Corrupted { table: "records", row_key: Some(uuid_str), reason: InvalidRowCombination, source: Some(domain_error) }` にラップして return
 16. `audit::exit_ok_load(record_count, protection_mode, elapsed_ms)` を発行、`VaultLock` が drop され共有ロックが解放される
@@ -85,7 +85,7 @@
 ### `SqliteVaultRepository::save(&self, vault: &Vault)`
 
 1. `audit::entry_save(&self.paths, vault.record_count())` — 監査ログに save 開始を記録
-2. `vault.protection_mode() == ProtectionMode::Encrypted` なら **`UnsupportedYet { ... }` を即 return**（Fail Fast、step 3 以降のファイル操作を一切しない）
+2. **（Sub-D Rev で削除）** 旧: `protection_mode == Encrypted` で `UnsupportedYet` 即 return。新: 暗号化モードも通常経路で進行。`Mapping::vault_header_to_params(vault.header())` が `VaultEncryptedHeader` の場合は `kdf_salt` / `wrapped_vek_*` / `nonce_counter` / `kdf_params` / `header_aead_*` カラムに**不透明 BLOB**として書込（AEAD 計算は `vault-persistence` の責務外、呼出側 = `VaultMigration::encrypt_vault` 経由で既に AEAD 計算済の値を素通し）
 3. `PermissionGuard::ensure_dir(self.paths.dir())` — 作成 or 既存強制
 4. `VaultLock::acquire_exclusive(&self.paths)?` — 排他ロック取得。別プロセスが排他/共有ロックを保持中なら `Locked { path, holder_hint }` を即 return（Fail Fast、待機・再試行しない）。以降 step 7 完了まで `VaultLock` がスコープに生存し drop 時に自動解放（RAII）
 5. `AtomicWriter::detect_orphan(self.paths.vault_db_new())` — 残存なら `OrphanNewFile` を return（ユーザ操作待ち、AC-14 の save 側検証）

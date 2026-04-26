@@ -118,7 +118,7 @@
 
 - `Debug`: **`[REDACTED HEADER AEAD KEY]` 固定文字列**を出力（CI grep で文字列リテラルを検証、`Vek` / `Kek<_>` と同等の機械検証ルール）
 - `Drop`: 上記
-- **`AeadKey`**（**Sub-D 担当の Boy Scout、Sub-C で予告済**）: `Vek` / `Kek<_>` と同形パターンで `with_secret_bytes` impl。Sub-D の vault ヘッダ独立 AEAD 検証経路で `AesGcmAeadAdapter::encrypt_record(&header_key, ...)` / `decrypt_record(&header_key, ...)` を呼ぶために必要。Sub-C 段階では **`Vek` / `Kek<_>` の impl のみ確定**、`HeaderAeadKey` impl は `nonce-and-aead.md` §Sub-D 引継ぎ で予告
+- **`AeadKey`**（**Sub-D で Boy Scout 完成**、Sub-C で予告した同形パターンを実装）: `fn with_secret_bytes<R>(&self, f: impl FnOnce(&[u8;32]) -> R) -> R { f(self.expose_within_crate()) }`。Sub-D の vault ヘッダ独立 AEAD 検証経路で `AesGcmAeadAdapter::encrypt_record(&header_key, ..., &Aad::HeaderEnvelope(canonical_bytes), &[])` / `decrypt_record(&header_key, ..., &Aad::HeaderEnvelope(...), ...)` を呼ぶために必要。`Vek` / `Kek<_>` impl と同形（Sub-C 凍結契約 C-15 維持、`expose_within_crate` の `pub(crate)` 可視性は変更せず）。Sub-D で `repository-and-migration.md` §`HeaderAeadEnvelope` と同期
 
 ### Sub-0 凍結の型表現
 

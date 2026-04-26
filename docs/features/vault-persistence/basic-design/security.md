@@ -109,9 +109,9 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 | # | カテゴリ | 対応状況 |
 |---|---------|---------|
 | A01 | Broken Access Control | **主対応** — ①vault ファイル / ディレクトリを OS パーミッション（Unix `0600`/`0700`）・NTFS owner-only DACL（所有者のみ、継承破棄、ACE ちょうど 1 個、完全マスク）で保護、起動時検証（REQ-P06 / P07、§Windows owner-only DACL の適用戦略）。②`SHIKOMI_VAULT_DIR` の **パストラバーサル・シンボリックリンク・保護領域アクセスを `VaultPaths::new` で拒否**（§vault ディレクトリ検証、`InvalidVaultDir`）。③プロセス間 advisory lock（`VaultLock`）で daemon 未起動時の並行書込レースを封じる |
-| A02 | Cryptographic Failures | **本 Issue 範囲外**（平文モード前提）。暗号化モードは別 Issue。ただし `kdf_salt` / `wrapped_vek_*` / `ciphertext` / `nonce` / `aad` のスキーマは先行定義し、将来の暗号化実装で atomic write・パーミッション層をそのまま再利用できる |
+| A02 | Cryptographic Failures | **Sub-D (#42) で解禁**（旧: 「本 Issue 範囲外、暗号化モードは別 Issue」）。`vault-persistence` は引き続き暗号化に「無知」のまま据え置き（責務境界、Issue #42 凍結）、暗号文は `Vec<u8>` 不透明 BLOB として永続化、CHECK 制約のみで構造整合担保。AEAD 計算 / wrap_VEK 復号 / ヘッダ独立 AEAD タグ検証は **`vault-encryption` feature の `VaultMigration` service**（shikomi-infra 内、`AesGcmAeadAdapter` 経由）が担う。`kdf_salt` / `wrapped_vek_*` / `ciphertext` / `nonce` / `aad` のスキーマ先行定義に加え、Sub-D で `kdf_params` / `header_aead_*` カラムを `PRAGMA user_version` bump + `ALTER TABLE` で追加（既存 plaintext vault に影響なし） |
 | A03 | Injection | **主対応** — 生 SQL 連結禁止、`rusqlite::params!` マクロ経由のみ（REQ-P12）。`PRAGMA` は静的リテラルのみ。コードレビュー + grep + clippy で機械的検証 |
-| A04 | Insecure Design | **主対応** — atomic write / `.new` 残存検出 / Fail Secure（勝手に復旧しない）を設計レベルで強制。暗号化モードを静かにスキップせず `UnsupportedYet` で明示拒否（REQ-P11） |
+| A04 | Insecure Design | **主対応** — atomic write / `.new` 残存検出 / Fail Secure（勝手に復旧しない）を設計レベルで強制。**未対応バージョン**の暗号化スキーマは静かにスキップせず `UnsupportedYet { feature: "vault schema version", supported_range, actual }` で明示拒否（REQ-P11 Sub-D Rev、旧「暗号化モード全般を拒否」から意味論変更）。Sub-D 完了で **v1 暗号化スキーマは正規受入**、未来 v999 等のみ拒否 |
 | A05 | Security Misconfiguration | **主対応** — パーミッション設定を作成時に**強制**し、起動時に**検証**する。ユーザ誤設定を検知（REQ-P06 / P07）。`journal_mode=DELETE` を明示的に設定（WAL のチェックポイント不整合を避ける）。`unsafe_code` は `permission/windows.rs` のみ §unsafe_code 整合方針で明示例外化 |
 | A06 | Vulnerable Components | `rusqlite` バンドル版（`features = ["bundled"]`）で外部 SQLite に依存しない。SQLite 本体のアドバイザリは `cargo deny` で検出。`windows` crate は Microsoft 公式 |
 | A07 | Auth Failures | 対象外 — 本 Issue は認証ロジックを持たない。認証は暗号化モード（別 Issue）でマスターパスワード経由 |

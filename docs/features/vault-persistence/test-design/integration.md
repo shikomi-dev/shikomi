@@ -34,31 +34,58 @@
 
 ---
 
-## TC-I03: 暗号化モード vault を save → UnsupportedYet
+## TC-I03: 暗号化モード vault を save → 成功（Sub-D Rev で TC 意味論変更）
+
+<!-- Boy Scout Rule (Issue #42 / Sub-D): REQ-P11 改訂により旧 TC-I03 を退役。
+     旧: 「暗号化モード vault を save → UnsupportedYet で拒否」（Sub-D 完了前の Fail Fast 検証）
+     新: 「暗号化モード v1 vault を save → 成功」（Sub-D 解禁後の正常系検証）
+     退役理由: REQ-P11 意味論が「暗号化モード全般拒否」→「未対応バージョン拒否」に変更
+     置換先 TC ID: 本 TC-I03（同 ID 維持、内容差替え）
+     新規追加 TC: TC-I04a（v999 拒否、本ファイル §TC-I04a 参照） -->
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I03 |
-| 対応する受入基準ID | AC-03 |
-| 対応する工程 | 詳細設計（REQ-P11、save アルゴリズム step 1） |
-| 種別 | 異常系 |
-| 前提条件 | `VaultHeader::new_encrypted` で暗号化モードのヘッダを組立可能であること（`shikomi-core` の API による） |
-| 操作 | 1. `SqliteVaultRepository::with_dir(tempdir)` 2. 暗号化モードの `Vault` を構築 3. `repo.save(&vault)` |
-| 期待結果 | `Err(PersistenceError::UnsupportedYet { feature: "encrypted vault persistence", .. })` が返る。`vault.db.new` が作成されていない（step 2 以降のファイル操作が一切実行されていない） |
+| 対応する受入基準ID | AC-03（Sub-D Rev で意味論変更） |
+| 対応する工程 | 詳細設計（REQ-P11 Sub-D Rev、save アルゴリズム改訂後） |
+| 種別 | 正常系 |
+| 前提条件 | `VaultHeader::new_encrypted` で v1 暗号化モードのヘッダを組立、`VaultEncryptedHeader` の全フィールド（kdf_salt / wrapped_vek_by_pw / wrapped_vek_by_recovery / nonce_counter / kdf_params / header_aead_envelope）を不透明 BLOB として用意可能（`shikomi-core` API、`vault-encryption/detailed-design/repository-and-migration.md` §`VaultEncryptedHeader`） |
+| 操作 | 1. `SqliteVaultRepository::with_dir(tempdir)` 2. v1 暗号化モードの `Vault` を構築（暗号文・nonce・tag は不透明 BLOB として既に AEAD 計算済 fixture を使用、`vault-persistence` 自身は AEAD 計算しない） 3. `repo.save(&vault)` |
+| 期待結果 | `Ok(())` が返る。`vault.db` に `protection_mode='encrypted'` 行が永続化される。CHECK 制約（`kdf_salt 16B` / `wrapped_vek_* 28B+` / `header_aead_*` の長さ）が全て満たされる |
 
 ---
 
-## TC-I04: 暗号化モード vault.db を load → UnsupportedYet
+## TC-I04: 暗号化モード vault.db を load → 成功（Sub-D Rev で TC 意味論変更）
+
+<!-- Boy Scout Rule (Issue #42 / Sub-D): 旧 TC-I04 「暗号化モード vault.db を load → UnsupportedYet で拒否」を退役。
+     退役理由: REQ-P11 意味論変更（同上）
+     置換先 TC ID: 本 TC-I04（同 ID 維持、内容差替え） -->
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-I04 |
-| 対応する受入基準ID | AC-04 |
-| 対応する工程 | 詳細設計（REQ-P11、load アルゴリズム step 10） |
-| 種別 | 異常系 |
-| 前提条件 | tempdir 配下に `protection_mode='encrypted'` を持つ vault.db を `rusqlite` で直接作成済み（スキーマは本 Issue の DDL に準拠、暗号化カラムに適当な BLOB を挿入） |
+| 対応する受入基準ID | AC-04（Sub-D Rev で意味論変更） |
+| 対応する工程 | 詳細設計（REQ-P11 Sub-D Rev、load アルゴリズム改訂後） |
+| 種別 | 正常系 |
+| 前提条件 | tempdir 配下に v1 `protection_mode='encrypted'` を持つ vault.db を `rusqlite` で直接作成済み（Sub-D で改訂した DDL に準拠、`kdf_params` / `header_aead_*` カラムに有効な値を挿入） |
 | 操作 | `repo.load()` |
-| 期待結果 | `Err(PersistenceError::UnsupportedYet { .. })` が返る |
+| 期待結果 | `Ok(Vault)` が返る。`vault.header()` が `VaultHeader::Encrypted(VaultEncryptedHeader { ... })` で、各フィールドが永続化値と bit-exact 一致。`vault.records()` の各 `Record` が `Record::Encrypted(EncryptedRecord)` variant で構築される。**AEAD 検証 / wrap_VEK 復号は `vault-persistence` の責務外、`VaultMigration` 側で別途検証**（本 TC スコープ外） |
+
+---
+
+## TC-I04a: 未対応バージョンの vault.db を load → UnsupportedYet（Sub-D Rev 新規追加）
+
+<!-- Boy Scout Rule (Issue #42 / Sub-D): REQ-P11 改訂で「未対応バージョン拒否」の Fail Fast 経路を新規 TC として追加。 -->
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I04a |
+| 対応する受入基準ID | AC-04（バージョン範囲外検証、Sub-D Rev 新規） |
+| 対応する工程 | 詳細設計（REQ-P11 Sub-D Rev、load step 9 改訂後） |
+| 種別 | 異常系 |
+| 前提条件 | tempdir 配下に `PRAGMA user_version = 999`（`USER_VERSION_SUPPORTED_MAX` を超過する未来バージョン）を持つ vault.db を `rusqlite` で直接作成済み |
+| 操作 | `repo.load()` |
+| 期待結果 | `Err(PersistenceError::UnsupportedYet { feature: "vault schema version", supported_range: (V_MIN, V_MAX), actual: 999 })` が返る。step 10 以降（`SELECT_VAULT_HEADER` 等）のクエリが**実行されない**（Fail Fast、攻撃面情報漏洩回避） |
 
 ---
 

@@ -34,6 +34,13 @@
 | REQ-S05 | `shikomi_core::crypto::aead_key` | `crates/shikomi-core/src/crypto/aead_key.rs` | `AeadKey` trait（`with_secret_bytes` クロージャインジェクション、Sub-B Rev2 可視性ポリシー差別化との整合） | **Sub-C 新規追加（Boy Scout Rule、shikomi-core 側に trait のみ、impl は `Vek` / `Kek<_>` / `HeaderAeadKey`）** |
 | REQ-S05 | `shikomi_infra::crypto::aead::aes_gcm` | `crates/shikomi-infra/src/crypto/aead/aes_gcm.rs` | `AesGcmAeadAdapter`（AES-256-GCM、`encrypt_record` / `decrypt_record` / `wrap_vek` / `unwrap_vek` 4 メソッド、AAD = `Aad::to_canonical_bytes()` 26B、NIST CAVP KAT、`Zeroizing<Vec<u8>>` 中間バッファ） | **Sub-C 新規追加** |
 | REQ-S05 / REQ-S14 | `shikomi_core::crypto::key` / `shikomi_core::crypto::header_aead` | 上記 `key.rs` / `header_aead.rs` | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` への `AeadKey` impl 追加（**`expose_within_crate` の `pub(crate)` 可視性は変更せず**、trait 経由のみ外部 crate に開放） | **Sub-C で Boy Scout 改訂**（`HeaderAeadKey` impl は Sub-D で同形パターン追加） |
+| REQ-S06 | `shikomi_core::vault::header` | `crates/shikomi-core/src/vault/header.rs` | `VaultEncryptedHeader`（version / created_at / kdf_salt / wrapped_vek_by_pw / wrapped_vek_by_recovery / nonce_counter / kdf_params / header_aead_envelope）/ `KdfParams { m, t, p }`（`Argon2idParams::FROZEN_OWASP_2024_05` の永続化形）/ `HeaderAeadEnvelope { ciphertext, nonce, tag }`（ヘッダ独立 AEAD タグ） | **Sub-D 新規追加 / Boy Scout**（既存 `VaultHeader::Encrypted` skeleton を完成形に） |
+| REQ-S06 | `shikomi_core::vault::record` | `crates/shikomi-core/src/vault/record.rs` | `EncryptedRecord` 追加（既存 `PlaintextRecord` と並列、`Record::Encrypted(EncryptedRecord)` variant）| **Sub-D 新規追加 / Boy Scout** |
+| REQ-S13 | `shikomi_core::vault::recovery_disclosure` | `crates/shikomi-core/src/vault/recovery_disclosure.rs` | `RecoveryDisclosure` / `RecoveryWords`（24 語初回 1 度表示の型レベル強制、`disclose(self)` 所有権消費 + `Display` / `Serialize` 未実装で永続化禁止）| **Sub-D 新規追加** |
+| REQ-S05 | `shikomi_core::crypto::header_aead` | 上記 `header_aead.rs` | `HeaderAeadKey` への `AeadKey` impl 追加（Sub-C で予告した Boy Scout 完成）| **Sub-D で Boy Scout 改訂** |
+| REQ-S06 / REQ-S07 | `shikomi_infra::persistence::vault_migration` | `crates/shikomi-infra/src/persistence/vault_migration/{mod,encrypt_flow,decrypt_flow,rekey_flow}.rs` | `VaultMigration` service（`encrypt_vault` / `decrypt_vault` / `unlock_with_password` / `unlock_with_recovery` / `rekey` / `change_password` の 6 メソッド、`Argon2idHkdfVekProvider` + `AesGcmAeadAdapter` + `Rng` + `ZxcvbnGate` を組合せ）| **Sub-D 新規追加** |
+| REQ-S07 | `shikomi_infra::persistence::sqlite::*` | 既存 `mod.rs` / `mapping.rs` / `schema.rs` | 暗号化モード分岐の解禁（`UnsupportedYet` 即 return 削除、`VaultEncryptedHeader` ↔ vault_header 行 / `EncryptedRecord` ↔ records 行の `Mapping` 拡張、`PRAGMA user_version` bump で `kdf_params` / `header_aead_*` カラム追加）| **Sub-D で改訂**（横断的変更、`vault-persistence` feature への影響） |
+| REQ-S06 | `shikomi_core::error` | 既存 `error.rs` | `MigrationError` 列挙型追加（`WeakPassword` / `Crypto` / `Persistence` / `AtomicWriteFailed` / `ConfirmationRequired` / `PlaintextNotUtf8` / `RecoveryAlreadyConsumed`）+ `DecryptConfirmation` 型レベル二段確認証跡 | **Sub-D 新規追加** |
 
 ```
 ディレクトリ構造（Sub-A 完了時点、+ が新規、~ が改訂）:
@@ -306,11 +313,64 @@ classDiagram
 7. **Drop 連鎖**: `Plaintext` / `bytes` / `kek_pw` は scope 抜けで全 zeroize（L2 対策）
 8. `vek` を Sub-E の VEK キャッシュに格納（`tokio::sync::RwLock<Option<Vek>>`、unlock〜lock 間滞留）
 
-### Sub-D〜F の処理フロー
+### REQ-S06 / REQ-S07 / REQ-S13: 暗号化 Vault リポジトリ + マイグレーション（Sub-D 主機能）
+
+詳細は `detailed-design/repository-and-migration.md` 参照。本書では概要フローのみ。
+
+#### F-D1: `vault encrypt`（平文 → 暗号化、片方向昇格）
+
+1. `MasterPassword::new(plaintext_password, &gate)?` 強度ゲート（Sub-A/B、強度 ≥ 3、失敗時 MSG-S08）
+2. `KdfSalt` / VEK / mnemonic entropy / nonce を CSPRNG（Sub-B `Rng`）で生成
+3. KEK_pw（`Argon2idAdapter::derive_kek_pw`）/ KEK_recovery（`Bip39Pbkdf2Hkdf::derive_kek_recovery`）導出（Sub-B）
+4. `wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` を `AesGcmAeadAdapter::wrap_vek` で構築（Sub-C）
+5. 既存平文 vault 読込 → 各 record を `encrypt_record` で AEAD 暗号化（Sub-C、AAD = `Aad::Record { record_id, vault_version, created_at }`）
+6. ヘッダ AEAD タグ envelope 構築（`HeaderAeadKey::from_kek_pw` + `Aad::HeaderEnvelope(canonical_bytes)`、ヘッダ全フィールド改竄を 1 variant 検出、契約 C-17/C-18）
+7. `SqliteVaultRepository::save(&encrypted_vault)?`（vault-persistence の atomic write、`.new` → fsync → rename）
+8. `RecoveryDisclosure` 返却（呼出側 = Sub-E daemon / Sub-F CLI が**1 度だけ** `disclose` してユーザに表示、再表示禁止を型レベル強制 C-19）
+9. KEK / VEK / MasterPassword / mnemonic は scope 抜けで Drop 連鎖 zeroize（L2 対策）
+
+#### F-D2: `vault unlock`（暗号化 vault の復号・メモリロード）
+
+1. `MasterPassword::new` 強度ゲート（再入力、再構築失敗で MSG-S08 経路）
+2. `SqliteVaultRepository::load(&self)?` で `EncryptedVault` 読込
+3. **ヘッダ AEAD タグ検証**: `HeaderAeadKey::from_kek_pw(&kek_pw)` で AEAD 鍵派生 → `decrypt_record` で AAD = `Aad::HeaderEnvelope(canonical_bytes)` のタグ検証、失敗時 MSG-S10
+4. `wrapped_VEK_by_pw` を `unwrap_vek` で復号 → 32B 長さ検証 → `Vek::from_array` 復元（Sub-C `unwrap_vek_with_password` 同型）
+5. `(Vault, Vek)` を Sub-E daemon に返却 → daemon は `Vek` を `tokio::sync::RwLock<Option<Vek>>` でキャッシュ（Sub-E 詳細）
+
+#### F-D3: `vault decrypt`（暗号化 → 平文、片方向降格、リスク方向）
+
+1. CLI / GUI で MSG-S14 確認モーダル（暗号保護除去のリスク 3 点明示）
+2. ユーザに `"DECRYPT"` キーワード入力 + パスワード再入力を要求
+3. `DecryptConfirmation::confirm("DECRYPT", &reentered, &master_password)?` で型レベル証跡構築（C-20、`--force` でも省略不可）
+4. `unlock_with_password` で復号 + VEK 取得
+5. 全 `EncryptedRecord` を `decrypt_record` で復号（タグ失敗時 MSG-S10）→ `PlaintextRecord` 構築
+6. `SqliteVaultRepository::save(&plaintext_vault)?`（atomic write、`protection_mode='plaintext'` に切替）
+7. **`save` 失敗時**: `.new` cleanup で原状（暗号化 vault）復帰、MSG-S13
+
+#### F-D4: `rekey`（VEK 入替、nonce overflow / 明示 rekey）
+
+1. **トリガ**: `NonceCounter::increment` が `Err(NonceLimitExceeded)` → MSG-S11 で `vault rekey` 案内 → ユーザ実行（自動）、または `shikomi vault rekey` 明示実行（手動）
+2. `unlock_with_password` で旧 VEK 取得
+3. 新 VEK / 新 nonce 生成 → 全 record を旧 VEK で復号 → 新 VEK で再暗号化
+4. `wrapped_VEK_by_pw` / `wrapped_VEK_by_recovery` を新 VEK で wrap し直し
+5. `nonce_counter` を `NonceCounter::new()` でリセット
+6. ヘッダ AEAD envelope を新 wrapped + 新 nonce_counter で再構築
+7. `SqliteVaultRepository::save` で atomic write、MSG-S07 で再暗号化レコード数表示
+
+#### F-D5: `change-password`（マスターパスワード変更、O(1)、VEK 不変）
+
+1. `unlock_with_password(current)` で旧パスワードで復号、VEK 保持
+2. `MasterPassword::new(new, &gate)?` 新パスワード強度ゲート
+3. **新 `KdfSalt` 生成**（旧 salt の流用禁止、salt-password ペア更新で旧 brute force 進捗を無効化）
+4. 新 KEK_pw を Argon2id 導出 → `wrapped_VEK_by_pw` のみ新 KEK_pw で wrap し直し
+5. **`wrapped_VEK_by_recovery` / `nonce_counter` は変更しない**（VEK 不変、リカバリ経路維持、record AEAD nonce 衝突確率変化なし）
+6. ヘッダ AEAD envelope を**新 kdf_salt / 新 wrapped_VEK_by_pw**で再構築
+7. `SqliteVaultRepository::save` で atomic write、MSG-S05 で完了通知
+
+### Sub-E〜F の処理フロー
 
 各 Sub の設計工程で本ファイルを READ → EDIT で追記する。
 
-- F-D*: 暗号化 vault リポジトリ + 平文⇄暗号化マイグレーション + ヘッダ独立 AEAD タグ — Sub-D
 - F-E*: VEK キャッシュ + IPC V2 — Sub-E
 - F-F*: vault 管理サブコマンド + `vault rekey` フロー — Sub-F
 
