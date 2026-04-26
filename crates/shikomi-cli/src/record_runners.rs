@@ -125,9 +125,7 @@ pub(crate) fn run_add(
             }
             id
         }
-        RepositoryHandle::Ipc(ipc) => {
-            ipc.add_record(input.kind, input.label, input.value, now)?
-        }
+        RepositoryHandle::Ipc(ipc) => ipc.add_record(input.kind, input.label, input.value, now)?,
     };
 
     if !quiet {

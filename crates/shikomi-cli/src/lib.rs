@@ -321,18 +321,18 @@ fn emit_error_and_exit(err: &CliError, locale: Locale) -> ExitCode {
     ExitCode::from(err)
 }
 
-
 // -------------------------------------------------------------------
-// I/O 薄ラッパ
+// I/O 薄ラッパ (record_runners と build_handle 両方から使うため pub)
 // -------------------------------------------------------------------
 
-fn print_stdout(s: &str) {
+#[doc(hidden)]
+pub fn print_stdout(s: &str) {
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(s.as_bytes());
 }
 
-fn eprint_stderr(s: &str) {
+#[doc(hidden)]
+pub fn eprint_stderr(s: &str) {
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(s.as_bytes());
 }
-
