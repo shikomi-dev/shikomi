@@ -67,7 +67,9 @@ pub enum MigrationError {
     },
 
     /// リカバリ経路 unlock が必要 (パスワード経路で `MasterPassword::new` 失敗等)。
-    /// MSG-S12 リカバリ経路へ誘導。
+    /// MSG-S09 (a) パスワード違いカテゴリの「リカバリ経路 (`vault unlock --recovery`) も可能」
+    /// 案内へ変換 (Sub-E IPC V2 / Sub-F CLI 文言確定責務)。
+    /// MSG-S12 はリカバリ入力検証失敗 (`CryptoError::InvalidMnemonic` 等) 専用で本 variant とは別経路。
     #[error("recovery path required")]
     RecoveryRequired,
 }
@@ -123,6 +125,12 @@ mod tests {
     }
 
     /// DC-7: `match` 網羅で warning 0 件 (variant 増減検出)。
+    ///
+    /// `#[non_exhaustive]` は **defining crate (本 crate) 内では無効** であり、
+    /// 9 variant を全列挙した時点で exhaustive。ワイルドカード `_` は付けない
+    /// (TC-D-U12 設計書指示 + TC-D-S07 grep gate で機械検証)。
+    /// variant 追加時は本テストが **実際に** 先に壊れ (E0004 non-exhaustive patterns)、
+    /// 設計書 / テスト設計 / 実装の四層同期漏れを早期検出する。
     #[test]
     fn all_variants_match_exhaustively() {
         let e = MigrationError::AlreadyEncrypted;
@@ -136,9 +144,6 @@ mod tests {
             MigrationError::RecoveryAlreadyConsumed => "recovery-consumed",
             MigrationError::AtomicWriteFailed { .. } => "atomic-write-failed",
             MigrationError::RecoveryRequired => "recovery-required",
-            // `#[non_exhaustive]` で外部 crate には wildcard が必須だが
-            // crate 内 match では網羅すれば exhaustive。将来 variant 追加時は本テストが先に壊れる。
-            _ => "unknown",
         };
     }
 }
