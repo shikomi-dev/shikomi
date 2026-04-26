@@ -43,12 +43,6 @@ pub enum MigrationError {
     #[error("vault is not encrypted")]
     NotEncrypted,
 
-    /// `decrypt_vault` で `DecryptConfirmation` 引数が必要だが
-    /// 構築前経路で呼出された (本来は型シグネチャで防がれるが防衛的に variant 化)。
-    /// MSG-S14 経路で UI 確認モーダル再表示。
-    #[error("decrypt confirmation required")]
-    ConfirmationRequired,
-
     /// 復号に成功した平文 record が UTF-8 不正だった。
     /// AEAD 検証通過後の追加検証層、ありえない経路の防衛的 variant。
     #[error("decrypted plaintext is not valid UTF-8")]
@@ -138,7 +132,6 @@ mod tests {
             MigrationError::Domain(_) => "domain",
             MigrationError::AlreadyEncrypted => "already-encrypted",
             MigrationError::NotEncrypted => "not-encrypted",
-            MigrationError::ConfirmationRequired => "confirmation-required",
             MigrationError::PlaintextNotUtf8 => "plaintext-not-utf8",
             MigrationError::RecoveryAlreadyConsumed => "recovery-consumed",
             MigrationError::AtomicWriteFailed { .. } => "atomic-write-failed",
