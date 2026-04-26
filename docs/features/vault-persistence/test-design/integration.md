@@ -2,7 +2,27 @@
 
 > このファイルは `test-design/index.md` の §5 に相当する。テストマトリクス・モック方針・実行手順は `index.md` を参照。
 
-> **ツール選択根拠**: このシステムは Rust ライブラリ crate であり、エントリポイントは Rust 公開 API（`SqliteVaultRepository::save` / `load` / `exists`）。Rust の統合テスト（`crates/shikomi-infra/tests/` 配下）で `tempfile::TempDir` を使い、実際の SQLite ファイルに対して結合テストを行う。外部 API / 外部サービスへの依存はなく、モックは不要（全て本物の `rusqlite` + ファイルシステムを使用）。OS パーミッション検証ケースは `#[cfg(unix)]` でガードし Windows CI では自動スキップ。
+> **ツール選択根拠**: このシステムは Rust ライブラリ crate であり、エントリポイントは Rust 公開 API（`SqliteVaultRepository::save` / `load` / `exists`）。Rust の統合テスト（`crates/shikomi-infra/tests/` 配下）で `tempfile::TempDir` を使い、実際の SQLite ファイルに対して結合テストを行う。外部 API / 外部サービスへの依存はなく、モックは不要（全て本物の `rusqlite` + ファイルシステムを使用）。OS パーミッション検証ケースは `#[cfg(unix)]` でガードし Windows CI では自動スキップ、Windows 固有 ACL / file-handle semantics 検証ケースは `#[cfg(windows)]` でガードし Linux/macOS CI では自動スキップ。
+
+> **`#[cfg(windows)] #[ignore]` での回避禁止**（Issue #65 由来の防衛線）: Win 固有の TC（TC-I24〜I29 等）を `#[ignore]` で囲んで CI green を装う PR は問答無用で**却下対象**（CI スコープ錯覚 = Bug-F-003 の再演温床、`../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合）。Win ランナーが落ちる場合は根本原因の articulate を伴った修正を必須とする。テスト担当（涅マユリ）が `#[ignore]` を解剖時に発見した場合は実験不全として即時差戻し。
+
+---
+
+## 0. Issue #65 由来の外部 I/O 依存マップ
+
+Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I/O 境界を全て列挙し、characterization 状態を明示する（assumed mock 禁止、テスト戦略ガイドの「外部I/O依存マップ」要件に対応）。
+
+| 外部 I/O 依存 | 経由クレート / API | テスト方式 | raw fixture | factory | characterization 状態 |
+|------------|-----------------|----------|-----------|---------|---------------------|
+| SQLite ファイル（`vault.db.new`、`-wal` / `-shm` / `-journal` サイドカー含む） | `rusqlite::Connection`（バンドル SQLite） | **本物** を `tempfile::TempDir` 配下で使用（モック不要、結合テスト方針に従う） | 不要（実 SQLite を直接利用） | 不要 | **済** — 実 SQLite で結合テスト可能 |
+| ファイルシステム rename | `std::fs::rename`（Unix: `rename(2)` / Windows: 内部で `MoveFileExW`） | **本物** を tempdir で使用 | 不要 | 不要 | **済** — `std::fs` 直接利用 |
+| Windows rename 一過性エラー（`ERROR_ACCESS_DENIED 5` / `ERROR_SHARING_VIOLATION 32` / `ERROR_LOCK_VIOLATION 33`） | OS 直返（`std::io::Error::raw_os_error()` で識別） | TC-I29 で並行 read open による race を**実環境で再現**（モック不要） | **要保存**: PR #64 失敗 CI ログ 5 件のスタックトレース全文 https://github.com/shikomi-dev/shikomi/actions/runs/24950291068/job/73058649443 を `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` に保存（マスク不要、公開 CI ログ） | 不要（一過性エラーは OS 直返、合成不要） | **要起票** — 実装者は本ファイルを修正前のベースラインとして固定し、修正後の CI ログ（5 件 PASS）と diff 比較する責務を負う |
+| `MoveFileExW` Win32 API（`ReplaceFileW` 経由） | `windows` crate `Win32::Storage::FileSystem::ReplaceFileW`（cfg(windows)） | **本物** を実 Windows CI ランナーで実行（仮想環境 Wine では `MoveFileExW` 挙動が再現できないため）| 不要 | 不要 | **済** — `test-infra-windows` ジョブで raw 検証 |
+
+**reviewer 却下基準**:
+- raw fixture（PR #64 失敗ログ）が `tests/fixtures/characterization/raw/issue65/` に保存されないまま実装 PR 提出 → **[却下]**
+- TC-I29 が `mockall` 等で `MoveFileExW` をモックする → **[却下]**（実環境の race 検出にならない、assumed mock 違反）
+- `test-infra-windows` ジョブを CI 必須 check から外す PR → **[却下]**（CI スコープ錯覚再演）
 
 ---
 
@@ -415,4 +435,43 @@
 
 ---
 
-*対応 Issue: #10, #14 / 親ドキュメント: `test-design/index.md`*
+## TC-I28: Sub-D `vault_migration_integration` 5 件 green 化（Windows、Issue #65 受入）
+
+> **背景**: Sub-D（Issue #42 / PR #58）由来の integration test `crates/shikomi-infra/tests/vault_migration_integration.rs` が **Windows ランナーのみ** で 5 件全失敗していた（PR #64 CI ログ参照）。Issue #65 修正のミニマム受入条件として、これら 5 件が修正後の Windows CI で PASS することを本 TC で明示的に検証対象化する（既存テスト = 受入観点の SSoT、新規テスト追加なしで AC を満たす）。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I28 |
+| 対応する受入基準ID | AC-18（Issue #65 受入、新規） |
+| 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::write_new` クローズ順序契約 / `fsync_and_rename` Win 限定 retry、`../detailed-design/flows.md` §`save` step 6.10〜6.13 / step 7.3 / `../detailed-design/classes.md` §設計判断 §3.1） |
+| 種別 | 異常系の green 化（修正前は Windows で `AtomicWriteFailed { stage: Rename, source: code:5 PermissionDenied }`、修正後は PASS） |
+| 前提条件 | `feature/issue-65-windows-atomic-rename` ブランチ。`AtomicWriter::write_new` に `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()` 明示呼出が実装されている。`AtomicWriter::fsync_and_rename` に `cfg(windows)` 限定の rename retry（50ms × 5 回）が実装されている。raw fixture `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` がベースライン保存されている |
+| 操作 | Windows CI ランナー上で `cargo test -p shikomi-infra --test vault_migration_integration` を実行（テスト関数: `tc_d_i01_encrypt_then_unlock_password_roundtrip` / `tc_d_i02_encrypt_then_decrypt_roundtrip` / `tc_d_i03_rekey_then_unlock_with_same_password_observation` / `tc_d_i04_rekey_then_decrypt_vault_all_records_succeed` / `tc_d_i05_req_p11_v1_accepted_via_vault_migration` の 5 件） |
+| 期待結果 | 5 件全て PASS（exit code == 0、`test result: ok. 5 passed; 0 failed`）。Linux / macOS でも引き続き PASS。raw fixture（PR #64 失敗ログ）と CI ログ diff を比較し「`AtomicWriteFailed { stage: Rename, code: 5 }` パターンが消えた」ことを証跡として記録する。**`#[cfg(windows)] #[ignore]` で 5 件を回避する PR は問答無用で却下**（防衛線、本ファイル冒頭注記参照） |
+
+---
+
+## TC-I29: 並行 read open 中の rename race を retry で吸収（Windows、Issue #65 補強検証）
+
+> **背景**: Issue #65 の根本対策（`Connection::close()` 明示 + WAL checkpoint + `journal_mode=DELETE`）に加えて、Win Indexer / Defender 等の一過性ハンドル残存に対する補強として実装される `cfg(windows)` 限定 rename retry（50ms × 5 回）の機能を**決定的に再現するテスト**。並行スレッドが `vault.db` を read open している短時間ウィンドウ中に save を発火させ、retry が成功して save が `Ok(())` を返すことを直接検証する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29 |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、新規） |
+| 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::fsync_and_rename` step 7.3 Windows 分岐、`../detailed-design/flows.md`） |
+| 種別 | 異常系（race 状態下での正常完了検証） |
+| 前提条件 | `#[cfg(windows)]` ガード付き。`tempfile::TempDir` を使用。初期 `vault.db` を save 済（記録済レコード 1 件）。`std::thread::spawn` で補助スレッドを起動できる |
+| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、150ms（retry 上限 250ms 内）保持してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
+| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜3 回目で rename が成功する）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: 250ms 超過なら fail（retry の上限契約違反） |
+
+**実装上の注意（Win API 直叩き、unsafe）**:
+- `std::fs::OpenOptions` は標準では `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` を立てるため race 再現にならない。`std::os::windows::fs::OpenOptionsExt::share_mode(0)` で **share_mode = 0**（排他 open）を指定する必要がある
+- 補助スレッドの保持時間（150ms）が retry 上限（250ms）の内側であることが本 TC の決定性を担保する条件。CI ランナーの遅延を考慮し ±50ms の許容窓を設ける
+- 並行スレッドが retry 上限を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）が、本 TC では正常 retry 経路の検証なので 150ms に固定する
+
+---
+
+*対応 Issue: #10, #14, #65 / 親ドキュメント: `test-design/index.md`*
+
+*改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① §0 「Issue #65 由来の外部 I/O 依存マップ」を新規追加（`rusqlite` / `std::fs::rename` / `MoveFileExW` の境界明示、PR #64 失敗ログを raw fixture として要起票化、assumed mock 禁止の reviewer 却下基準明記）② TC-I28 追加（Sub-D `vault_migration_integration` 5 件 green 化を Issue #65 受入条件として明示、AC-18）③ TC-I29 追加（並行 read open 中の rename race を retry が吸収することを `share_mode(0)` で決定的に再現、AC-19）④ ツール選択根拠に `#[cfg(windows)] #[ignore]` 回避禁止注記を追加（Bug-F-003 再演防止）*

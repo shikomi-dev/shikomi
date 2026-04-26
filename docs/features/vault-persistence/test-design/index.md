@@ -15,7 +15,7 @@
 | ファイル | 内容 |
 |---------|------|
 | `index.md`（本ファイル） | 概要・受入基準・テストマトリクス・E2E設計・モック方針・実行手順・カバレッジ基準 |
-| `integration.md` | 結合テスト設計（TC-I01〜TC-I23）詳細 |
+| `integration.md` | 結合テスト設計（TC-I01〜TC-I29）詳細。§0 に Issue #65 由来の外部 I/O 依存マップ |
 | `unit.md` | ユニットテスト設計（TC-U01〜TC-U16）詳細 |
 
 ---
@@ -43,6 +43,8 @@
 | AC-15 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない（REQ-P14 監査ログ秘密漏洩防止） | 結合 |
 | AC-16 | `SHIKOMI_VAULT_DIR` に `/etc/` / `..` 含むパス / シンボリックリンクを指定するとそれぞれ `PersistenceError::InvalidVaultDir` で拒否される（REQ-P15 `VaultPaths::new` 7段階バリデーション） | 結合（Unix） |
 | AC-17 | `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（REQ-P13 advisory lock 競合検知） | 結合 |
+| AC-18 | Sub-D 由来 integration test `vault_migration_integration.rs` の 5 件（`tc_d_i01`〜`i05`）が **Windows ランナーで PASS** する（`AtomicWriter` のクローズ順序契約 + WAL/journal サイドカー解放 + Win 限定 rename retry の合成効果による既存テスト緑化、Issue #65） | 結合（Win） |
+| AC-19 | 並行スレッドが `vault.db` を `share_mode = 0` で 150ms 保持中に `save()` を発火しても、`cfg(windows)` 限定 rename retry（50ms × 5 回 = 上限 250ms）が一過性ロックを吸収して `Ok(())` を返す（Issue #65 補強の機能検証） | 結合（Win） |
 
 > **リスク観点**（合格判定軸外）: **R-01**: save 中クラッシュ（SIGKILL 相当）耐性 — 非決定的で CI 不適。論理等価な決定的テストは **AC-06 / TC-I06** で保証済み。手動探索テストとしてのみ残置。
 
@@ -91,6 +93,8 @@
 | TC-U14 | AC-16 | REQ-P15 | `VaultPaths::new` に `..` を含むパスを渡す → `Err(InvalidVaultDir { reason: PathTraversal })` | ユニット | 異常系 |
 | TC-U15 | AC-16 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
 | TC-U16 | AC-16 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
+| TC-I28 | AC-18 | REQ-P04 | Win CI で `cargo test -p shikomi-infra --test vault_migration_integration` を実行 → 5 件全 PASS（修正前の `AtomicWriteFailed { stage: Rename, code:5 PermissionDenied }` パターンが消滅、PR #64 失敗ログとの diff を証跡） | 結合（Win） | 異常系の green 化 |
+| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で 150ms 保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が 250ms 以内に完了 | 結合（Win） | 異常系（race 状態下での正常完了検証） |
 
 ---
 
@@ -186,12 +190,13 @@ echo "=== 全テスト PASS ==="
 
 | 観点 | 基準 |
 |------|------|
-| 受入基準の網羅 | AC-01〜AC-17 全項目が TC-I01〜TC-I23 / TC-U01〜TC-U16 のいずれかで網羅されていること（§3 テストマトリクス参照） |
+| 受入基準の網羅 | AC-01〜AC-19 全項目が TC-I01〜TC-I29 / TC-U01〜TC-U16 のいずれかで網羅されていること（§3 テストマトリクス参照） |
 | 正常系 | 全 正常系テストケース必須（TC-I02, I16, I17, I18, I19, I23, TC-U01〜U03, U06, U09, U11） |
 | 異常系 | 全 11 種 `PersistenceError` バリアント（`Io` / `Sqlite` / `Corrupted` / `InvalidPermission` / `InvalidVaultDir` / `OrphanNewFile` / `AtomicWriteFailed` / `SchemaMismatch` / `UnsupportedYet` / `CannotResolveVaultDir` / `Locked`）が少なくとも 1 ケースで発生・検証されること。`panic!` が一切発生しないことを確認 |
 | 境界値 | ゼロレコード（TC-I19）、絵文字ラベル（TC-I08）、ゼロバイトファイル（TC-I13）、不正バイト列（TC-I14） |
 | カバレッジ数値 | `cargo llvm-cov` 行カバレッジ 80% 以上（AC-10） |
 | Fail Secure ケース | `.new` 残存 load 側（TC-I05）・`.new` 残存 save 側（TC-I15）・OS パーミッション異常（TC-I07, TC-I12, TC-U10, TC-U12）・暗号化モード拒否（TC-I03, TC-I04）・VaultDir バリデーション（TC-I22, TC-U13〜U16）・ロック競合（TC-I21）が**必須**（省略不可） |
+| Win file-handle semantics（Issue #65） | Sub-D 既存 5 件（TC-I28）と並行 read open race（TC-I29）の双方が Windows ランナーで PASS することが**必須**。**`#[cfg(windows)] #[ignore]` での回避は問答無用で却下**（CI スコープ錯覚 = Bug-F-003 の再演温床、`integration.md` 冒頭注記 / `../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合） |
 
 ---
 
@@ -200,4 +205,5 @@ echo "=== 全テスト PASS ==="
 *改訂 v3: 涅マユリ（テスト担当）/ 2026-04-23 — 第2回レビュー差し戻し対応: ⑤ AC-01 範囲を REQ-P15 まで更新 ⑥ AC-15〜17 追加（REQ-P14/P15/P13 対応） ⑦ TC-I21〜I23（VaultLock競合・VaultPaths::newバリデーション・tracing秘密漏洩）追加 ⑧ TC-U01 更新（VaultPaths::new が Result 返却）⑨ TC-U13〜U16（VaultPaths::new 異常系 4 件）追加 ⑩ カバレッジ基準のバリアント数を 11 種に修正*
 *改訂 v4: 涅マユリ（テスト担当）/ 2026-04-23 — 第3回レビュー差し戻し対応: ⑪ AC 番号を要件側受入基準#1〜#17 と完全 1:1 に整合（誤った統合版）*
 *改訂 v5: 涅マユリ（テスト担当）/ 2026-04-23 — キャプテン決定「17 項目体系確定」に基づき requirements-analysis.md 現行体系と 1:1 合致する形へ再修正。セルとのマスターテーブル合意（2026-04-23）後に実施。① AC-03=save/load 統合を廃止し AC-03=save のみ・AC-04=load のみに分離 ② 旧 AC-05（クラッシュ参考観点）を削除し AC-05=.new 残存 load に戻す ③ AC-06=write_new_only（R-01 決定的等価）を確定 ④ AC-07〜AC-17 を requirements-analysis.md 現行の順序に完全一致 ⑤ R-01 をリスク観点として明示 ⑥ integration.md・unit.md・テストマトリクス全 AC 参照を追随更新*
-*対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード）*
+*改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① AC-18 追加（Sub-D `vault_migration_integration` 5 件 Win green 化を受入条件化）② AC-19 追加（並行 read open race を retry が吸収する補強検証）③ TC-I28・TC-I29 をマトリクスに追加 ④ カバレッジ基準の AC 範囲を AC-19 まで拡張、TC 範囲を TC-I29 まで拡張 ⑤ Fail Secure ケースに「Win file-handle semantics」行を追加し `#[cfg(windows)] #[ignore]` 回避禁止を SSoT 化（`integration.md` §0 外部 I/O 依存マップ・冒頭注記と二重露出による忘却防止）*
+*対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード） / #65 fix(persistence): Windows AtomicWrite rename 失敗*
