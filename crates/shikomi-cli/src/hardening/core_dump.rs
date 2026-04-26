@@ -11,10 +11,8 @@
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
 //!   §セキュリティ設計 §不変条件・契約 C-41
-//!   「shikomi-cli プロセスは core dump 抑制
-//!    Linux: `prctl(PR_SET_DUMPABLE, 0)` /
-//!    macOS: `setrlimit(RLIMIT_CORE, 0)` /
-//!    Windows: `SetErrorMode(SEM_NOGPFAULTERRORBOX)`」
+//!   shikomi-cli プロセスは core dump 抑制 (Linux: `prctl(PR_SET_DUMPABLE, 0)` /
+//!   macOS: `setrlimit(RLIMIT_CORE, 0)` / Windows: `SetErrorMode(SEM_NOGPFAULTERRORBOX)`)
 //!
 //! 不変条件:
 //! - 失敗しても起動を止めない（Fail Kindly）。OS が呼出を拒否した場合 (例えば
