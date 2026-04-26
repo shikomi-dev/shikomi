@@ -78,6 +78,102 @@ pub enum Subcommand {
     /// レコードを削除する。
     #[command(about = "Remove a record", visible_alias = "rm")]
     Remove(RemoveArgs),
+    /// vault 暗号化管理サブコマンド群（Sub-F #44、F-F1〜F-F7）。
+    ///
+    /// 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
+    /// §設計判断 vault サブコマンドのグループ化（案 B 採用）
+    #[command(
+        subcommand,
+        about = "Vault encryption management commands (encrypt/decrypt/unlock/lock/change-password/rekey/rotate-recovery)"
+    )]
+    Vault(VaultSubcommand),
+}
+
+// -------------------------------------------------------------------
+// VaultSubcommand（Sub-F #44）
+// -------------------------------------------------------------------
+
+/// `shikomi vault {subcommand}` の 7 サブコマンド group（cli-subcommands.md §F-F1〜F-F7）。
+///
+/// `recovery-show` は廃止し、24 語の出力経路は `encrypt/rekey/rotate-recovery` の
+/// `--output {screen,print,braille,audio}` フラグに統合（Rev1 ペガサス致命指摘 ① 解消）。
+#[derive(ClapSubcommand, Debug)]
+pub enum VaultSubcommand {
+    /// 平文 vault → 暗号化 vault 初回マイグレーション (F-F1)。
+    /// 完了時に新生成 recovery 24 語を `--output` 経路で表示する。
+    #[command(about = "Encrypt the vault (F-F1) and disclose recovery 24 words once")]
+    Encrypt(EncryptArgs),
+    /// 暗号化 vault → 平文 vault 戻し (F-F2)。確認入力 `DECRYPT` 必須。
+    #[command(about = "Decrypt the vault back to plaintext (F-F2, requires DECRYPT confirmation)")]
+    Decrypt,
+    /// 暗号化 vault のロック解除 (F-F3、password 経路 / `--recovery` 経路)。
+    #[command(about = "Unlock the vault (F-F3, password or --recovery path)")]
+    Unlock(UnlockArgs),
+    /// 暗号化 vault を明示ロック (F-F4)。VEK 即 zeroize。
+    #[command(about = "Lock the vault explicitly (F-F4, VEK zeroize)")]
+    Lock,
+    /// マスターパスワード変更 (F-F5、O(1)、VEK 不変)。
+    #[command(about = "Change master password (F-F5, O(1) wrap update)")]
+    ChangePassword,
+    /// VEK 入替 + recovery 24 語ローテーション atomic 実行 (F-F6)。
+    /// 新 24 語を `--output` 経路で表示する。
+    #[command(about = "Rekey VEK and rotate recovery words (F-F6)")]
+    Rekey(OutputArgs),
+    /// recovery 24 語のみローテーション atomic 実行 (F-F7)。
+    /// 新 24 語を `--output` 経路で表示する。
+    #[command(about = "Rotate recovery words only (F-F7)")]
+    RotateRecovery(OutputArgs),
+}
+
+// -------------------------------------------------------------------
+// VaultSubcommand 子型（EncryptArgs / UnlockArgs / OutputArgs / OutputTarget）
+// -------------------------------------------------------------------
+
+/// `vault encrypt` の引数（F-F1）。
+#[derive(Args, Debug)]
+pub struct EncryptArgs {
+    /// 強度ゲート緩和の明示同意フラグ (REQ-S08、`MasterPassword::new` 警告経路)。
+    #[arg(long)]
+    pub accept_limits: bool,
+
+    /// 24 語の出力経路 (Sub-F §アクセシビリティ代替経路 MSG-S18、C-39)。
+    #[arg(long, value_enum, default_value = "screen")]
+    pub output: OutputTarget,
+}
+
+/// `vault unlock` の引数（F-F3）。
+#[derive(Args, Debug)]
+pub struct UnlockArgs {
+    /// recovery 24 語経路で unlock する (`--recovery`)。
+    /// 未指定時はパスワード経路。
+    #[arg(long)]
+    pub recovery: bool,
+}
+
+/// `vault rekey` / `rotate-recovery` の共通引数（24 語出力経路）。
+#[derive(Args, Debug)]
+pub struct OutputArgs {
+    /// 24 語の出力経路 (Sub-F §アクセシビリティ代替経路 MSG-S18、C-39)。
+    #[arg(long, value_enum, default_value = "screen")]
+    pub output: OutputTarget,
+}
+
+/// 24 語の出力先（C-39 排他指定 + アクセシビリティ自動切替）。
+///
+/// 自動切替経路（`SHIKOMI_ACCESSIBILITY=1` / OS スクリーンリーダー検出）は
+/// Phase 5 以降で `accessibility::output_target::resolve` に集約する。
+/// Phase 2 では clap 派生型のみ提供し、実体は `Screen` 経路のみ wire（Phase 5 拡張）。
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub enum OutputTarget {
+    /// 端末標準出力（既定）。`NO_COLOR` / 非 TTY 時はカラー無効化。
+    Screen,
+    /// ハイコントラスト PDF 出力（Phase 5 で実装）。
+    Print,
+    /// BRF（Braille Ready Format）テキスト出力（Phase 5 で実装）。
+    Braille,
+    /// OS TTS への直接パイプ出力（Phase 5 で実装）。
+    Audio,
 }
 
 // -------------------------------------------------------------------
@@ -211,6 +307,81 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(args.subcommand, Subcommand::Remove(_)));
+    }
+
+    // ---------------------------------------------------------------
+    // Sub-F (#44) Phase 2: VaultSubcommand clap 派生型の最小受理確認
+    // 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
+    // §clap 派生型構造（Subcommand 拡張）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_cli_args_parses_vault_encrypt_with_default_output() {
+        let args = CliArgs::try_parse_from(["shikomi", "vault", "encrypt"]).unwrap();
+        match args.subcommand {
+            Subcommand::Vault(VaultSubcommand::Encrypt(a)) => {
+                assert_eq!(a.output, OutputTarget::Screen);
+                assert!(!a.accept_limits);
+            }
+            other => panic!("expected Vault(Encrypt(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cli_args_parses_vault_encrypt_with_accept_limits_and_braille() {
+        let args = CliArgs::try_parse_from([
+            "shikomi",
+            "vault",
+            "encrypt",
+            "--accept-limits",
+            "--output",
+            "braille",
+        ])
+        .unwrap();
+        match args.subcommand {
+            Subcommand::Vault(VaultSubcommand::Encrypt(a)) => {
+                assert!(a.accept_limits);
+                assert_eq!(a.output, OutputTarget::Braille);
+            }
+            other => panic!("expected Vault(Encrypt(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cli_args_parses_vault_decrypt_lock_change_password() {
+        for sub in ["decrypt", "lock", "change-password"] {
+            let args = CliArgs::try_parse_from(["shikomi", "vault", sub]).unwrap();
+            assert!(matches!(args.subcommand, Subcommand::Vault(_)));
+        }
+    }
+
+    #[test]
+    fn test_cli_args_parses_vault_unlock_recovery_flag() {
+        let args = CliArgs::try_parse_from(["shikomi", "vault", "unlock", "--recovery"]).unwrap();
+        match args.subcommand {
+            Subcommand::Vault(VaultSubcommand::Unlock(a)) => assert!(a.recovery),
+            other => panic!("expected Vault(Unlock(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cli_args_parses_vault_rekey_with_print_output() {
+        let args =
+            CliArgs::try_parse_from(["shikomi", "vault", "rekey", "--output", "print"]).unwrap();
+        match args.subcommand {
+            Subcommand::Vault(VaultSubcommand::Rekey(a)) => {
+                assert_eq!(a.output, OutputTarget::Print);
+            }
+            other => panic!("expected Vault(Rekey(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cli_args_rejects_password_flag_on_vault_unlock() {
+        // C-38 / 服部指摘: パスワードを CLI 引数として受け付けない契約。
+        // `--password` は **clap 派生型に定義しない**ため不明引数として拒否される。
+        let result = CliArgs::try_parse_from(["shikomi", "vault", "unlock", "--password", "x"]);
+        assert!(result.is_err());
     }
 
     #[test]

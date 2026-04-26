@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use time::OffsetDateTime;
 
-use cli::{AddArgs, CliArgs, EditArgs, RemoveArgs, Subcommand};
+use cli::{AddArgs, CliArgs, EditArgs, RemoveArgs, Subcommand, VaultSubcommand};
 use input::{AddInput, ConfirmedRemoveInput, EditInput};
 use io::ipc_vault_repository::IpcVaultRepository;
 use presenter::Locale;
@@ -213,6 +213,18 @@ pub fn run() -> ExitCode {
 
     let quiet = args.quiet;
 
+    // Sub-F (#44) Phase 2: vault サブコマンドは daemon IPC 経路に**強制**する。
+    // V1 の `RepositoryHandle::Sqlite` 経路は vault に直接触らない契約 (Phase 2 規定、
+    // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
+    // dispatch を分岐させる。`--ipc` フラグ未指定でも vault 経路は IPC 強制。
+    if let Subcommand::Vault(vault) = &args.subcommand {
+        let result = run_vault(vault, locale, quiet);
+        return match result {
+            Ok(()) => ExitCode::Success,
+            Err(err) => emit_error_and_exit(&err, locale),
+        };
+    }
+
     let handle = match build_handle(&args, locale, quiet) {
         Ok(h) => h,
         Err(err) => return emit_error_and_exit(&err, locale),
@@ -223,12 +235,50 @@ pub fn run() -> ExitCode {
         Subcommand::Add(a) => run_add(&handle, a, locale, quiet),
         Subcommand::Edit(a) => run_edit(&handle, a, locale, quiet),
         Subcommand::Remove(a) => run_remove(&handle, a, locale, quiet),
+        // 上の `if let Subcommand::Vault(_)` early return で処理済（網羅性のため `_` で吸収）。
+        Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
     };
 
     match result {
         Ok(()) => ExitCode::Success,
         Err(err) => emit_error_and_exit(&err, locale),
     }
+}
+
+// -------------------------------------------------------------------
+// Sub-F (#44) Phase 2: vault サブコマンド dispatch
+// -------------------------------------------------------------------
+
+/// vault サブコマンド経路（IPC 強制）の dispatch。
+///
+/// daemon socket 解決 → `IpcVaultRepository::connect` → handshake (V2) →
+/// 7 サブコマンドの usecase 呼出。`--ipc` フラグの有無によらず IPC 経路で動作する
+/// （vault 管理は daemon の責務、Phase 2 規定）。
+fn run_vault(vault: &VaultSubcommand, locale: Locale, quiet: bool) -> Result<(), CliError> {
+    let repo = connect_vault_ipc(locale, quiet)?;
+    match vault {
+        VaultSubcommand::Encrypt(a) => usecase::vault::encrypt::execute(&repo, a, locale, quiet),
+        VaultSubcommand::Decrypt => usecase::vault::decrypt::execute(&repo, locale, quiet),
+        VaultSubcommand::Unlock(a) => usecase::vault::unlock::execute(&repo, a, locale, quiet),
+        VaultSubcommand::Lock => usecase::vault::lock::execute(&repo, locale, quiet),
+        VaultSubcommand::ChangePassword => {
+            usecase::vault::change_password::execute(&repo, locale, quiet)
+        }
+        VaultSubcommand::Rekey(a) => usecase::vault::rekey::execute(&repo, a, locale, quiet),
+        VaultSubcommand::RotateRecovery(a) => {
+            usecase::vault::rotate_recovery::execute(&repo, a, locale, quiet)
+        }
+    }
+}
+
+/// vault サブコマンド経路の `IpcVaultRepository` 構築（IPC 強制 + opt-in 警告省略）。
+///
+/// vault 管理は IPC 専用の責務領域であり、`build_handle` が出力する
+/// `MSG-CLI-051` (opt-in 警告) は文脈不一致のため省略する。
+fn connect_vault_ipc(_locale: Locale, _quiet: bool) -> Result<IpcVaultRepository, CliError> {
+    let socket_path = IpcVaultRepository::default_socket_path()?;
+    let repo = IpcVaultRepository::connect(&socket_path)?;
+    Ok(repo)
 }
 
 // -------------------------------------------------------------------
