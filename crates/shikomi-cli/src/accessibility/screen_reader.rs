@@ -1,20 +1,21 @@
-//! OS スクリーンリーダー検出 (C-39 自動切替経路、Sub-F #44 Phase 7)。
+//! OS スクリーンリーダー検出 (C-39 自動切替経路、Sub-F #44 Phase 7 + 工程5)。
 //!
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
-//!   §アクセシビリティ代替経路 自動切替経路 (macOS `defaults read
-//!   com.apple.universalaccess` / Windows `Narrator.exe` プロセス検出 /
-//!   Linux Orca DBus 経路)
+//!   §アクセシビリティ代替経路 自動切替経路 (Linux / Windows は本実装、
+//!   macOS は **Phase 8 に明示的に先送り** 確定)
 //!
-//! 設計判断:
-//! - **Linux**: Orca DBus 経路は `zbus` 等の重い依存を必要とするため、`/proc`
-//!   ベースの **`orca` プロセス検出**で代替する (依存ゼロ、検出精度十分)。
-//! - **macOS**: `defaults read com.apple.universalaccess voiceOverOnOffKey` の
-//!   subprocess 起動コストを避けるため、**環境変数 `VOICEOVER_RUNNING=1`** での
-//!   ヒント検出 + 失敗時は false を返す (Phase 7 minimal、`defaults` subprocess は
-//!   将来 minor で追加検討)。
-//! - **Windows**: PowerShell `Get-Process Narrator` の subprocess を起動して
-//!   exit code で判定する (PowerShell は Windows 標準同梱、追加依存なし)。
+//! 現行実装と Phase 8 引継ぎ (工程5 ペテルギウス指摘で設計書 SSoT と同期):
+//! - **Linux** (本実装): Orca DBus 経路は `zbus` 等の重い依存を必要とするため、
+//!   `pgrep -x orca` プロセス検出で代替 (依存ゼロ、検出精度十分)。
+//! - **Windows** (本実装): PowerShell `Get-Process Narrator` の subprocess を起動
+//!   して exit code で判定 (PowerShell は Windows 標準同梱、追加依存なし)。
+//! - **macOS** (Phase 8 先送り): subprocess 起動コスト + `defaults read
+//!   com.apple.universalaccess` のキー名 macOS バージョン依存性 + sandbox/権限
+//!   分離の再評価が必要なため、**Phase 8 で `Cocoa` accessibility API
+//!   (`NSWorkspace`) 直接呼出 or `defaults` subprocess 経由で本実装**する。
+//!   当面は `VOICEOVER_RUNNING=1` 環境変数 hint 経路のみで判定 (env 未設定時は
+//!   false 返却 = `Screen` 経路維持、明示 `--output braille` で常時 braille 経路)。
 //! - 検出失敗 / 未対応 OS は false を返す (Fail Kindly、`Screen` 経路継続)。
 //!
 //! 不変条件:
