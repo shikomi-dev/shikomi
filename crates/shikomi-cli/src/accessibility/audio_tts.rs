@@ -24,10 +24,21 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use shikomi_core::ipc::SerializableSecretBytes;
+use zeroize::Zeroizing;
 
 use crate::error::CliError;
 
 /// 24 語を OS TTS subprocess に音声合成させる。
+///
+/// 工程5 服部指摘 (BLOCKER 3) 解消: payload は `Zeroizing<Vec<u8>>` で構築、
+/// drop 時に親プロセス heap で zeroize される (subprocess 側の文字列は別アドレス
+/// 空間で本ライブラリの責務外)。`expose_secret() -> &[u8]` から直接 byte 消費。
+///
+/// 工程5 服部指摘 (BLOCKER 4) 解消: Windows は **`Err(unsupported)`** で fail
+/// fast。PowerShell `-Command` 経由だと ScriptBlockLogging (Event ID 4104) で
+/// 24 語が SIEM 転送可能な形で Event Log に記録される攻撃面があり、本ライブラリ
+/// 単体では遮断不能。Windows 向け本実装は **`shikomi-windows-tts.exe`** helper
+/// バイナリ + COM 経由 SAPI 呼出で Phase 8 以降に再設計する。
 ///
 /// # Errors
 /// - `CliError::Persistence`: subprocess 起動失敗 / stdin 書出失敗 / 未対応 OS。
@@ -44,9 +55,9 @@ pub fn speak(words: &[SerializableSecretBytes]) -> Result<(), CliError> {
     {
         let stdin = child.stdin.as_mut().ok_or_else(stdin_unavailable_err)?;
         stdin
-            .write_all(payload.as_bytes())
+            .write_all(&payload)
             .map_err(|e| io_err("tts stdin", e))?;
-    } // stdin drop で EOF 通知
+    } // stdin drop で EOF 通知、payload は Drop で zeroize
 
     let status = child.wait().map_err(|e| io_err("tts wait", e))?;
     if !status.success() {
@@ -58,14 +69,20 @@ pub fn speak(words: &[SerializableSecretBytes]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// 24 語を読み上げ用 1 行プレーンテキストに整形する (番号 + word)。
-fn build_payload(words: &[SerializableSecretBytes]) -> String {
-    let mut out = String::new();
+/// 24 語を読み上げ用 byte 列に整形する (`zeroize::Zeroizing` で drop 時に消去)。
+///
+/// 工程5 BLOCKER 3 解消: `to_lossy_string_for_handler()` 経路を排除し、
+/// `expose_secret()` から `&[u8]` を直接 byte コピー。中間 `String` 生成なし。
+fn build_payload(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
     for (i, w) in words.iter().enumerate() {
-        let plain = w.to_lossy_string_for_handler();
-        out.push_str(&format!("{}. {}. ", i + 1, plain));
+        let prefix = format!("{}. ", i + 1);
+        out.extend_from_slice(prefix.as_bytes());
+        let bytes = w.inner().expose_secret();
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b". ");
     }
-    out
+    Zeroizing::new(out)
 }
 
 /// 現在の OS に対応した TTS subprocess 起動コマンドを構築する。
@@ -101,15 +118,20 @@ fn build_command_inner() -> Result<Command, CliError> {
 
 #[cfg(target_os = "windows")]
 fn build_command_inner() -> Result<Command, CliError> {
-    // PowerShell 経由で SAPI を呼び出す。stdin から読んだテキストを Speak。
-    // `Add-Type` で System.Speech をロード、`$Input | ForEach-Object` で stdin 行を Speak。
-    let mut cmd = Command::new("powershell");
-    cmd.arg("-NoProfile").arg("-Command").arg(
-        "Add-Type -AssemblyName System.Speech; \
-         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-         $Input | ForEach-Object { $s.Speak($_) }",
-    );
-    Ok(cmd)
+    // 工程5 服部指摘 (BLOCKER 4) 解消: Windows audio TTS は本ライブラリ単体では
+    // ScriptBlockLogging (Event ID 4104) 経由の 24 語平文漏洩を遮断できない。
+    // PowerShell `-Command` だとパイプから流れた `$_` 変数 (= 24 語) が
+    // ScriptBlock として記録され、企業 GPO 環境で SIEM 転送される攻撃面が成立。
+    // Phase 8 以降で `shikomi-windows-tts.exe` helper bin (COM 直接呼出) を
+    // 別 PR で導入するまで、Windows audio 経路は **fail fast** で塞ぐ。
+    Err(io_err(
+        "windows audio tts unsupported",
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Windows audio TTS is intentionally disabled until Phase 8 \
+             helper bin lands (avoids PowerShell ScriptBlockLogging exposure of 24 words)",
+        ),
+    ))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -143,21 +165,27 @@ mod tests {
         SerializableSecretBytes::from_secret_string(SecretString::from_string(s.to_owned()))
     }
 
+    fn payload_as_str(p: &[u8]) -> &str {
+        std::str::from_utf8(p).expect("payload bytes are ASCII subset")
+    }
+
     #[test]
     fn test_build_payload_includes_numbers_and_words() {
         let words = vec![word("alpha"), word("beta")];
         let payload = build_payload(&words);
-        assert!(payload.contains("1. alpha"));
-        assert!(payload.contains("2. beta"));
+        let s = payload_as_str(&payload);
+        assert!(s.contains("1. alpha"));
+        assert!(s.contains("2. beta"));
     }
 
     #[test]
     fn test_build_payload_24_words_produces_24_segments() {
         let words: Vec<_> = (0..24).map(|i| word(&format!("w{i}"))).collect();
         let payload = build_payload(&words);
+        let s = payload_as_str(&payload);
         // 番号 1〜24 が全部含まれる。
         for i in 1..=24 {
-            assert!(payload.contains(&format!("{i}. w")));
+            assert!(s.contains(&format!("{i}. w")));
         }
     }
 

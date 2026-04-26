@@ -29,10 +29,15 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 
 use shikomi_core::ipc::SerializableSecretBytes;
+use zeroize::Zeroizing;
 
 use crate::error::CliError;
 
 /// 24 語をハイコントラスト PDF として stdout に書出す。
+///
+/// 工程5 服部指摘 (BLOCKER 3) 解消: PDF バイト列は `Zeroizing<Vec<u8>>` で構築し、
+/// drop で自動 zeroize される。`SerializableSecretBytes` 中の 24 語は `String`
+/// 経由を一切せず `expose_secret() -> &[u8]` から直接 byte を消費する経路に統一。
 ///
 /// # Errors
 /// stdout 書出失敗時に `CliError::Persistence`。
@@ -45,9 +50,12 @@ pub fn write_to_stdout(words: &[SerializableSecretBytes]) -> Result<(), CliError
             source: e,
         })
     })
+    // pdf は drop で zeroize (Zeroizing<Vec<u8>>)
 }
 
 /// 24 語を PDF 1.4 バイナリにエンコードする pure 関数 (テスト容易性)。
+///
+/// 戻り値は `Zeroizing<Vec<u8>>` で drop 時に自動 zeroize される。
 ///
 /// PDF 構造:
 /// 1. Header: `%PDF-1.4` + binary marker
@@ -58,52 +66,56 @@ pub fn write_to_stdout(words: &[SerializableSecretBytes]) -> Result<(), CliError
 /// 6. Content stream (object 5) — BT/ET で 24 行を描画
 /// 7. xref + trailer
 #[must_use]
-pub fn build_pdf_bytes(words: &[SerializableSecretBytes]) -> Vec<u8> {
+pub fn build_pdf_bytes(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> {
     let content = build_content_stream(words);
     let content_len = content.len();
 
-    let mut pdf = String::new();
+    let mut pdf: Vec<u8> = Vec::new();
     // PDF Header: 1.4 + binary marker (4 bytes ≥ 128 で binary 認識を強制)
-    pdf.push_str("%PDF-1.4\n");
-    pdf.push_str("%\u{00E2}\u{00E3}\u{00CF}\u{00D3}\n"); // âãÏÓ binary sentinel
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+    pdf.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']); // binary sentinel
 
     // 各 object の byte offset 記録 (xref 用)
     let mut offsets: Vec<usize> = Vec::with_capacity(5);
 
     offsets.push(pdf.len());
-    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
     offsets.push(pdf.len());
-    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
 
     offsets.push(pdf.len());
-    pdf.push_str(
-        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] \
-         /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>\nendobj\n",
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>\nendobj\n",
     );
 
     offsets.push(pdf.len());
-    pdf.push_str("4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+    pdf.extend_from_slice(
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    );
 
     offsets.push(pdf.len());
-    let _ = write!(pdf, "5 0 obj\n<< /Length {content_len} >>\nstream\n");
-    pdf.push_str(&content);
-    pdf.push_str("\nendstream\nendobj\n");
+    let header = format!("5 0 obj\n<< /Length {content_len} >>\nstream\n");
+    pdf.extend_from_slice(header.as_bytes());
+    pdf.extend_from_slice(&content);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
 
     // xref table
     let xref_offset = pdf.len();
-    pdf.push_str("xref\n0 6\n");
-    pdf.push_str("0000000000 65535 f \n");
+    pdf.extend_from_slice(b"xref\n0 6\n");
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
     for off in &offsets {
-        let _ = writeln!(pdf, "{off:010} 00000 n ");
+        let line = format!("{off:010} 00000 n \n");
+        pdf.extend_from_slice(line.as_bytes());
     }
 
     // trailer
-    pdf.push_str("trailer\n");
-    pdf.push_str("<< /Size 6 /Root 1 0 R >>\n");
-    let _ = write!(pdf, "startxref\n{xref_offset}\n%%EOF\n");
+    pdf.extend_from_slice(b"trailer\n");
+    pdf.extend_from_slice(b"<< /Size 6 /Root 1 0 R >>\n");
+    let trailer = format!("startxref\n{xref_offset}\n%%EOF\n");
+    pdf.extend_from_slice(trailer.as_bytes());
 
-    pdf.into_bytes()
+    Zeroizing::new(pdf)
 }
 
 /// PDF Content Stream を構築する (黒背景 + 白テキスト 24 行)。
@@ -116,47 +128,48 @@ pub fn build_pdf_bytes(words: &[SerializableSecretBytes]) -> Vec<u8> {
 /// - `BT ... ET`: text block
 /// - `/F1 18 Tf`: font Helvetica, size 18pt
 /// - `Td`, `Tj`: text positioning + show
-fn build_content_stream(words: &[SerializableSecretBytes]) -> String {
-    let mut s = String::new();
+/// PDF Content Stream を `Zeroizing<Vec<u8>>` で構築する。
+///
+/// 工程5 BLOCKER 3 解消: `SerializableSecretBytes::expose_secret() -> &[u8]` を
+/// 直接消費し、中間 `String` を作らない。byte 単位で PDF text escape を実施。
+fn build_content_stream(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> {
+    let mut s: Vec<u8> = Vec::new();
     // 1. graphics state save + 黒背景描画
-    s.push_str("q\n0 0 0 rg\n0 0 595 842 re\nf\n");
+    s.extend_from_slice(b"q\n0 0 0 rg\n0 0 595 842 re\nf\n");
     // 2. 白文字フォント設定 (18pt、24 行で A4 縦に収まる行間)
-    s.push_str("1 1 1 rg\nBT\n/F1 18 Tf\n22 TL\n");
+    s.extend_from_slice(b"1 1 1 rg\nBT\n/F1 18 Tf\n22 TL\n");
     // 3. 開始位置 (上端 50pt 余白、左端 60pt)
-    s.push_str("60 800 Td\n");
-    // 4. 24 語を 1 行ずつ描画
+    s.extend_from_slice(b"60 800 Td\n");
+    // 4. 24 語を 1 行ずつ描画 (expose_secret 経由で `&[u8]` 直接消費)
     for (i, w) in words.iter().enumerate() {
-        let plain = w.to_lossy_string_for_handler();
-        // PDF 文字列リテラルでの () \\ エスケープ
-        let escaped = pdf_text_escape(&plain);
         let line_no = i + 1;
-        let _ = write!(
-            s,
-            "({line_no:>2}. {escaped}) Tj\nT*\n",
-            line_no = line_no,
-            escaped = escaped
-        );
+        let prefix = format!("({line_no:>2}. ");
+        s.extend_from_slice(prefix.as_bytes());
+        // 平文 byte をそのまま escape して PDF Content Stream に書く。
+        // `to_lossy_string_for_handler()` 経路 (heap String) は採用しない。
+        let bytes = w.inner().expose_secret();
+        push_pdf_text_escaped(&mut s, bytes);
+        s.extend_from_slice(b") Tj\nT*\n");
     }
-    s.push_str("ET\nQ\n");
-    s
+    s.extend_from_slice(b"ET\nQ\n");
+    Zeroizing::new(s)
 }
 
-/// PDF text string のエスケープ ( `(` / `)` / `\` のみ、ASCII 限定入力前提)。
-fn pdf_text_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '(' | ')' | '\\' => {
-                out.push('\\');
-                out.push(c);
+/// PDF text string のエスケープを `Vec<u8>` に in-place で書込む。
+///
+/// `(` / `)` / `\` (PDF 予約文字) のみエスケープ。非 ASCII / 制御文字は `?` 置換
+/// (BIP-39 wordlist は ASCII 英小文字のみ前提、Fail Kindly で印刷停止しない)。
+fn push_pdf_text_escaped(out: &mut Vec<u8>, bytes: &[u8]) {
+    for &b in bytes {
+        match b {
+            b'(' | b')' | b'\\' => {
+                out.push(b'\\');
+                out.push(b);
             }
-            // 非 ASCII 文字は `?` で置換 (BIP-39 wordlist は ASCII 英小文字のみ前提、
-            // Fail Kindly で印刷停止しない)。
-            ch if ch.is_ascii() && !ch.is_control() => out.push(ch),
-            _ => out.push('?'),
+            ch if ch.is_ascii() && (b >= 0x20) && (b != 0x7F) => out.push(ch),
+            _ => out.push(b'?'),
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -201,13 +214,18 @@ mod tests {
     }
 
     #[test]
-    fn test_pdf_text_escape_handles_parens_and_backslash() {
-        assert_eq!(pdf_text_escape("a(b)c\\d"), "a\\(b\\)c\\\\d");
+    fn test_push_pdf_text_escaped_handles_parens_and_backslash() {
+        let mut out = Vec::new();
+        push_pdf_text_escaped(&mut out, b"a(b)c\\d");
+        assert_eq!(out, b"a\\(b\\)c\\\\d");
     }
 
     #[test]
-    fn test_pdf_text_escape_replaces_non_ascii_with_question() {
-        assert_eq!(pdf_text_escape("héllo"), "h?llo");
+    fn test_push_pdf_text_escaped_replaces_non_ascii_with_question() {
+        let mut out = Vec::new();
+        // "héllo" の é は 0xC3 0xA9 (UTF-8 2 byte)、両 byte が `?` 置換 = 6 文字
+        push_pdf_text_escaped(&mut out, "héllo".as_bytes());
+        assert_eq!(out, b"h??llo");
     }
 
     #[test]

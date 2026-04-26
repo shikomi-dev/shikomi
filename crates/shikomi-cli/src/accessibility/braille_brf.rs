@@ -26,77 +26,77 @@
 use std::io::Write;
 
 use shikomi_core::ipc::SerializableSecretBytes;
+use zeroize::Zeroizing;
 
 use crate::error::CliError;
 
 /// 24 語を BRF (Grade 1 ASCII Braille) 形式で stdout に書出す。
+///
+/// 工程5 服部指摘 (BLOCKER 3) 解消: BRF バイト列は `Zeroizing<Vec<u8>>` で構築し、
+/// drop で自動 zeroize。`to_lossy_string_for_handler()` 経由を廃止し、
+/// `expose_secret() -> &[u8]` から直接 byte 単位で消費する。
 ///
 /// # Errors
 /// stdout 書出失敗時に `CliError::Persistence`。
 pub fn write_to_stdout(words: &[SerializableSecretBytes]) -> Result<(), CliError> {
     let brf = encode_words(words);
     let mut out = std::io::stdout().lock();
-    out.write_all(brf.as_bytes()).map_err(io_err)?;
+    out.write_all(&brf).map_err(io_err)?;
     Ok(())
 }
 
-/// 24 語を BRF 文字列にエンコードする pure 関数 (テスト容易性)。
-///
-/// Phase 7: BIP-39 wordlist でよく出る whole-word level Grade 2 contractions
-/// を一部適用する (`grade2_word_contraction` 経由)。マッチしない単語は Grade 1
-/// (ASCII Braille 1 文字 1 マップ) で fallback する。完全な Grade 2 (2048 語
-/// 全部 + character-level contractions) は将来 minor に分離。
+/// 24 語を BRF バイト列にエンコードする pure 関数 (テスト容易性 + zeroize 維持)。
 #[must_use]
-pub fn encode_words(words: &[SerializableSecretBytes]) -> String {
-    let mut out = String::new();
+pub fn encode_words(words: &[SerializableSecretBytes]) -> Zeroizing<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
     for (i, w) in words.iter().enumerate() {
-        let plain = w.to_lossy_string_for_handler();
         let line_no = i + 1;
-        out.push_str(&format!("{line_no:>2}. "));
-        if let Some(short) = grade2_word_contraction(&plain) {
-            // Grade 2: 単一文字 contraction (例: "child" → "C")
-            out.push_str(short);
+        let prefix = format!("{line_no:>2}. ");
+        out.extend_from_slice(prefix.as_bytes());
+        let bytes = w.inner().expose_secret();
+        if let Some(short) = grade2_word_contraction(bytes) {
+            out.extend_from_slice(short.as_bytes());
         } else {
-            // Grade 1 fallback: 文字毎 ASCII Braille マップ
-            for ch in plain.chars() {
-                out.push(ascii_to_braille(ch));
+            for &b in bytes {
+                out.push(ascii_byte_to_braille(b));
             }
         }
-        out.push('\n');
+        out.push(b'\n');
     }
-    out
+    Zeroizing::new(out)
 }
 
-/// BIP-39 wordlist で出現する Grade 2 whole-word contractions 一部。
+/// BIP-39 wordlist で出現する Grade 2 whole-word contractions (byte 比較版)。
 ///
-/// 設計根拠:
-/// - Unified English Braille (UEB) 2013 §10.6 wholeword alphabetic wordsigns
-/// - BIP-39 English wordlist (2048 語) のうち UEB single-letter wordsign
-///   対象は限定的 (have / like / people / you / child / it / not / so / us)
-///
-/// Phase 7 では出現頻度が高く UEB single-letter wordsign が確立した 9 語のみ
-/// 対応。残り 2039 語は Grade 1 fallback。次 minor で character-level
-/// contractions (ch / sh / th 等) と group-sign を追加して Grade 2 完全対応。
-fn grade2_word_contraction(word: &str) -> Option<&'static str> {
-    match word {
-        "have" => Some("H"),
-        "like" => Some("L"),
-        "people" => Some("P"),
-        "you" => Some("Y"),
-        "child" => Some("C"),
-        "it" => Some("X"),
-        "not" => Some("N"),
-        "so" => Some("S"),
-        "us" => Some("U"),
+/// 設計根拠は変更前と同じ (UEB 2013 §10.6 + BIP-39)。`String` を作らず `&[u8]`
+/// 直接比較で zeroize 経路を維持。
+fn grade2_word_contraction(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        b"have" => Some("H"),
+        b"like" => Some("L"),
+        b"people" => Some("P"),
+        b"you" => Some("Y"),
+        b"child" => Some("C"),
+        b"it" => Some("X"),
+        b"not" => Some("N"),
+        b"so" => Some("S"),
+        b"us" => Some("U"),
         _ => None,
     }
 }
 
-/// ASCII 1 文字を BRF (北米 ASCII Braille) 1 文字にマップする。
+/// ASCII 1 byte を BRF (北米 ASCII Braille) 1 byte にマップする。
 ///
 /// 設計根拠: ANSI/NISO Z39.86-2005 BRF 標準 + Unified English Braille (UEB) Grade 1。
-/// マップ非掲載文字は `?` (BRF) に置換 (Fail Kindly)。
-fn ascii_to_braille(c: char) -> char {
+/// マップ非掲載 byte は `?` (BRF) に置換 (Fail Kindly)。
+/// 工程5 BLOCKER 3 で `&char` → `&u8` 経路に変更 (zeroize 維持)。
+fn ascii_byte_to_braille(b: u8) -> u8 {
+    let c = b as char;
+    let mapped = ascii_to_braille_char(c);
+    mapped as u8
+}
+
+fn ascii_to_braille_char(c: char) -> char {
     match c {
         // 26 letters (lowercase, BRF small letter prefix で uppercase は別 prefix)。
         'a' => 'A',
@@ -161,57 +161,65 @@ mod tests {
         SerializableSecretBytes::from_secret_string(SecretString::from_string(s.to_owned()))
     }
 
+    fn brf_as_str(brf: &[u8]) -> &str {
+        std::str::from_utf8(brf).expect("BRF bytes are ASCII subset")
+    }
+
     #[test]
     fn test_encode_words_includes_line_numbers() {
         let words = vec![word("abandon"), word("ability")];
         let brf = encode_words(&words);
-        assert!(brf.contains(" 1. "));
-        assert!(brf.contains(" 2. "));
+        let s = brf_as_str(&brf);
+        assert!(s.contains(" 1. "));
+        assert!(s.contains(" 2. "));
     }
 
     #[test]
     fn test_encode_words_ascii_braille_uppercase_per_letter() {
         let words = vec![word("abc")];
         let brf = encode_words(&words);
+        let s = brf_as_str(&brf);
         // a→A, b→B, c→C (BRF mapping 簡易版)
-        assert!(brf.contains("ABC"));
+        assert!(s.contains("ABC"));
     }
 
     #[test]
     fn test_ascii_to_braille_unknown_char_maps_to_question() {
-        assert_eq!(ascii_to_braille('Ω'), '?');
-        assert_eq!(ascii_to_braille('!'), '?');
+        assert_eq!(ascii_to_braille_char('Ω'), '?');
+        assert_eq!(ascii_to_braille_char('!'), '?');
     }
 
     #[test]
     fn test_grade2_contraction_known_words_map_to_single_letter() {
         // BIP-39 に含まれる UEB single-letter wordsign 対象 9 語の確認
-        assert_eq!(grade2_word_contraction("have"), Some("H"));
-        assert_eq!(grade2_word_contraction("like"), Some("L"));
-        assert_eq!(grade2_word_contraction("people"), Some("P"));
-        assert_eq!(grade2_word_contraction("you"), Some("Y"));
-        assert_eq!(grade2_word_contraction("child"), Some("C"));
+        assert_eq!(grade2_word_contraction(b"have"), Some("H"));
+        assert_eq!(grade2_word_contraction(b"like"), Some("L"));
+        assert_eq!(grade2_word_contraction(b"people"), Some("P"));
+        assert_eq!(grade2_word_contraction(b"you"), Some("Y"));
+        assert_eq!(grade2_word_contraction(b"child"), Some("C"));
     }
 
     #[test]
     fn test_grade2_contraction_unknown_words_return_none() {
         // BIP-39 wordlist の他多数 (Grade 1 fallback 対象)
-        assert_eq!(grade2_word_contraction("abandon"), None);
-        assert_eq!(grade2_word_contraction("ability"), None);
-        assert_eq!(grade2_word_contraction("zone"), None);
+        assert_eq!(grade2_word_contraction(b"abandon"), None);
+        assert_eq!(grade2_word_contraction(b"ability"), None);
+        assert_eq!(grade2_word_contraction(b"zone"), None);
     }
 
     #[test]
     fn test_encode_words_uses_grade2_for_known_word() {
         let brf = encode_words(&[word("have")]);
+        let s = brf_as_str(&brf);
         // Grade 2 single-letter wordsign "H" + 改行
-        assert!(brf.contains(" 1. H\n"), "expected grade-2 H, got: {brf}");
+        assert!(s.contains(" 1. H\n"), "expected grade-2 H, got: {s}");
     }
 
     #[test]
     fn test_encode_words_24_words_produces_24_lines() {
         let words: Vec<_> = (0..24).map(|i| word(&format!("word{i}"))).collect();
         let brf = encode_words(&words);
-        assert_eq!(brf.matches('\n').count(), 24);
+        let newline_count = brf.iter().filter(|&&b| b == b'\n').count();
+        assert_eq!(newline_count, 24);
     }
 }

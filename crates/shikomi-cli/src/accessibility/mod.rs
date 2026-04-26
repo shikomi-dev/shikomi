@@ -21,8 +21,11 @@
 
 pub mod audio_tts;
 pub mod braille_brf;
-pub mod file_acl;
 pub mod output_target;
 pub mod print_pdf;
 pub mod screen_reader;
 pub mod umask;
+// `file_acl` は工程5 服部指摘 (BLOCKER 2) で削除。Windows ACL リダイレクト先制御
+// は実装スタブのまま誰からも呼ばれない完全デッドコードだったため、`Boy Scout Rule
+// + 中途半端は怠惰` の原則に従って撤去 (Phase 8 で `--to-file <path>` フラグ +
+// `SetSecurityInfo` 経由 DACL 設定の本実装が確定するまで導入しない)。

@@ -72,11 +72,17 @@ fn suppress_impl() -> Result<(), CliError> {
 
 #[cfg(windows)]
 fn suppress_impl() -> Result<(), CliError> {
-    // Windows: SetErrorMode(SEM_NOGPFAULTERRORBOX) で WER (Windows Error Reporting)
-    // のメモリダンプ採取をプロセス単位で抑止する。Phase 5 では `windows-sys` の既存
-    // features に `Win32_System_Diagnostics_Debug` が含まれていないため、
-    // `Phase 6` で CI Windows ジョブと同時に追加する。Phase 5 はシグネチャだけ
-    // OS 横断で揃え、Windows 実装は Phase 6 で填める (本関数の戻り値契約は維持)。
+    // 工程5 服部指摘 (BLOCKER 1) 解消: Windows 本実装。
+    // `SetErrorMode(SEM_NOGPFAULTERRORBOX)` を呼出して WER (Windows Error Reporting)
+    // の GPF / クラッシュ時メモリダンプ採取をプロセス単位で抑止する。これにより
+    // クラッシュ時に VEK / 24 語が `werfault.exe` 経由でローカル `LocalDumps` /
+    // Microsoft 送信経路に残留する攻撃面を構造的に塞ぐ。
+    //
+    // SAFETY: `SetErrorMode` は副作用が当該プロセスに局所化された Win32 API。
+    // 既存 mode を返すが、本ハードニングでは「過去 mode を保存せず、上書きで
+    // SEM_NOGPFAULTERRORBOX を強制する」契約 (Linux prctl と同方針)。
+    use windows_sys::Win32::System::Diagnostics::Debug::{SetErrorMode, SEM_NOGPFAULTERRORBOX};
+    let _previous = unsafe { SetErrorMode(SEM_NOGPFAULTERRORBOX) };
     Ok(())
 }
 
