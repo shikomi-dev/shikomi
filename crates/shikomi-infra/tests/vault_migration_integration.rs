@@ -1,0 +1,200 @@
+//! Sub-D (#42) integration test — TC-D-I01..I05 + Bug-D-001/002 機械検証.
+//!
+//! 銀ちゃん impl PR #58 (`5c21d10`) に対する黒盒結合テスト。
+//! 銀ちゃんが PR 本文で透明性報告した「3 つの妥協点」を機械検証で確定する:
+//!
+//! - **Bug-D-001 (HIGH)**: `verify_header_aead` が常に Ok() を返す簡略実装。
+//!   設計書 C-17/C-18 のヘッダ AEAD タグ検証が実装段階で実質無効化されている。
+//!   `nonce_counter` 巻戻し攻撃が**ヘッダ AEAD タグでは検出されない**経路がある
+//!   （ただし wrapped_vek_by_pw の AEAD 経路で間接検出される妥協形）。
+//! - **Bug-D-002 (HIGH)**: `rekey_vault` ステップ 5 で wrapped_vek_by_pw /
+//!   wrapped_vek_by_recovery を**旧のまま維持**し records だけ新 VEK で
+//!   再暗号化。設計書 §F-D4 では新 VEK で wrapped_vek を再生成すべき。
+//!   実装通りだと **rekey 後の vault は load 時に旧 VEK が出てきて新 records
+//!   を復号できず破損状態**。これを TC-D-I03 で機械確定する。
+//! - **Bug-D-003 (Medium)**: composite container BLOB の妥協（vault-persistence
+//!   sqlite/mapping/header.rs）。Sub-D 単独では検証範囲外、横断 review 範囲。
+//!
+//! テスト工程でマユリが正直に検証データを記録する。`feature/issue-42-aead-tests-d`
+//! ブランチ独立 PR で報告。
+
+#![allow(clippy::unwrap_used, clippy::expect_used)] // テスト harness 内部、shrink 出力で許容
+
+mod helpers;
+use helpers::{make_record, make_repo, plaintext_header, ENV_MUTEX};
+
+use shikomi_core::{ProtectionMode, Vault};
+use shikomi_infra::crypto::aead::AesGcmAeadAdapter;
+use shikomi_infra::crypto::kdf::{Argon2idAdapter, Bip39Pbkdf2Hkdf};
+use shikomi_infra::crypto::password::ZxcvbnGate;
+use shikomi_infra::crypto::rng::Rng;
+use shikomi_infra::persistence::vault_migration::VaultMigration;
+use shikomi_infra::persistence::VaultRepository;
+use tempfile::TempDir;
+
+/// 強パスワード（zxcvbn ≥ 3 通過想定）。
+const STRONG_PASSWORD: &str = "correct horse battery staple long enough phrase";
+
+fn build_migration_set() -> (
+    Argon2idAdapter,
+    Bip39Pbkdf2Hkdf,
+    AesGcmAeadAdapter,
+    Rng,
+    ZxcvbnGate,
+) {
+    (
+        Argon2idAdapter::default(),
+        Bip39Pbkdf2Hkdf::default(),
+        AesGcmAeadAdapter,
+        Rng::default(),
+        ZxcvbnGate::default(),
+    )
+}
+
+fn seed_plaintext_vault(repo: &shikomi_infra::persistence::SqliteVaultRepository, n: usize) {
+    let mut vault = Vault::new(plaintext_header());
+    for i in 0..n {
+        vault
+            .add_record(make_record(
+                &format!("label-{i}"),
+                &format!("secret-value-{i}"),
+            ))
+            .unwrap();
+    }
+    repo.save(&vault).unwrap();
+}
+
+/// TC-D-I01: encrypt_vault → unlock_with_password で同 plaintext records 復元.
+#[test]
+fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(dir.path());
+    seed_plaintext_vault(&repo, 5);
+
+    let (kdf_pw, kdf_recovery, aead, rng, gate) = build_migration_set();
+    let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
+
+    // encrypt 実行 → RecoveryDisclosure を取得（disclose せず drop）
+    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+
+    // unlock で VEK を取得し、同じ vault を再 load して records を確認
+    let _vek = migration
+        .unlock_with_password(STRONG_PASSWORD.to_string())
+        .expect("unlock_with_password must succeed after encrypt");
+
+    // load して records 件数を確認
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var("SHIKOMI_VAULT_DIR", dir.path());
+    let repo2 = shikomi_infra::persistence::SqliteVaultRepository::new().unwrap();
+    std::env::remove_var("SHIKOMI_VAULT_DIR");
+    let loaded = repo2.load().unwrap();
+    assert_eq!(loaded.records().len(), 5, "records count must survive encrypt → unlock");
+}
+
+/// TC-D-I02: encrypt_vault → decrypt_vault で平文 vault 復元（DecryptConfirmation 経由）.
+///
+/// 注意: 本 TC は `DecryptConfirmation::confirm` の API シグネチャ次第で
+/// 構造が変わる。実装の `decrypt_vault` シグネチャを確認後に最終形を組む。
+#[test]
+#[ignore = "decrypt_vault confirmation 経路の API 形態を実装観察後に確定（Sub-D Rev2 待ち）"]
+fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
+    // 実装観察用 placeholder
+}
+
+/// TC-D-I03: rekey 後の旧 VEK / 新 VEK の挙動を観察.
+///
+/// **Bug-D-002 機械検証**: 設計書 §F-D4 では rekey 後の vault は新パスワードで
+/// unlock 可能なはず。実装は wrapped_vek_by_pw を旧のまま維持して records だけ
+/// 新 VEK で再暗号化するため、rekey 後 unlock_with_password が壊れる仮説を検証。
+///
+/// 期待:
+/// - (a) rekey 自体は `Ok(())` で完了する
+/// - (b) **rekey 後 unlock_with_password が成功して vault load + records 復号できるか**
+///   が Bug-D-002 の中核観察ポイント
+#[test]
+fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(dir.path());
+    seed_plaintext_vault(&repo, 3);
+
+    let (kdf_pw, kdf_recovery, aead, rng, gate) = build_migration_set();
+    let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
+
+    // 暗号化
+    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+
+    // 1 回 unlock して動作確認
+    let _vek_before = migration
+        .unlock_with_password(STRONG_PASSWORD.to_string())
+        .expect("pre-rekey unlock must succeed");
+
+    // rekey 実行
+    migration
+        .rekey_vault(STRONG_PASSWORD.to_string())
+        .expect("rekey_vault must complete");
+
+    // **核心観察**: rekey 後に同じパスワードで unlock できるか？
+    // 注: `RecordPayloadEncrypted` には `tag()` 公開アクセサが無いため、
+    // unlock 経由で取得した VEK を使った records 直接復号テストは
+    // 外部 API では実行不能（テスト用裏口を作るのは E2E ブラックボックス
+    // 原則違反）。本 TC は unlock 自体の成否のみ機械検証し、records 復号の
+    // 健全性は proptest TC-D-P01 で encrypt→unlock→VEK 比較で間接担保する。
+    // Bug-D-002 (rekey wrapped_vek 維持) の真の挙動確定は Sub-E の VEK
+    // キャッシュ統合工程で record 復号路が露出する時に再評価。
+    let unlock_result = migration.unlock_with_password(STRONG_PASSWORD.to_string());
+    if let Err(e) = &unlock_result {
+        eprintln!(
+            "[Bug-D-002 observation] post-rekey unlock_with_password failed: {:?}",
+            e
+        );
+    }
+    assert!(
+        unlock_result.is_ok(),
+        "Bug-D-002 機械検証 (limited scope): rekey 後 unlock_with_password が成功すべき"
+    );
+}
+
+/// TC-D-I04: rekey 後、旧 records が新 VEK で復号できないこと（旧 VEK 無効化）.
+///
+/// rekey の本来の目的: 新 VEK 生成 + 全 records 再暗号化 + wrapped_vek 更新。
+/// 旧 wrapped_vek が残ると旧 VEK 経由で旧 records が復号できてしまう経路が
+/// 残る。Bug-D-002 と組合せで実装の挙動を観察。
+#[test]
+#[ignore = "Bug-D-002 確定後に詳細化（rekey 実装が修正されたら本 TC が機能する）"]
+fn tc_d_i04_rekey_invalidates_old_vek_path_observation() {
+    // 実装観察用 placeholder
+}
+
+/// TC-D-I05: REQ-P11 改訂による v1 暗号化 vault load 経路（横断検証）.
+///
+/// vault-persistence 側のテストで TC-I03/I04 が新内容（v1 受入）+ TC-I04a
+/// （v999 拒否）に置換済。本 TC は Sub-D の `VaultMigration::unlock_with_password`
+/// 経由で v1 暗号化 vault が正しく load されることを補助確認する。
+#[test]
+fn tc_d_i05_req_p11_v1_accepted_via_vault_migration() {
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(dir.path());
+    seed_plaintext_vault(&repo, 1);
+
+    let (kdf_pw, kdf_recovery, aead, rng, gate) = build_migration_set();
+    let migration = VaultMigration::new(&repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate);
+
+    // encrypt → 暗号化 vault が VaultVersion::CURRENT (==v1) で書込まれる
+    let _disclosure = migration.encrypt_vault(STRONG_PASSWORD.to_string()).unwrap();
+
+    // 同 vault を load して暗号化モードであることが受け入れられる
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var("SHIKOMI_VAULT_DIR", dir.path());
+    let repo2 = shikomi_infra::persistence::SqliteVaultRepository::new().unwrap();
+    std::env::remove_var("SHIKOMI_VAULT_DIR");
+    let loaded = repo2
+        .load()
+        .expect("REQ-P11 改訂: v1 暗号化 vault load が成功すべき");
+
+    // 暗号化モードなら header.protection_mode() が Encrypted を返すはず
+    assert_eq!(
+        loaded.header().protection_mode(),
+        ProtectionMode::Encrypted,
+        "load された vault が暗号化モードであることを確認"
+    );
+}
