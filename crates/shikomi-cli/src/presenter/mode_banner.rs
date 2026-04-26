@@ -62,10 +62,11 @@ fn ansi_color_for(protection_mode: ProtectionModeBanner) -> &'static str {
         ProtectionModeBanner::Plaintext => ANSI_CYAN_DIM,
         ProtectionModeBanner::EncryptedLocked => ANSI_YELLOW,
         ProtectionModeBanner::EncryptedUnlocked => ANSI_GREEN,
-        ProtectionModeBanner::Unknown => ANSI_RED,
-        // `#[non_exhaustive]` cross-crate 防御 (Sub-D Rev3 凍結継承):
-        // 将来 variant 追加時は赤 (Unknown 同等) に倒す Fail-Secure。
-        #[allow(unreachable_patterns)]
+        // `Unknown` + cross-crate `#[non_exhaustive]` 防御 (Sub-D Rev3 凍結継承):
+        // `Unknown` を明示的に赤、将来追加されうる variant も同じく赤 (Fail-Secure)
+        // に倒す。同一 body の `Unknown => ANSI_RED` 冗長 arm は `_` に集約して
+        // `clippy::match_same_arms` を解消する (`label()` 側の `_ => "[unknown]"`
+        // 経路と意味的にも一致)。
         _ => ANSI_RED,
     }
 }

@@ -251,7 +251,7 @@ mod tests {
             ),
             (ProtectionModeBanner::Unknown, "[unknown]"),
         ] {
-            let rendered = render_list(&[view.clone()], mode, false, Locale::English);
+            let rendered = render_list(std::slice::from_ref(&view), mode, false, Locale::English);
             assert!(
                 rendered.starts_with(&format!("{expected_label}\n")),
                 "banner mismatch for {mode:?}, got: {rendered:?}"
