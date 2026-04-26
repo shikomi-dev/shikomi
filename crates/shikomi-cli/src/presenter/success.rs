@@ -146,12 +146,15 @@ pub fn render_recovery_disclosure_screen_with_fallback_notice(
     out
 }
 
-/// `vault rekey` 成功文言（MSG-S07 + 24 語表示、cache_relocked false 時は MSG-S20 連結 = Phase 4）。
+/// `vault rekey` 成功文言（MSG-S07 + 24 語表示）。
+///
+/// Phase 4: 本関数は MSG-S07 + 24 語表示のみに責務を縮小した。`cache_relocked == false`
+/// 時の MSG-S20 連結警告は `presenter::cache_relocked_warning::display` 経由で
+/// `usecase::vault::rekey` が追加出力する責務を持つ（C-32 整合、関心事分離）。
 #[must_use]
 pub fn render_rekeyed(
     records_count: usize,
     words: &[SerializableSecretBytes],
-    cache_relocked: bool,
     locale: Locale,
 ) -> String {
     let mut out = String::new();
@@ -164,9 +167,6 @@ pub fn render_rekeyed(
         out.push_str("新しい 24 語（再表示されません）:\n");
     }
     push_word_lines(&mut out, words);
-    if !cache_relocked {
-        out.push_str(&cache_relocked_warning(locale));
-    }
     out
 }
 
@@ -175,22 +175,20 @@ pub fn render_rekeyed(
 pub fn render_rekeyed_with_fallback_notice(
     records_count: usize,
     words: &[SerializableSecretBytes],
-    cache_relocked: bool,
     output: OutputTarget,
     locale: Locale,
 ) -> String {
-    let mut out = render_rekeyed(records_count, words, cache_relocked, locale);
+    let mut out = render_rekeyed(records_count, words, locale);
     out.push_str(&fallback_notice(output, locale));
     out
 }
 
-/// `vault rotate-recovery` 成功文言（MSG-S19、cache_relocked false 時は Phase 4 で連結）。
+/// `vault rotate-recovery` 成功文言（MSG-S19 + 24 語表示）。
+///
+/// Phase 4: `cache_relocked == false` 連結は usecase 側責務に移譲した
+/// （`render_rekeyed` と同じ理由、cli-subcommands.md §設計判断 step 4）。
 #[must_use]
-pub fn render_recovery_rotated(
-    words: &[SerializableSecretBytes],
-    cache_relocked: bool,
-    locale: Locale,
-) -> String {
+pub fn render_recovery_rotated(words: &[SerializableSecretBytes], locale: Locale) -> String {
     let mut out = String::from("recovery words rotated\n");
     if matches!(locale, Locale::JapaneseEn) {
         out.push_str("リカバリ用 24 語をローテーションしました\n");
@@ -200,9 +198,6 @@ pub fn render_recovery_rotated(
         out.push_str("新しい 24 語（再表示されません）:\n");
     }
     push_word_lines(&mut out, words);
-    if !cache_relocked {
-        out.push_str(&cache_relocked_warning(locale));
-    }
     out
 }
 
@@ -210,11 +205,10 @@ pub fn render_recovery_rotated(
 #[must_use]
 pub fn render_recovery_rotated_with_fallback_notice(
     words: &[SerializableSecretBytes],
-    cache_relocked: bool,
     output: OutputTarget,
     locale: Locale,
 ) -> String {
-    let mut out = render_recovery_rotated(words, cache_relocked, locale);
+    let mut out = render_recovery_rotated(words, locale);
     out.push_str(&fallback_notice(output, locale));
     out
 }
@@ -225,20 +219,6 @@ fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
         let s = w.to_lossy_string_for_handler();
         out.push_str(&format!("  {:>2}. {}\n", i + 1, s));
     }
-}
-
-/// `cache_relocked: false` 時の MSG-S20 連結警告（Phase 2 minimal、Phase 4 で再構成）。
-fn cache_relocked_warning(locale: Locale) -> String {
-    let mut out = String::from(
-        "\nwarning: rekey/rotation succeeded but the unlock cache could not be refreshed.\n",
-    );
-    out.push_str("hint: run `shikomi vault unlock` again before the next operation.\n");
-    if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(
-            "警告: 鍵情報の再キャッシュに失敗しました。次の操作前に `shikomi vault unlock` を再度実行してください。\n",
-        );
-    }
-    out
 }
 
 /// 非 Screen 経路の Phase 2 fallback 注記。
