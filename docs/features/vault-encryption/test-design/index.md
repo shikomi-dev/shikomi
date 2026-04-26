@@ -32,10 +32,10 @@
 | Sub-B | 25 | `sub-b-kdf-rng-zxcvbn.md` |
 | Sub-C | 26 | `sub-c-aead.md` |
 | Sub-D | 26 | `sub-d-repository-migration.md` |
-| Sub-E | 24 | `sub-e-vek-cache-ipc.md` |
-| **合計** | **149** | — |
+| Sub-E | 27 | `sub-e-vek-cache-ipc.md` |
+| **合計** | **152** | — |
 
-**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 6 件（TC-E-S01..S06）= 13 件、`tests/docs/sub-{d,e}-static-checks.sh` で機械検証。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-E に継承し、4 度目以降の同型ドリフトを構造封鎖。
+**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 7 件（TC-E-S01..S07）= 14 件、`tests/docs/sub-{d,e}-static-checks.sh` で機械検証。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-E に継承し、4 度目以降の同型ドリフトを構造封鎖。**Sub-E 工程2 Rev1**（Petelgeuse 工程2 Rev1 指摘）で TC-E-S07 handshake 許可リスト境界 gate を追加、誤認した `#[non_exhaustive]` serde 経路保護を handshake 許可リスト方式に正規化。
 
 ## 関連スクリプト
 
