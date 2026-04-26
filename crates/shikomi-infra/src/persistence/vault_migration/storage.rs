@@ -191,6 +191,11 @@ pub(super) fn decode_vault_to_encrypted_header(
 }
 
 /// 仮 wrapped_vek_by_pw の構成要素を保持する内部構造体 (composite parse 中継用)。
+///
+/// `Debug` 派生は `#[cfg(test)]` モジュール内の `assert_eq!` / `unwrap` 等が
+/// `Result<ParsedWrappedSection, MigrationError>` の `Err` 経路で要求するため。
+/// 本構造体は内部 (`pub` でない) かつバイト断片を保持するだけで秘密値ではない。
+#[derive(Debug)]
 struct ParsedWrappedSection {
     ciphertext: Vec<u8>,
     nonce: NonceBytes,

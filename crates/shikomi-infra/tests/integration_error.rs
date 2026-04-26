@@ -146,8 +146,11 @@ fn tc_i04_encrypted_vault_db_load_does_not_return_unsupported_yet() {
     let result = repo.load();
 
     // Sub-D 改訂: UnsupportedYet 即返却は退役。`Corrupted` (composite container magic 不一致等) に変わる。
+    // `Vault` は Debug 未実装 (Sub-A 設計通り、秘密値露出回避) のため、result 全体ではなく
+    // err() 経由で `Option<PersistenceError>` を表示 (PersistenceError は Debug 派生済)。
     if let Err(PersistenceError::UnsupportedYet { .. }) = result {
-        panic!("Sub-D で暗号化モードを解禁したにも関わらず UnsupportedYet が返った: {result:?}");
+        let err = result.err();
+        panic!("Sub-D で暗号化モードを解禁したにも関わらず UnsupportedYet が返った: {err:?}");
     }
     // load 自体は ok or Corrupted のいずれか (本テストは UnsupportedYet 不在のみ確認)。
 }
