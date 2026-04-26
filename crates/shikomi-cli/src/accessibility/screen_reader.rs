@@ -2,10 +2,9 @@
 //!
 //! 設計根拠:
 //! - docs/features/vault-encryption/detailed-design/cli-subcommands.md
-//!   §アクセシビリティ代替経路 自動切替経路
-//!   (macOS `defaults read com.apple.universalaccess` /
-//!    Windows `Narrator.exe` プロセス検出 /
-//!    Linux Orca DBus 経路)
+//!   §アクセシビリティ代替経路 自動切替経路 (macOS `defaults read
+//!   com.apple.universalaccess` / Windows `Narrator.exe` プロセス検出 /
+//!   Linux Orca DBus 経路)
 //!
 //! 設計判断:
 //! - **Linux**: Orca DBus 経路は `zbus` 等の重い依存を必要とするため、`/proc`
