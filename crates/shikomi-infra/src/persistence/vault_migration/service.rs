@@ -46,7 +46,7 @@ use crate::persistence::VaultRepository;
 
 use super::confirmation::DecryptConfirmation;
 use super::error::MigrationError;
-use super::header::{HeaderAeadEnvelope, KdfParams, VaultEncryptedHeader};
+use super::header::{canonical_aad_bytes, HeaderAeadEnvelope, KdfParams, VaultEncryptedHeader};
 use super::recovery::RecoveryDisclosure;
 use super::storage::{decode_vault_to_encrypted_header, encode_encrypted_header_for_storage};
 
@@ -264,7 +264,8 @@ impl<'a> VaultMigration<'a> {
             .kdf_pw
             .derive_kek_pw(&master_password, encrypted_header.kdf_salt())?;
 
-        // ヘッダ AEAD タグ検証 (本 Sub-D 実装簡略版、§verify_header_aead 参照)。
+        // ヘッダ AEAD タグ検証 (C-17/C-18、L1 nonce_counter 巻戻し / kdf_params 改竄
+        // / wrapped_vek 入替を AAD 不一致経由で検出)。
         verify_header_aead(self.aead, &encrypted_header, &kek_pw)?;
 
         // wrapped_vek_by_pw を unwrap → 32B 検証
@@ -591,46 +592,76 @@ fn build_encrypted_vault(
     Ok(vault)
 }
 
-/// ヘッダ AEAD envelope を構築する。
+/// ヘッダ AEAD envelope を構築する (C-17/C-18 正規実装)。
 ///
-/// **Sub-D 簡略実装の制約**: `AesGcmAeadAdapter::encrypt_record` は `Aad` 型 (record 用 26B 固定)
-/// を要求し、ヘッダ canonical_bytes (任意長) を AAD として直接渡す経路がない。
-/// Sub-C アダプタ拡張で `encrypt_header_envelope(aad: &[u8])` を追加する Sub-D 拡張で
-/// 厳密な C-17/C-18 を達成する。本 Sub-D 段階ではダミー envelope (空 ciphertext + 0 tag) を
-/// 返し、kdf_params / nonce_counter 改竄は **wrapped_vek_by_pw 自体の AEAD 経路で間接検出** する
-/// (kdf_params 改竄 → KEK_pw 不一致 → wrap 復号失敗の連鎖、設計書 §二重防御)。
+/// `canonical_aad_bytes` で組み立てた任意長 AAD を `encrypt_with_raw_aad` に渡し、
+/// **空 plaintext + AAD のみ** で AES-256-GCM の 16B authentication tag を取得する
+/// (MAC として動作させる用途)。返却 envelope の `ciphertext` は 0 byte 固定、
+/// `nonce` 12B + `tag` 16B のみが意味を持つ (改竄検出専用、鍵を運ばない)。
+///
+/// AAD は `VaultEncryptedHeader::canonical_bytes_for_aad` と完全同型のレイアウトで
+/// 構築される (`canonical_aad_bytes` 経由で **header.rs と DRY**)。
+///
+/// # Errors
+///
+/// AEAD 内部エラー時 `MigrationError::Crypto(AeadTagMismatch)`。
 #[allow(clippy::too_many_arguments)]
 fn build_header_envelope(
-    _aead: &AesGcmAeadAdapter,
+    aead: &AesGcmAeadAdapter,
     rng: &Rng,
-    _kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
-    _version: VaultVersion,
-    _created_at: OffsetDateTime,
-    _kdf_salt: &shikomi_core::KdfSalt,
-    _wrapped_pw: &shikomi_core::WrappedVek,
-    _wrapped_recovery: &shikomi_core::WrappedVek,
-    _nonce_counter: &NonceCounter,
-    _kdf_params: KdfParams,
+    kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
+    version: VaultVersion,
+    created_at: OffsetDateTime,
+    kdf_salt: &shikomi_core::KdfSalt,
+    wrapped_pw: &shikomi_core::WrappedVek,
+    wrapped_recovery: &shikomi_core::WrappedVek,
+    nonce_counter: &NonceCounter,
+    kdf_params: KdfParams,
 ) -> Result<HeaderAeadEnvelope, MigrationError> {
-    // ダミー envelope。Sub-D 拡張で `Sub-C AesGcmAeadAdapter::encrypt_header_envelope`
-    // 追加時に実装を置換する。
-    Ok(HeaderAeadEnvelope::new(
-        Vec::new(),
-        rng.generate_nonce_bytes(),
-        AuthTag::from_array([0u8; 16]),
-    ))
+    let aad = canonical_aad_bytes(
+        version,
+        created_at,
+        kdf_salt,
+        wrapped_pw,
+        wrapped_recovery,
+        nonce_counter,
+        kdf_params,
+    );
+    let nonce = rng.generate_nonce_bytes();
+    // 空 plaintext + raw AAD で MAC として動作させる (AES-256-GCM の認証付き、
+    // ciphertext は 0 byte、tag のみが意味を持つ)。
+    let (ciphertext, tag) = aead
+        .encrypt_with_raw_aad(kek_pw, &nonce, &aad, &[])
+        .map_err(MigrationError::Crypto)?;
+    Ok(HeaderAeadEnvelope::new(ciphertext, nonce, tag))
 }
 
-/// ヘッダ AEAD タグ検証 (`build_header_envelope` と対称、簡略実装)。
+/// ヘッダ AEAD タグ検証 (`build_header_envelope` と対称、C-17/C-18 正規実装)。
+///
+/// `header.canonical_bytes_for_aad()` を AAD に取り、`decrypt_with_raw_aad` で
+/// AEAD タグ検証を実施する。検証成功時のみ `Ok(())` を返す。
+/// L1 nonce_counter 巻戻し / kdf_params 改竄 / wrapped_vek 入替などは AAD ハッシュ
+/// が一致しなくなるため `AeadTagMismatch` で検出される。
+///
+/// # Errors
+///
+/// AEAD 検証失敗時 `MigrationError::Crypto(AeadTagMismatch)` (内部詳細秘匿)。
 fn verify_header_aead(
-    _aead: &AesGcmAeadAdapter,
-    _header: &VaultEncryptedHeader,
-    _kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
+    aead: &AesGcmAeadAdapter,
+    header: &VaultEncryptedHeader,
+    kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
 ) -> Result<(), MigrationError> {
-    // Sub-D 簡略実装: 常に OK。Sub-D 拡張で AAD = canonical_bytes_for_aad の
-    // 真の検証に置換する。本 Sub-D では wrapped_vek_by_pw の AEAD 経路で
-    // ヘッダ改竄を間接検出する妥協形を採用 (設計書 §二重防御)。
-    Ok(())
+    let aad = header.canonical_bytes_for_aad();
+    let envelope = header.header_aead_envelope();
+    aead.decrypt_with_raw_aad(
+        kek_pw,
+        &envelope.nonce,
+        &aad,
+        &envelope.ciphertext,
+        &envelope.tag,
+    )
+    .map(|_verified| ())
+    .map_err(MigrationError::Crypto)
 }
 
 #[cfg(test)]

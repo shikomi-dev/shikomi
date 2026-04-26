@@ -178,6 +178,70 @@ impl AesGcmAeadAdapter {
             Ok(buf.to_vec())
         })
     }
+
+    /// 任意長 AAD で AEAD encrypt (ヘッダ封筒用、plaintext は通常空 byte)。
+    ///
+    /// `encrypt_record` は `Aad` 型 (26B 固定) を要求するが、ヘッダ AEAD は
+    /// `canonical_bytes_for_aad` (任意長) を AAD に取る必要がある (C-17/C-18)。
+    /// 本メソッドは raw byte slice を AAD に取り、空 plaintext + tag のみで
+    /// MAC として動作させる用途を含む (AES-256-GCM は空 plaintext + AAD でも
+    /// 16B authentic tag を返す)。
+    ///
+    /// # Errors
+    ///
+    /// AEAD 暗号化失敗時 `CryptoError::AeadTagMismatch` (内部詳細秘匿)。
+    pub fn encrypt_with_raw_aad(
+        &self,
+        key: &impl AeadKey,
+        nonce: &NonceBytes,
+        aad: &[u8],
+        plaintext: &[u8],
+    ) -> Result<(Vec<u8>, AuthTag), CryptoError> {
+        let nonce_ga = GenericArray::clone_from_slice(nonce.as_array());
+        let mut buf: Zeroizing<Vec<u8>> = Zeroizing::new(plaintext.to_vec());
+
+        let tag_ga = key
+            .with_secret_bytes(|bytes| {
+                let cipher_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(bytes);
+                let cipher = Aes256Gcm::new(cipher_key);
+                cipher.encrypt_in_place_detached(&nonce_ga, aad, buf.as_mut_slice())
+            })
+            .map_err(|_| CryptoError::AeadTagMismatch)?;
+
+        let tag_array: [u8; 16] = tag_ga.into();
+        Ok((buf.to_vec(), AuthTag::from_array(tag_array)))
+    }
+
+    /// 任意長 AAD で AEAD decrypt (ヘッダ封筒検証用)。
+    ///
+    /// タグ検証成功時のみ `Verified<Plaintext>` を返す。失敗時は内部詳細秘匿で
+    /// `Err(CryptoError::AeadTagMismatch)`。
+    ///
+    /// # Errors
+    ///
+    /// AEAD 検証失敗時 `CryptoError::AeadTagMismatch` (内部詳細秘匿)。
+    pub fn decrypt_with_raw_aad(
+        &self,
+        key: &impl AeadKey,
+        nonce: &NonceBytes,
+        aad: &[u8],
+        ciphertext: &[u8],
+        tag: &AuthTag,
+    ) -> Result<Verified<Plaintext>, CryptoError> {
+        let nonce_ga = GenericArray::clone_from_slice(nonce.as_array());
+        let tag_ga = GenericArray::clone_from_slice(tag.as_array());
+
+        verify_aead_decrypt_to_plaintext(|| {
+            let mut buf: Zeroizing<Vec<u8>> = Zeroizing::new(ciphertext.to_vec());
+            key.with_secret_bytes(|bytes| {
+                let cipher_key: &Key<Aes256Gcm> = Key::<Aes256Gcm>::from_slice(bytes);
+                let cipher = Aes256Gcm::new(cipher_key);
+                cipher.decrypt_in_place_detached(&nonce_ga, aad, buf.as_mut_slice(), &tag_ga)
+            })
+            .map_err(|_| CryptoError::AeadTagMismatch)?;
+            Ok(buf.to_vec())
+        })
+    }
 }
 
 // `aes_gcm::Error` → `CryptoError::AeadTagMismatch` の変換は `From` impl を
@@ -400,5 +464,60 @@ mod tests {
             .unwrap_vek(&kek_recovery, &wrapped)
             .expect("unwrap ok");
         assert_eq!(verified.as_inner().expose_secret(), &vek_bytes);
+    }
+
+    // -----------------------------------------------------------------
+    // encrypt_with_raw_aad / decrypt_with_raw_aad (任意長 AAD、ヘッダ封筒用)
+    // -----------------------------------------------------------------
+
+    /// 任意長 AAD + 空 plaintext で MAC として動作させ、同 AAD で検証成功 +
+    /// 別 AAD で `AeadTagMismatch` を確認する (C-17/C-18 ヘッダ AEAD 用)。
+    #[test]
+    fn raw_aad_encrypt_then_decrypt_roundtrip_and_swap_fails() {
+        let adapter = AesGcmAeadAdapter;
+        let kek = make_kek(0x5A);
+        let nonce = make_nonce(0xC3);
+        let aad = b"canonical-header-bytes-arbitrary-length-payload-1234567890";
+        let aad_other = b"canonical-header-bytes-DIFFERENT-payload-0987654321!!!!!!!";
+
+        // 空 plaintext (header AEAD envelope の標準ケース)
+        let (ct, tag) = adapter
+            .encrypt_with_raw_aad(&kek, &nonce, aad, &[])
+            .expect("encrypt ok");
+        // 空 plaintext → ciphertext も 0 byte (detached tag)
+        assert_eq!(ct.len(), 0);
+
+        // 同 AAD で decrypt → bit-exact 一致 (空)
+        let verified = adapter
+            .decrypt_with_raw_aad(&kek, &nonce, aad, &ct, &tag)
+            .expect("decrypt ok");
+        assert_eq!(verified.as_inner().expose_secret(), b"");
+
+        // 別 AAD で decrypt → AeadTagMismatch
+        let err = adapter
+            .decrypt_with_raw_aad(&kek, &nonce, aad_other, &ct, &tag)
+            .expect_err("swapped raw AAD must fail");
+        assert!(matches!(err, CryptoError::AeadTagMismatch));
+    }
+
+    /// 非空 plaintext + 任意長 AAD でも roundtrip が動くことを確認 (一般化)。
+    #[test]
+    fn raw_aad_roundtrip_with_nonempty_plaintext_bit_exact() {
+        let adapter = AesGcmAeadAdapter;
+        let kek = make_kek(0x77);
+        let nonce = make_nonce(0x88);
+        let aad = b"AAD-of-arbitrary-length";
+        let pt = b"the quick brown fox jumps over the lazy dog";
+
+        let (ct, tag) = adapter
+            .encrypt_with_raw_aad(&kek, &nonce, aad, pt)
+            .expect("encrypt ok");
+        assert_eq!(ct.len(), pt.len());
+        assert_ne!(ct.as_slice(), pt.as_slice());
+
+        let verified = adapter
+            .decrypt_with_raw_aad(&kek, &nonce, aad, &ct, &tag)
+            .expect("decrypt ok");
+        assert_eq!(verified.as_inner().expose_secret(), pt);
     }
 }

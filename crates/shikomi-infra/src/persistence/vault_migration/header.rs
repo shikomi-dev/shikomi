@@ -219,30 +219,15 @@ impl VaultEncryptedHeader {
     /// - kdf_params (12B = m||t||p)
     #[must_use]
     pub fn canonical_bytes_for_aad(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64);
-        out.extend_from_slice(&self.version.value().to_be_bytes());
-
-        // created_at の i64 マイクロ秒変換 (Aad と同じ規約)。
-        // 範囲外時はゼロ埋めで防衛的フォールバック (構造的に到達しない、time crate 限界外)。
-        // unix_timestamp_nanos() は既に i128 を返すため i128::from() は冗長 (clippy::useless_conversion)。
-        let micros = self.created_at.unix_timestamp_nanos() / 1_000;
-        let micros_i64 = i64::try_from(micros).unwrap_or(0);
-        out.extend_from_slice(&micros_i64.to_be_bytes());
-
-        out.extend_from_slice(self.kdf_salt.as_array());
-        Self::serialize_wrapped_vek_into(&mut out, &self.wrapped_vek_by_pw);
-        Self::serialize_wrapped_vek_into(&mut out, &self.wrapped_vek_by_recovery);
-        out.extend_from_slice(&self.nonce_counter.current().to_be_bytes());
-        out.extend_from_slice(&self.kdf_params.to_canonical_bytes());
-        out
-    }
-
-    /// `WrappedVek` を canonical bytes として `out` に追記する (AAD 用、envelope 用)。
-    /// レイアウト: `nonce 12B ‖ tag 16B ‖ ciphertext ?B`。
-    fn serialize_wrapped_vek_into(out: &mut Vec<u8>, w: &WrappedVek) {
-        out.extend_from_slice(w.nonce().as_array());
-        out.extend_from_slice(w.tag().as_array());
-        out.extend_from_slice(w.ciphertext());
+        canonical_aad_bytes(
+            self.version,
+            self.created_at,
+            &self.kdf_salt,
+            &self.wrapped_vek_by_pw,
+            &self.wrapped_vek_by_recovery,
+            &self.nonce_counter,
+            self.kdf_params,
+        )
     }
 
     /// `nonce_counter.increment()` のみ呼ぶ (Sub-D Rev1: `Rng` 依存ゼロ)。
@@ -318,6 +303,55 @@ impl VaultEncryptedHeader {
             header_aead_envelope,
         }
     }
+}
+
+/// AAD 正規化バイト列を **生フィールドから** 直接構築するスタンドアロン関数。
+///
+/// `VaultEncryptedHeader::canonical_bytes_for_aad` の構築ロジックを切り出した
+/// 同型実装。`build_header_envelope` (service.rs) は `VaultEncryptedHeader::new`
+/// **前** にヘッダ AEAD タグを計算する必要があるため、本関数を経由する。
+///
+/// ## レイアウト凍結 (Sub-D Rev1)
+/// - version (2B BE u16)
+/// - created_at_micros (8B BE i64)
+/// - kdf_salt (16B)
+/// - wrapped_vek_by_pw_serialized (`nonce 12B ‖ tag 16B ‖ ct ?`)
+/// - wrapped_vek_by_recovery_serialized (同)
+/// - nonce_counter (8B BE u64) — L1 巻戻し改竄を構造防衛
+/// - kdf_params (12B = m||t||p)
+#[must_use]
+pub(crate) fn canonical_aad_bytes(
+    version: VaultVersion,
+    created_at: OffsetDateTime,
+    kdf_salt: &KdfSalt,
+    wrapped_vek_by_pw: &WrappedVek,
+    wrapped_vek_by_recovery: &WrappedVek,
+    nonce_counter: &NonceCounter,
+    kdf_params: KdfParams,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    out.extend_from_slice(&version.value().to_be_bytes());
+
+    // created_at の i64 マイクロ秒変換 (Aad と同じ規約)。
+    // 範囲外時はゼロ埋めで防衛的フォールバック (構造的に到達しない、time crate 限界外)。
+    let micros = created_at.unix_timestamp_nanos() / 1_000;
+    let micros_i64 = i64::try_from(micros).unwrap_or(0);
+    out.extend_from_slice(&micros_i64.to_be_bytes());
+
+    out.extend_from_slice(kdf_salt.as_array());
+    serialize_wrapped_vek_into_buf(&mut out, wrapped_vek_by_pw);
+    serialize_wrapped_vek_into_buf(&mut out, wrapped_vek_by_recovery);
+    out.extend_from_slice(&nonce_counter.current().to_be_bytes());
+    out.extend_from_slice(&kdf_params.to_canonical_bytes());
+    out
+}
+
+/// `WrappedVek` を canonical bytes として `out` に追記する (関数版、`VaultEncryptedHeader`
+/// の inherent helper と完全同型)。
+fn serialize_wrapped_vek_into_buf(out: &mut Vec<u8>, w: &WrappedVek) {
+    out.extend_from_slice(w.nonce().as_array());
+    out.extend_from_slice(w.tag().as_array());
+    out.extend_from_slice(w.ciphertext());
 }
 
 /// `from_core_with_extras` の防衛的 fallback 用の dummy `WrappedVek`。
