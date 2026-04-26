@@ -15,6 +15,7 @@ pub(crate) mod paths;
 pub(crate) mod permission;
 pub(crate) mod repository;
 pub(crate) mod sqlite;
+pub mod vault_migration;
 
 // -------------------------------------------------------------------
 // 公開 re-export
@@ -24,11 +25,19 @@ pub use error::{AtomicWriteStage, CorruptedReason, PersistenceError, VaultDirRea
 pub use paths::VaultPaths;
 pub use repository::SqliteVaultRepository;
 
+// Sub-D (#42) vault migration service と新規型 (8 種)。
+pub use vault_migration::{
+    DecryptConfirmation, EncryptedRecord, HeaderAeadEnvelope, KdfParams, MigrationError,
+    RecoveryDisclosure, RecoveryWords, VaultEncryptedHeader, VaultMigration,
+};
+
 // -------------------------------------------------------------------
 // 定数
 // -------------------------------------------------------------------
 
-/// 暗号化 vault 永続化の追跡 Issue 番号。未登録のため `None`。
+/// 暗号化 vault 永続化の追跡 Issue 番号。Sub-D (#42) で実装解禁済のため `None` を維持。
+/// 旧 `TRACKING_ISSUE_ENCRYPTED_VAULT` は repository.rs から参照されない (Sub-D 解禁)。
+#[allow(dead_code)]
 pub(crate) const TRACKING_ISSUE_ENCRYPTED_VAULT: Option<u32> = None;
 
 // -------------------------------------------------------------------
