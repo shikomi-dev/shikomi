@@ -13,9 +13,7 @@ use shikomi_infra::persistence::VaultRepository;
 use super::V2Context;
 
 /// `IpcRequest::Lock` を処理する。
-pub async fn handle_lock<R: VaultRepository + ?Sized>(
-    ctx: &V2Context<'_, R>,
-) -> IpcResponse {
+pub async fn handle_lock<R: VaultRepository + ?Sized>(ctx: &V2Context<'_, R>) -> IpcResponse {
     match ctx.cache.lock().await {
         Ok(()) => IpcResponse::Locked,
         Err(err) => IpcResponse::Error(IpcErrorCode::Internal {

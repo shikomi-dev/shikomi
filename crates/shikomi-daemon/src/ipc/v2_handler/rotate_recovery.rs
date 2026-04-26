@@ -37,11 +37,13 @@ pub async fn handle_rotate_recovery<R: VaultRepository + ?Sized>(
     let password_str = secret_bytes_to_string(&master_password);
 
     // rekey + recovery rotation atomic 実行 (§F-E5)
-    let (_records_count, disclosure) =
-        match ctx.migration.rekey_with_recovery_rotation(password_str.clone()) {
-            Ok(pair) => pair,
-            Err(err) => return IpcResponse::Error(migration_error_to_ipc(err)),
-        };
+    let (_records_count, disclosure) = match ctx
+        .migration
+        .rekey_with_recovery_rotation(password_str.clone())
+    {
+        Ok(pair) => pair,
+        Err(err) => return IpcResponse::Error(migration_error_to_ipc(err)),
+    };
 
     // cache を新 VEK で再構築: lock → 再 unlock
     if let Err(err) = ctx.cache.lock().await {

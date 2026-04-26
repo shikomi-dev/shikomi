@@ -76,10 +76,7 @@ pub enum ClientState {
 /// - `PreHandshake` 状態で `Handshake` 以外を受信: `ProtocolDowngrade` (C-29)
 /// - V1 client が V2 専用 variant を送信: `ProtocolDowngrade` (C-28)
 /// - `Unknown` バージョン: `ProtocolDowngrade` (fail-secure)
-pub fn check_request_allowed(
-    state: ClientState,
-    request: &IpcRequest,
-) -> Result<(), IpcErrorCode> {
+pub fn check_request_allowed(state: ClientState, request: &IpcRequest) -> Result<(), IpcErrorCode> {
     match state {
         ClientState::PreHandshake => {
             // C-29: handshake 前は Handshake variant のみ許可

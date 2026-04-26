@@ -107,13 +107,13 @@ fn secret_bytes_to_string(secret: &SerializableSecretBytes) -> String {
 }
 
 /// `Vec<SerializableSecretBytes>` (24 個) を `[String; 24]` に変換する。
-fn secret_bytes_vec_to_words(
-    vec: Vec<SerializableSecretBytes>,
-) -> Result<[String; 24], String> {
+fn secret_bytes_vec_to_words(vec: Vec<SerializableSecretBytes>) -> Result<[String; 24], String> {
     if vec.len() != 24 {
         return Err(format!("recovery-words-must-be-24, got {}", vec.len()));
     }
     let words: Vec<String> = vec.iter().map(secret_bytes_to_string).collect();
-    let arr: [String; 24] = words.try_into().map_err(|_| "recovery-words-conversion-failed".to_owned())?;
+    let arr: [String; 24] = words
+        .try_into()
+        .map_err(|_| "recovery-words-conversion-failed".to_owned())?;
     Ok(arr)
 }
