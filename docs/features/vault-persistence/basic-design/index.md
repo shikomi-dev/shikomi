@@ -359,7 +359,7 @@ sequenceDiagram
 
 | 連携先 | 用途 | 認証方式 | タイムアウト / リトライ |
 |-------|------|---------|-----------------------|
-| OS ファイルシステム（POSIX / Win32） | vault.db 読み書き、パーミッション / ACL 操作、rename | プロセス権限（通常ユーザ） | タイムアウトなし（ローカル I/O）、リトライは行わず Fail Fast |
+| OS ファイルシステム（POSIX / Win32） | vault.db 読み書き、パーミッション / ACL 操作、rename | プロセス権限（通常ユーザ） | タイムアウトなし（ローカル I/O）。**ローカル I/O は原則 Fail Fast**。ただし **Win rename のみ** §設計判断メモ §atomic write の不変条件 で定義する **短期 retry**（50ms ± jitter × 最大 5 回、`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION` のみ）を file-handle semantics 補強として適用（Issue #65 由来、`./security.md` §atomic write の二次防衛線）|
 | OS 環境変数（`SHIKOMI_VAULT_DIR` / `XDG_DATA_HOME` / `HOME` / `APPDATA`） | vault ディレクトリ解決 | — | — |
 | SQLite（`rusqlite` バンドル版） | vault.db 内部構造 | プロセス内、認証なし | — |
 

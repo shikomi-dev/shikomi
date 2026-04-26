@@ -205,6 +205,8 @@ classDiagram
 
 **3.2 `AtomicWriteSession` への構造体化リファクタは Phase 8 別 PR に分離**: 上記クローズ順序契約は理想的には `AtomicWriteSession { conn, paths, new_path }` のようなセッション型を作り、`finalize(self) -> Result<()>` の所有権消費メソッドに集約することで**型レベル強制**できる（Tell, Don't Ask）。本 Issue では既存 `AtomicWriter` ZST + 静的メソッド連鎖の構造を維持し、本 PR スコープを「Issue #65 バグ修正 + 契約 SSoT 化」に絞る（KISS、本 PR 肥大化回避）。構造体化は Phase 8 リファクタ専用 PR で実施する（外部レビューでキャプテン決定、合意済）。
 
+**3.3 `permission/windows/*.rs` DACL 適用順序の再点検は本 PR スコープ外（deferred 判断）**: Issue #65 本文と現行 `atomic.rs:177-188` のコメントは「rename 後に DACL 適用」と明記し、test failure（`vault_migration_integration` 5 件）は **rename 段で発火**しているため DACL 適用順序とは独立した経路（DB ハンドル / サイドカー / Win file-handle semantics 由来）と切り分けられる。本 PR の rename retry 補強と DACL 適用順序の再評価は**論点が独立**しており、本 PR で同時に弄ると変更原因が混在しレビュー不能になる。**結論**: DACL 適用順序の再点検は本 PR では行わず、Phase 8 リファクタ PR（`AtomicWriteSession` 構造体化）と同タイミングで「rename 前 DACL 設定 + rename 後の所有者保持検証」を再評価するスコープに含める。本判断を SSoT として本箇所に記録し、レビュー時の沈黙を「Boy Scout 違反」と誤認されないよう明文化する（ペテルギウス工程1指摘 §4 への応答）。
+
 **4. なぜ `PermissionGuard` を別クラスに分離するか**: OS 別実装（Unix / Windows）を `cfg(unix)` / `cfg(windows)` で切り分けるが、`SqliteVaultRepository` の制御フローを OS 依存にしたくない。`PermissionGuard` が OS 非依存の 4 メソッド（`ensure_dir` / `ensure_file` / `verify_dir` / `verify_file`）を公開し、内部で `cfg_if!` で実装選択（Dependency Inversion の OS レベル適用）。
 
 **5. なぜ `Mapping` を構造体ではなく関連関数の集合にするか**: 写像は**副作用なし・状態なし**の純関数。構造体でラップすると不要なインスタンス生成が発生する（YAGNI）。`Mapping` は空構造体（zero-sized type）にし、関連関数 `Mapping::vault_header_to_params` のようにドット記法で呼び出す（namespace 機能のみ）。

@@ -27,6 +27,10 @@
 | ファイル差替えによる権限昇格 | 攻撃者が `0777` の vault.db を置く | データ改竄・読取 | 起動時のパーミッション検証（REQ-P06）で `0600` 以外を拒否。攻撃者が正しいパーミッションで作り直しても上記「悪意あるスクリプト」の枠（§7.0） |
 | テンポラリファイル経由のレース | `.new` 作成から rename までの間に攻撃者が介入 | vault.db 差替え | `.new` は作成時に `0600` / ACL 所有者のみ。属しないトラスティが書込不可であることで TOCTOU を狭める。rename 自体は atomic |
 | 起動時のドメイン整合性違反 | vault.db の行が壊れている | ドメイン不変条件 | **復元時検証**（REQ-P09）: 全 newtype の `try_new` を通す。`RecordId` / `RecordLabel` / `VaultHeader` / `RecordPayloadEncrypted` / `NonceBytes` / `KdfSalt` / `WrappedVek` 全て検証済み型でしか `Vault` に入らない |
+| **SQLite サイドカー漏洩**（Issue #65） | `.new-journal` / `.new-wal` / `.new-shm` を同ユーザ別プロセスが checkpoint 完了前に open し、進行中トランザクションの平文/暗号文 BLOB を読取 | レコード平文・暗号文 | §atomic write の二次防衛線 §サイドカーの DACL 適用 — `PRAGMA wal_checkpoint(TRUNCATE)` + `journal_mode = DELETE` で物理消去を契約化、加えてサイドカーパスにも `ensure_file` を適用 |
+| **Win rename retry 中 TOCTOU**（Issue #65） | 50ms × 5 = 250ms の retry 窓中に攻撃者が `vault.db` / `.new` を symlink/junction に差し替え、retry 成功時に攻撃者制御パスへ書込される | vault ディレクトリ完全性 | §atomic write の二次防衛線 §Win retry 中 TOCTOU — retry 直前に `fs::symlink_metadata` で symlink 再検証、検出時 `InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast |
+| **rename retry DoS 兆候**（Issue #65） | 攻撃者が他プロセスから `vault.db` を意図的に open/lock して daemon を retry ループ（最大 250ms）で繰返ストールさせ、サービス停止を誘発 | 可用性 | §atomic write の二次防衛線 §retry 監査ログ — `audit::retry_event` で発火を監査ログに記録、daemon 側で「異常頻度の retry」を検知して上位通報（OWASP A09 連携）|
+| **timing oracle**（Issue #65） | 50ms 固定インターバルが外部観測者に「rename retry 発火中」を観測可能にし、状態推定の signal となる | プロセス内部状態の機密 | §atomic write の二次防衛線 §jitter — `±25ms` 一様乱数 jitter を retry 間隔に追加、固定タイミングを排除 |
 | `SHIKOMI_VAULT_DIR` の悪用 | 環境変数で `../../etc` / `/proc/self/root` / シンボリックリンクを指定 | システム保護領域・任意ディレクトリへの書込、TOCTOU 差替え | **`VaultPaths::new` バリデーション**（§vault ディレクトリ検証）: 絶対パス必須、`..` 早期拒否、シンボリックリンク全面禁止、`canonicalize` 後の保護領域 prefix 一致拒否、ディレクトリ判定 |
 | 並行書込レース（daemon 未起動時） | CLI / リカバリツール / 別 CLI が同時に `save` を呼ぶ | vault.db 壊れ、`.new` 錯綜 | **プロセス間 advisory lock**（`VaultLock::acquire_exclusive`）: `fs4` / `LockFileEx` で非ブロッキング排他取得、失敗時は `Locked { holder_hint }` で即 return（待機・再試行しない、Fail Fast） |
 | ログ経由の秘密漏洩 | 開発者がデバッグで vault 内容を `tracing::info!("{:?}", record)` してしまう | plaintext_value / ciphertext / VEK が journal に流れる | 多層防御 — ①`SecretString`/`SecretBytes` の `Debug` は `"[REDACTED]"`（Issue #7）、②`audit.rs` 経由以外の tracing 呼出を clippy lint で禁止、③`PersistenceError::Display` は全バリアント秘密を含めない、④`tracing-test` による CI 検証（AC-15） |
@@ -44,6 +48,8 @@
 | `exists` 呼出 | `debug` | 戻り値直前 | `vault_dir`, `found: bool` | — |
 | `PersistenceError` 全バリアント | `warn`（`InvalidPermission` / `OrphanNewFile` / `Locked` / `UnsupportedYet`）／ `error`（`Sqlite` / `Corrupted` / `AtomicWriteFailed` / `SchemaMismatch` / `Io` / `InvalidVaultDir` / `CannotResolveVaultDir`） | return の直前 | エラーバリアント名、`path`（秘密でない）、`stage`（atomic write 時）、`table`（Corrupted 時）、`reason`（列挙の variant 名のみ） | 下位 `#[source]` の `Debug` 文字列全体（`SecretString` の `Debug` は `"[REDACTED]"` 固定だが、SQLite エラーメッセージにパラメータ値が混入する可能性があるため、`source` は `display_redacted()` ヘルパ経由で記録し、SQL パラメータは `?` 化して記録） |
 | atomic write 中間段階 | `debug` | 各 stage（`PrepareNew` / `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` / `CleanupOrphan`）遷移時 | `stage` 名、`elapsed_ms` | ファイル内容 |
+| **rename retry 発火**（Issue #65） | `warn` | `cfg(windows)` rename 段で一過性エラー（`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION`）検知時、各 retry 試行直前 / 完了直後 | `stage = Rename`、`attempt: u32`（1〜5）、`raw_os_error: i32`、`elapsed_ms`、`outcome: "pending" \| "succeeded" \| "exhausted"` | path のシンボリックリンク先実体・ファイル内容 |
+| **rename retry 全敗**（Issue #65） | `error` | retry 5 回全敗で `AtomicWriteFailed { stage: Rename }` 返却直前 | `total_attempts: 5`、`total_elapsed_ms`、`final_raw_os_error: i32` | 同上。daemon 側はこのイベントを **DoS 兆候** として上位通報候補（OWASP A09 連携）|
 
 **秘密値マスクの型保証**:
 
@@ -104,6 +110,60 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 **検証手段**: 実装 PR の CI で `grep -rn '#!\[allow(unsafe_code)\]' crates/` を走らせ、`permission/windows.rs` 以外に属性が出現したら fail するスクリプトジョブを追加する（本 Issue のスコープではスクリプト追加まではしない、実装 Issue で対応）。それまでは服部の目視レビューで担保する。
 
+### atomic write の二次防衛線（Issue #65 由来、Win file-handle semantics 対応）
+
+`./index.md` §設計判断メモ §atomic write の不変条件 で定義した「DB ハンドル明示クローズ + サイドカー解放保証」+「`cfg(windows)` 短期 retry 補強」の運用に伴い、新たに開く可能性のある攻撃面を**設計レベルで先回り**して塞ぐ。本節は服部レビュー（PR #71）で指摘された 5 経路への応答であり、`./error.md` §Windows rename PermissionDenied 行 / `../detailed-design/flows.md` §`save` step 6-7 と整合する。
+
+#### サイドカーの DACL 適用（A01 / A05）
+
+**問題**: SQLite が WAL モード採用時に作成する `-journal` / `-wal` / `-shm` サイドカーは、`atomic.rs::create_with_permissions` の `0o600` / `ensure_file` 強制対象**外**であり、デフォルトのプロセス umask / ディレクトリ ACL が適用される。同ユーザ別プロセスが checkpoint 完了前に open すれば、進行中トランザクションの平文/暗号文 BLOB が漏洩する。`detect_orphan` もサイドカーを検査しない。
+
+**対策（多層）**:
+
+1. **物理消去契約**: `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` を `Connection::close` 直前に発行（`../detailed-design/flows.md` §`save` step 6.11-12）。close 時にサイドカーが物理消去されることをライブラリレベルで強制
+2. **存在時の DACL 強制**: `AtomicWriter::write_new` 内で `Connection::close` の**後**に `[".new-journal", ".new-wal", ".new-shm"]` の各候補パスを `try_exists()` で確認し、存在するものに `PermissionGuard::ensure_file` を適用（`0o600` / Win owner-only DACL）。存在しなければスキップ。サイドカー特有の状況（`journal_mode = TRUNCATE` 採用時のヘッダ残存等）を取り溢さない
+3. **detect_orphan の拡張**: `load` 冒頭の `detect_orphan` を `vault.db.new` だけでなく上記 3 サイドカー候補にも適用。残存検出時は `OrphanNewFile { path }` を返却（path にどのサイドカーかを含む）。ユーザ明示操作を待つ Fail Secure 方針と整合
+
+#### Win retry 中 TOCTOU 対策（A01）
+
+**問題**: `cfg(windows)` rename retry の 50ms × 5 = 250ms 窓中に、攻撃者が `vault.db` / `.new` を symlink / junction（NTFS reparse point）に差し替えれば、retry 成功時に**攻撃者制御パス**へ書込される。`VaultPaths::new` の `SymlinkNotAllowed` 検証は初回のみで、retry ループ中の再検証はない。
+
+**対策**:
+
+1. **retry 直前の symlink 再検証**: 各 retry 試行の `sleep` 後、rename 再実行**直前**に `fs::symlink_metadata(vault.db)` と `fs::symlink_metadata(new_path)` を呼び、`is_symlink()` が true なら retry 打ち切り、`InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast
+2. **junction（NTFS reparse point）検出**: Windows では `is_symlink()` だけでなく `MetadataExt::file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0` も検査（`std::os::windows::fs::MetadataExt`、Microsoft Learn "File Attributes" https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants）。`mklink /J` で作られた junction も拒否
+3. **dir-fd 化（次段）**: 完全な TOCTOU 排除には親ディレクトリを open しっぱなしにして相対パスで操作する dir-fd パターンが望ましいが、Windows の `O_DIRECTORY` 相当は `FILE_FLAG_BACKUP_SEMANTICS` 経由で煩雑。本 Issue では symlink 再検証で実用的に絞り、dir-fd 化は **Phase 8 リファクタ PR**（`AtomicWriteSession` 構造体化と同時）で再評価する
+
+#### retry 監査ログ（A09）
+
+**問題**: retry 発火を可視化しないと、攻撃者が `vault.db` を他プロセスから open し続けて daemon を 250ms × N 回ストールさせる **DoS 兆候**が検知できない。
+
+**対策**:
+
+1. **`audit::retry_event(stage, attempt, raw_os_error, elapsed_ms, outcome)` 関数を新設**: `audit.rs` の公開関数を 5 → 6 に拡張。シグネチャは `&'static str` / `u32` / `i32` / `u64` / `&'static str` のみ（秘密値を含まない型、`§監査ログ規約` §秘密値マスクの型保証 §防衛線 と整合）
+2. **発火ポイント**: 各 retry 試行直前に `outcome = "pending"`、成功時に `"succeeded"`、5 回全敗時に `"exhausted"`（後者は `error` レベル）。`§監査ログ規約` テーブルに 2 行追加済
+3. **daemon 側 DoS 検知**: 別 Issue（daemon Issue）で「同一 vault_dir に対し 1 分間に `retry_event` が 10 回以上 = 異常頻度」の閾値ロジックを追加し、`tracing` subscriber 経由で上位通報。本 Issue では監査ログの **emit 側責務のみ**を実装
+
+#### jitter — timing oracle 防止
+
+**問題**: 50ms の固定インターバルは外部観測者から「rename retry 発火中」を時刻パターンで観測可能にし、プロセス内部状態の signal 流出となる。
+
+**対策**:
+
+1. **`±25ms` 一様乱数 jitter** を各 retry 間隔に加算: `sleep_duration = Duration::from_millis(50) + Duration::from_millis(rng.gen_range(0..=25)) - Duration::from_millis(12)` 相当（実装は `rand` crate `gen_range`、または `getrandom` 直接呼出）
+2. **乱数源**: 既存の `rand_core::OsRng` を流用（`shikomi-infra` の AEAD nonce 生成と同じ CSPRNG 経路、新規依存追加なし）
+3. **jitter の上限**: 合計 retry 時間 ≤ 約 250ms 制約は維持。最悪ケース `(50+25) × 5 = 375ms` だが、平均は 250ms 近傍
+
+#### `Connection::close()` 失敗時の `.new` クリーンアップ
+
+**問題**: `Connection::close` が失敗（pending stmt cache 由来 / DB lock 由来）した場合に `.new` を放置すると、次回 `load` で `OrphanNewFile` が返り、ユーザは「正常な前回 save の痕跡」と誤認する可能性。連鎖故障経路となる。
+
+**対策**:
+
+1. `AtomicWriter::write_new` 内、`conn.close()` 失敗時は **元の `Sqlite` エラーを保持しつつ** `AtomicWriter::cleanup_new(new_path)` を呼んで `.new` を best-effort 削除（`../detailed-design/flows.md` §`save` step 6.13）
+2. cleanup_new の失敗（`tracing::warn!` のみで握り潰し）は元のエラーを上書きしない（`./error.md` §禁止事項 §`AtomicWriter::cleanup_new` のみベストエフォート と整合）
+3. **ユーザ通知**: `Sqlite { source }` で返却するため、CLI / daemon は通常の SQLite エラー扱い。本ケース固有のメッセージは付けない（YAGNI、レアケース）
+
 ### OWASP Top 10 対応
 
 | # | カテゴリ | 対応状況 |
@@ -116,5 +176,5 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 | A06 | Vulnerable Components | `rusqlite` バンドル版（`features = ["bundled"]`）で外部 SQLite に依存しない。SQLite 本体のアドバイザリは `cargo deny` で検出。`windows` crate は Microsoft 公式 |
 | A07 | Auth Failures | 対象外 — 本 Issue は認証ロジックを持たない。認証は暗号化モード（別 Issue）でマスターパスワード経由 |
 | A08 | Data Integrity Failures | **主対応（部分）** — atomic write で部分書込を防ぐ。ドメイン再構築時に全 newtype 検証（REQ-P09）で整合性を担保。**暗号学的改竄検出**は本 Issue 範囲外（平文モードには AEAD がない、§7.0 で明示） |
-| A09 | Logging Failures | **主対応** — `§監査ログ規約` で記録対象・レベル・秘密マスクルールを網羅。`audit.rs` 経由のみログを許可し clippy `disallowed-methods` で直接 `tracing::info!` 呼出を禁止。秘密型の `Debug` は Issue #7 で `"[REDACTED]"` 固定、`PersistenceError::Display` は全バリアントで秘密を含めない。検証は AC-15 で `tracing-test` により機械的に行う |
+| A09 | Logging Failures | **主対応** — `§監査ログ規約` で記録対象・レベル・秘密マスクルールを網羅。`audit.rs` 経由のみログを許可し clippy `disallowed-methods` で直接 `tracing::info!` 呼出を禁止。秘密型の `Debug` は Issue #7 で `"[REDACTED]"` 固定、`PersistenceError::Display` は全バリアントで秘密を含めない。検証は AC-15 で `tracing-test` により機械的に行う。**Issue #65 由来の追加**: rename retry 発火・全敗を `audit::retry_event` で記録し、daemon 側で DoS 兆候検知の上位通報を可能にする（§atomic write の二次防衛線 §retry 監査ログ）|
 | A10 | SSRF | 対象外 — HTTP リクエストを発行しない |
