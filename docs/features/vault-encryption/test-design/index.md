@@ -15,6 +15,7 @@
 | [`sub-c-aead.md`](./sub-c-aead.md) | Sub-C (#41) AEAD アダプタ + AeadKey trait | `TC-C-{U,I,P,E}*` |
 | [`sub-d-repository-migration.md`](./sub-d-repository-migration.md) | Sub-D (#42) 暗号化 Vault リポジトリ + マイグレーション + 横断 REQ-P11 改訂 | `TC-D-{U,I,P,E,S}*` |
 | [`sub-e-vek-cache-ipc.md`](./sub-e-vek-cache-ipc.md) | Sub-E (#43) VEK キャッシュ + IPC V2 拡張 + 横断 daemon-ipc V2 ラウンドトリップ | `TC-E-{U,I,P,E,S}*` |
+| [`sub-f-cli-subcommands.md`](./sub-f-cli-subcommands.md) | Sub-F (#44) shikomi-cli vault サブコマンド + 既存 CRUD ロック時挙動 + 保護モードバナー + アクセシビリティ + **TC-F-E01 田中ペルソナ E2E**（Sub-E TC-E-E01 凍結シナリオの実機完走、Sub-F CLI 完成後）| `TC-F-{U,I,A,E,S}*` |
 
 ## 共通方針
 
@@ -23,7 +24,7 @@
 - TC ID prefix は **Sub 単位で物理分離**（`TC-A-` / `TC-B-` / `TC-C-` / `TC-D-` / `TC-DOC-`）。ID 重複ゼロ
 - META チェック（TC 件数 assert）は各分冊が独立に管理（lint スクリプトもファイル単位で参照）
 
-## TC 総数（Sub-E 工程2 追加後）
+## TC 総数（Sub-F 工程2 後半 マユリ確定）
 
 | Sub | TC 数 | 分冊 |
 |---|---|---|
@@ -33,9 +34,10 @@
 | Sub-C | 26 | `sub-c-aead.md` |
 | Sub-D | 26 | `sub-d-repository-migration.md` |
 | Sub-E | 27 | `sub-e-vek-cache-ipc.md` |
-| **合計** | **152** | — |
+| Sub-F | **37**（unit 13 + integration 12 + accessibility 5 + E2E 1 + static 6、Rev1 で TC-F-U13 + TC-F-A05 + TC-F-S06 追加）| `sub-f-cli-subcommands.md` |
+| **合計** | **189** | — |
 
-**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 7 件（TC-E-S01..S07）= 14 件、`tests/docs/sub-{d,e}-static-checks.sh` で機械検証。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-E に継承し、4 度目以降の同型ドリフトを構造封鎖。**Sub-E 工程2 Rev1**（Petelgeuse 工程2 Rev1 指摘）で TC-E-S07 handshake 許可リスト境界 gate を追加、誤認した `#[non_exhaustive]` serde 経路保護を handshake 許可リスト方式に正規化。
+**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 9 件（TC-E-S01..S09、Bug-E-001 解決経路 + cache_relocked seam 含む）+ **Sub-F 6 件 (Rev1)**: TC-F-S01 `VaultSubcommand` **7 variant** 整合（recovery-show 廃止反映）/ TC-F-S02 `mode_banner::display` 必須呼出経路 (C-37、Rev1 ペテルギウス指摘7 再設計) / TC-F-S03 i18n 辞書 MSG-S01..S20 全キー存在 / TC-F-S04 `recovery_disclosure::display` 所有権消費 signature + 旧型 `[String; 24]` 残存検出 (Rev1 型整合) / TC-F-S05 env seam `#[cfg(debug_assertions)]` 限定 + core dump 抑制 (C-40/C-41) / **TC-F-S06 daemon env allowlist sanity check** (C-40、Rev1 服部指摘6 + ペテルギウス致命3 解消)。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-F に継承し、5 度目以降の同型ドリフトを構造封鎖。
 
 ## 関連スクリプト
 
@@ -44,3 +46,4 @@
 - `sub-0-structure-lint.py`: `test-design/sub-0-threat-model.md` を対象
 - `sub-0-cross-ref.sh`: `test-design/` 配下全ファイルを参照
 - `sub-{a,b,c,d,e}-static-checks.sh`: 各 Sub の対応分冊を参照
+- `sub-f-static-checks.sh`: Sub-F (TC-F-S01..S06 Rev1、テスト担当が工程3 で実装)。`VaultSubcommand` **7 variant** 集合整合（recovery-show 廃止）/ `mode_banner::display` 必須呼出経路 cross-crate grep (C-37、Rev1 再設計) / i18n 辞書 MSG-S01..S20 全キー存在 / `presenter::recovery_disclosure::display` 所有権消費 signature + 旧型 `[String; 24]` 残存検出 / env seam `#[cfg(debug_assertions)]` 限定 + core dump 抑制 (C-40/C-41) / daemon env allowlist sanity check (C-40 Rev1 新設)
