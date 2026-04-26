@@ -205,9 +205,10 @@
 
 | 項目 | 内容 |
 |------|------|
-| 型定義 | `pub enum IpcProtocolVersion` を `#[non_exhaustive]` で宣言。バリアント `V1`（初期）|
-| シリアライズ | `serde(rename_all = "snake_case")` で `"v1"` 等の文字列表現で送受信（数値より人間可読、ログ可読性向上）|
+| 型定義 | `pub enum IpcProtocolVersion` を `#[non_exhaustive]` で宣言。バリアント `V1`（初期）/ **`V2`（Sub-E #43 で非破壊昇格、暗号化 vault unlock / lock / change-password / rotate-recovery / rekey 対応）** |
+| シリアライズ | `serde(rename_all = "snake_case")` で `"v1"` / `"v2"` 等の文字列表現で送受信（数値より人間可読、ログ可読性向上）|
 | 拡張規則 | 破壊的変更時に `V2`、`V3` 等のバリアントを追加。**バリアントの削除 / 改名は禁止**。フィールド追加は新バリアントに留める（`V1` の payload 拡張ではなく `V2` 新設） |
+| **Sub-E V2 拡張**（**Sub-E #43 完了**）| `IpcRequest::{Unlock, Lock, ChangePassword, RotateRecovery, Rekey}` 5 新 variant、`IpcResponse::{Unlocked, Locked, PasswordChanged, RecoveryRotated, Rekeyed}` 5 新 variant、`IpcErrorCode::{VaultLocked, BackoffActive, RecoveryRequired, ProtocolDowngrade}` 4 新 variant 追加。詳細は `detailed-design/protocol-types.md` §`Sub-E (#43) IPC V2 拡張`。**V1 クライアント非破壊**: handshake で V1 検出時は V1 サブセットのみ受理、V2 専用 variant 送信時は `ProtocolDowngrade` で拒否（`vault-encryption/requirements.md` MSG-S15 と整合） |
 
 ### REQ-DAEMON-020: secret マスキング（IPC 経路）
 
