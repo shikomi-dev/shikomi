@@ -9,7 +9,7 @@ use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest};
 use shikomi_core::Vault;
 use shikomi_infra::crypto::{AesGcmAeadAdapter, Argon2idAdapter, Bip39Pbkdf2Hkdf, Rng, ZxcvbnGate};
 use shikomi_infra::persistence::vault_migration::VaultMigration;
-use shikomi_infra::persistence::VaultRepository;
+use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;
@@ -32,20 +32,24 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 // -------------------------------------------------------------------
 
 /// IPC サーバ。listener から `accept` し、接続ごとにタスクを spawn する。
-pub struct IpcServer<R: VaultRepository + Send + Sync + 'static> {
+///
+/// Sub-E (#43): `VaultMigration::new` が `&SqliteVaultRepository` 具体型を要求する
+/// ため、本 struct のジェネリック `<R>` は撤去し具体型 `SqliteVaultRepository` 固定。
+/// daemon は SqliteVaultRepository 一択 (cli-vault-commands/test では別経路でテスト)。
+pub struct IpcServer {
     listener: Option<ListenerEnum>,
-    repo: Arc<R>,
+    repo: Arc<SqliteVaultRepository>,
     vault: Arc<Mutex<Vault>>,
     cache: VekCache,
     backoff: Arc<Mutex<UnlockBackoff>>,
 }
 
-impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
+impl IpcServer {
     /// IpcServer を構築する (Sub-E (#43): cache / backoff を注入)。
     #[must_use]
     pub fn new(
         listener: ListenerEnum,
-        repo: Arc<R>,
+        repo: Arc<SqliteVaultRepository>,
         vault: Arc<Mutex<Vault>>,
         cache: VekCache,
         backoff: Arc<Mutex<UnlockBackoff>>,
@@ -120,6 +124,7 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
     // -----------------------------------------------------------------
 
     #[cfg(unix)]
+    #[allow(clippy::too_many_lines)]
     async fn accept_loop_unix(
         &self,
         listener: tokio::net::UnixListener,
@@ -261,16 +266,15 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
 /// (cheap、各 adapter は zero-sized 相当)。
 ///
 /// `shutdown` 受信時にも in-flight リクエストの応答送信は完了させる。
-async fn handle_connection<S, R>(
+async fn handle_connection<S>(
     stream: S,
-    repo: Arc<R>,
+    repo: Arc<SqliteVaultRepository>,
     vault: Arc<Mutex<Vault>>,
     cache: VekCache,
     backoff: Arc<Mutex<UnlockBackoff>>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
-    R: VaultRepository + Send + Sync + 'static,
 {
     let mut framed: Framed<S, LengthDelimitedCodec> = Framed::new(stream, framing::codec());
 
