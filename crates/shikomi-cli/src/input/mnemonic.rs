@@ -125,7 +125,10 @@ mod tests {
 
     #[test]
     fn test_parse_mnemonic_line_collapses_multiple_whitespace() {
-        let line = format!("{}", (0..24).map(|_| "abandon").collect::<Vec<_>>().join("\t  "));
+        let line = format!(
+            "{}",
+            (0..24).map(|_| "abandon").collect::<Vec<_>>().join("\t  ")
+        );
         let result = parse_mnemonic_line(&line);
         assert!(result.is_ok());
     }
