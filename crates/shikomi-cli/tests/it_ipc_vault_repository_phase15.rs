@@ -79,7 +79,10 @@ fn spawn_one_shot_stub(sock_path: PathBuf, response: IpcResponse) -> Recorder {
                 // 1. ハンドシェイク受信 → 成功応答
                 if let Some(Ok(_)) = framed.next().await {
                     let ok = IpcResponse::Handshake {
-                        server_version: IpcProtocolVersion::V1,
+                        // Sub-F (#44) 工程4 Bug-F-004: client (IpcVaultRepository) は
+                        // `IpcProtocolVersion::current() == V2` で handshake を要求するため、
+                        // mock daemon の応答も V2 に追従する。
+                        server_version: IpcProtocolVersion::V2,
                     };
                     let b = rmp_serde::to_vec(&ok).expect("encode handshake");
                     let _ = framed.send(Bytes::from(b)).await;
