@@ -112,7 +112,7 @@ impl Argon2idAdapter {
         let mut out: Zeroizing<[u8; KEK_LEN]> = Zeroizing::new([0u8; KEK_LEN]);
         argon
             .hash_password_into(
-                password.expose_secret_bytes_within_crate(),
+                password.expose_secret_bytes(),
                 salt.as_array(),
                 out.as_mut_slice(),
             )

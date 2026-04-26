@@ -55,13 +55,20 @@ impl MasterPassword {
 
     /// 生バイト列を取り出す (Sub-B `Argon2idAdapter::derive_kek_pw` 入力専用)。
     ///
+    /// 可視性: `pub` (`shikomi-infra::crypto::kdf` への正規入力経路)。
+    ///
+    /// 可視性ポリシーの差別化 (Sub-B Rev2 で凍結、`detailed-design/password.md`
+    /// §`MasterPassword` 参照):
+    /// - `Vek` / `Kek<_>` / `HeaderAeadKey::expose_within_crate` は **`pub(crate)`**
+    ///   (鍵バイトは外部 crate に渡さない、`shikomi-core::crypto` 内部閉じ)
+    /// - `MasterPassword::expose_secret_bytes` / `RecoveryMnemonic::expose_words`
+    ///   は **`pub`** (KDF 入力として `shikomi-infra` アダプタへの正規経路として開放)
+    ///
     /// **呼び出して良いのは `shikomi-infra::crypto::kdf` モジュールのみ**。
     /// CLI / GUI / daemon の bin crate から本メソッドを呼ぶことは禁止
     /// (CI grep による静的検出対象、`detailed-design/kdf.md` §`Argon2idAdapter` 参照)。
-    /// shikomi-infra から呼ぶために `pub` 公開しているが、API 契約上は crate 内部経路相当
-    /// (関数名末尾 `_within_crate` で意図を明示)。
     #[must_use]
-    pub fn expose_secret_bytes_within_crate(&self) -> &[u8] {
+    pub fn expose_secret_bytes(&self) -> &[u8] {
         self.inner.expose_secret()
     }
 }
@@ -159,7 +166,7 @@ mod tests {
     #[test]
     fn master_password_new_accepts_when_gate_returns_ok() {
         let p = MasterPassword::new("anything".to_string(), &AlwaysAcceptGate).unwrap();
-        assert_eq!(p.expose_secret_bytes_within_crate(), b"anything");
+        assert_eq!(p.expose_secret_bytes(), b"anything");
     }
 
     #[test]

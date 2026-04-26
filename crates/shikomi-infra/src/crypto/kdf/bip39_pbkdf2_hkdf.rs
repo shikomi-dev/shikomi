@@ -2,7 +2,7 @@
 //!
 //! 処理経路 (`kdf.md` L93):
 //!
-//! 1. `RecoveryMnemonic::expose_within_crate()` で `&[String; 24]` 取得
+//! 1. `RecoveryMnemonic::expose_words()` で `&[String; 24]` 取得
 //! 2. 24 語をスペース区切りで連結し `bip39::Mnemonic::parse_in(English, joined)` で
 //!    wordlist + checksum 検証 (失敗 → `CryptoError::InvalidMnemonic`)
 //! 3. `bip39_mnemonic.to_seed("")` で 64B seed (PBKDF2-HMAC-SHA512 2048iter
@@ -57,7 +57,7 @@ impl Bip39Pbkdf2Hkdf {
         &self,
         recovery: &RecoveryMnemonic,
     ) -> Result<Kek<KekKindRecovery>, CryptoError> {
-        let words = recovery.expose_within_crate();
+        let words = recovery.expose_words();
         let joined = words.join(" ");
 
         let bip39_mnemonic = Mnemonic::parse_in(Language::English, &joined)
