@@ -227,7 +227,7 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
 #### 入力検証 + 鍵階層構築フェーズ
 
 1. `let master_password = MasterPassword::new(plaintext_password.to_string(), &self.gate)?;` — Sub-A/B 経路、強度 ≥ 3 で `MasterPassword` 構築
-   - **失敗時** `Err(CryptoError::WeakPassword(feedback))` → `MigrationError::WeakPassword(feedback)` に包んで `MSG-S08` で提示
+   - **失敗時** `Err(CryptoError::WeakPassword(feedback))` → `MigrationError::Crypto(CryptoError::WeakPassword(feedback))` 透過（`#[from]` 自動変換、独立 `WeakPassword` variant は持たない）→ `MSG-S08` で提示
 2. `let kdf_salt = self.rng.generate_kdf_salt();` — 16B CSPRNG（Sub-B）
 3. `let kek_pw = self.vek_provider.argon2.derive_kek_pw(&master_password, &kdf_salt)?;` — Argon2id（Sub-B）
 4. `let mnemonic_entropy = self.rng.generate_mnemonic_entropy();` — 32B CSPRNG（Sub-B）
@@ -294,7 +294,7 @@ REQ-S13「初回 1 度表示」を**型レベルで強制**する。`RecoveryMne
 6. for each `EncryptedRecord` in `encrypted_vault.records()`:
    - `let aad = Aad::Record { ... };`
    - `let verified = self.adapter.decrypt_record(&vek, &record.nonce, &aad, &record.ciphertext, &record.tag)?;`
-   - **タグ検証失敗時** `MigrationError::AeadTagMismatch` → MSG-S10「vault.db 改竄の**可能性**...」（Sub-C Rev1 凍結指針）
+   - **タグ検証失敗時** `MigrationError::Crypto(CryptoError::AeadTagMismatch)` 透過（`#[from]` 自動変換、独立 `AeadTagMismatch` variant は持たない）→ MSG-S10「vault.db 改竄の**可能性**...」（Sub-C Rev1 凍結指針）
    - `let plaintext_value: String = String::from_utf8(verified.into_inner().expose_secret().to_vec()).map_err(|_| MigrationError::PlaintextNotUtf8)?;`
    - 構築: `PlaintextRecord { id, kind, label, plaintext_value, created_at, updated_at }`
 7. `let plaintext_vault = Vault::new_plaintext(header_with_protection_mode_plaintext, plaintext_records);`
@@ -342,31 +342,55 @@ REQ-S10 の「VEK 不変、`wrapped_VEK_by_pw` のみ再生成、全レコード
 9. `self.repo.save(&updated_vault)?;`
 10. **新 KEK_pw / 新 MasterPassword の Drop**: 関数終了時に zeroize
 
-## `MigrationError`（Sub-D 新規列挙型）
+## `MigrationError`（Sub-D 新規列挙型、`#[non_exhaustive]` で **9 variants**）
 
 ```mermaid
 classDiagram
     class MigrationError {
         <<enumeration>>
-        +WeakPassword_WeakPasswordFeedback
         +Crypto_CryptoError
         +Persistence_PersistenceError
-        +AtomicWriteFailed_stage
+        +Domain_DomainError
+        +AlreadyEncrypted
+        +NotEncrypted
         +PlaintextNotUtf8
         +RecoveryAlreadyConsumed
+        +AtomicWriteFailed_stage_source
+        +RecoveryRequired
+        +non_exhaustive
     }
 ```
 
+`#[derive(Debug, Error)]` + `#[non_exhaustive]` を付与。`Crypto` / `Persistence` / `Domain` は `#[from]` で各レイヤエラーを透過する。**MSG-S08（弱パスワード）は `Crypto(CryptoError::WeakPassword(_))` 透過経路で運ばれる**（独立 variant ではない、実装側 SSoT 整合）。
+
 | variant | `#[error(...)]` 文言 | 説明 | MSG マッピング |
 |---|---|---|---|
-| `WeakPassword(Box<WeakPasswordFeedback>)` | `#[error("weak password rejected by strength gate")]` | `vault encrypt` / `change-password` の入口 Fail Fast | MSG-S08 |
-| `Crypto(CryptoError)` | `#[error(transparent)]` | KDF / AEAD 失敗の透過、`AeadTagMismatch` / `NonceLimitExceeded` を含む | MSG-S10 / MSG-S11 |
-| `Persistence(PersistenceError)` | `#[error(transparent)]` | `repo.load` / `repo.save` 失敗 | 既存 MSG（vault-persistence 側） |
-| `AtomicWriteFailed { stage, source }` | `#[error("vault migration atomic write failed at stage {stage}")]` | マイグレーション中の atomic write 失敗、原状復帰済み明示 | MSG-S13 |
-| `PlaintextNotUtf8` | `#[error("decrypted plaintext is not valid UTF-8")]` | 復号成功したが UTF-8 不正（ありえない経路、Sub-C `Verified<Plaintext>` を構築できた時点で AEAD 検証は通っているが、UTF-8 検証は別レイヤー） | 開発者向けエラー（基本的にユーザに見せない、`MSG-S10` カテゴリに統合可） |
-| `RecoveryAlreadyConsumed` | `#[error("recovery disclosure already consumed")]` | `RecoveryDisclosure::disclose` 2 回目呼出（型レベルで防げない move 後の使用は compile_fail だが、`drop_without_disclose` 後の disclose を runtime で防ぐ）| 開発者向けエラー |
+| `Crypto(#[from] CryptoError)` | `#[error(transparent)]` | KDF / AEAD / 強度ゲート失敗の透過。`CryptoError::AeadTagMismatch` / `WeakPassword` / `NonceLimitExceeded` 等を運ぶ | MSG-S08 / MSG-S10 / MSG-S11 |
+| `Persistence(#[from] PersistenceError)` | `#[error(transparent)]` | `repo.load` / `repo.save` 失敗、`UnsupportedYet`（未対応バージョン）も含む | 既存 MSG（vault-persistence 側） |
+| `Domain(#[from] DomainError)` | `#[error(transparent)]` | shikomi-core ドメインエラー透過。`DomainError::Crypto(_)` を直接受け取った場合の経路 | MSG マッピングは内包する `CryptoError` 種別に従う |
+| `AlreadyEncrypted` | `#[error("vault is already encrypted")]` | 平文前提メソッドを暗号化 vault に呼出、または既暗号化 vault に `encrypt_vault` を再実行 | 開発者向けエラー、Sub-F が `vault status` 経由で適切に誘導 |
+| `NotEncrypted` | `#[error("vault is not encrypted")]` | 暗号化前提メソッド（unlock / decrypt / rekey 等）を平文 vault に呼出 | 同上、`vault encrypt` 案内 |
+| `PlaintextNotUtf8` | `#[error("decrypted plaintext is not valid UTF-8")]` | 復号成功したが UTF-8 不正（AEAD 検証通過後の追加検証層、ありえない経路の防衛的 variant）| 開発者向けエラー、`MSG-S10` カテゴリに統合可 |
+| `RecoveryAlreadyConsumed` | `#[error("recovery disclosure already consumed")]` | `RecoveryDisclosure::disclose` 2 度目呼出（通常は所有権消費でコンパイルエラー、`drop_without_disclose` 後の runtime 検出経路）| 開発者向けエラー |
+| `AtomicWriteFailed { stage: AtomicWriteStage, source: std::io::Error }` | `#[error("vault migration atomic write failed at stage {stage}")]` | マイグレーション中の atomic write 失敗で原状復帰（C-21）。`stage` の取り得る値は **§`AtomicWriteStage` の 6 値**（後述）| MSG-S13 |
+| `RecoveryRequired` | `#[error("recovery path required")]` | パスワード経路 unlock が `MasterPassword::new` 失敗等で進めない時、リカバリ経路への誘導を要求する | MSG-S12（リカバリ経路誘導） |
 
-**注**: `MigrationError::Persistence(PersistenceError)` で `vault-persistence` 側のエラーを透過する。Sub-D 内で `PersistenceError` を再分類しない（責務境界）。
+### `AtomicWriteStage`（vault-persistence 既存型を `MigrationError::AtomicWriteFailed { stage }` で transitive 利用）
+
+`shikomi_infra::persistence::error::AtomicWriteStage` enum、**6 値固定**:
+
+| 値 | `Display` 出力 | 発生段階 |
+|---|---|---|
+| `PrepareNew` | `prepare-new` | `.new` ファイル作成準備中 |
+| `WriteTemp` | `write-temp` | `.new` への SQLite 書込中 |
+| `FsyncTemp` | `fsync-temp` | `.new` の `sync_all` |
+| `FsyncDir` | `fsync-dir` | 親ディレクトリの `sync_all`（Unix のみ）|
+| `Rename` | `rename` | `.new` → `vault.db` リネーム / `ReplaceFileW` |
+| `CleanupOrphan` | `cleanup-orphan` | 孤立 `.new` ファイルの削除（best-effort）|
+
+**設計判断**: `AtomicWriteStage` は `vault-persistence` の既存型（Issue #15 で凍結済）を `vault-encryption` から transitive 利用する。Sub-D で再定義しない（DRY、責務境界、`vault-persistence/detailed-design/flows.md` §atomic write ステージ整合）。
+
+**注**: `MigrationError::Persistence(PersistenceError)` で `vault-persistence` 側のエラーを透過する。Sub-D 内で `PersistenceError` を再分類しない（責務境界）。`AtomicWriteFailed` は `vault-encryption` のマイグレーション層が **`vault-persistence` の atomic write 失敗を `PersistenceError` 経由ではなく専用 variant でラップして詳細を保持**する経路（既存 `PersistenceError::AtomicWriteFailed` と並列、stage 情報を `MigrationError` レベルで露出させて MSG-S13 への変換を簡潔化）。
 
 ## `PersistenceError` の改訂（vault-persistence 側 Boy Scout）
 
