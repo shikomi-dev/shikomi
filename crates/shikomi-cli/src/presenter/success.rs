@@ -9,7 +9,6 @@ use shikomi_core::ipc::SerializableSecretBytes;
 use shikomi_core::RecordId;
 
 use super::Locale;
-use crate::cli::OutputTarget;
 
 /// `added: {id}` / `追加しました: {id}` を改行付きで返す。
 #[must_use]
@@ -131,20 +130,9 @@ pub fn render_recovery_disclosure_screen(
     out
 }
 
-/// 非 Screen 経路（Print/Braille/Audio）の Phase 2 fallback 文言。
-///
-/// Phase 5 で `accessibility::{print_pdf, braille_brf, audio_tts}` が実装される
-/// までの間、ユーザに「Screen 経路にフォールバック中」を明示する。
-#[must_use]
-pub fn render_recovery_disclosure_screen_with_fallback_notice(
-    disclosure: &[SerializableSecretBytes],
-    output: OutputTarget,
-    locale: Locale,
-) -> String {
-    let mut out = render_recovery_disclosure_screen(disclosure, locale);
-    out.push_str(&fallback_notice(output, locale));
-    out
-}
+// Phase 6/7 で braille / audio / print PDF が `accessibility` モジュールに本実装され、
+// fallback notice 経路は完全に廃止された。`render_recovery_disclosure_screen_with_fallback_notice`
+// (旧 Phase 2 stub) は工程4 Bug-F-002 で削除済 (デッドコード排除、Phase 5 文言残存解消)。
 
 /// `vault rekey` 成功文言（MSG-S07 + 24 語表示）。
 ///
@@ -170,18 +158,8 @@ pub fn render_rekeyed(
     out
 }
 
-/// `vault rekey` の非 Screen 経路 fallback。
-#[must_use]
-pub fn render_rekeyed_with_fallback_notice(
-    records_count: usize,
-    words: &[SerializableSecretBytes],
-    output: OutputTarget,
-    locale: Locale,
-) -> String {
-    let mut out = render_rekeyed(records_count, words, locale);
-    out.push_str(&fallback_notice(output, locale));
-    out
-}
+// `render_rekeyed_with_fallback_notice` も Bug-F-002 で削除済 (Phase 6/7 で
+// rekey の braille / audio / print 経路が `accessibility` 経由本実装になった)。
 
 /// `vault rotate-recovery` 成功文言（MSG-S19 + 24 語表示）。
 ///
@@ -201,17 +179,7 @@ pub fn render_recovery_rotated(words: &[SerializableSecretBytes], locale: Locale
     out
 }
 
-/// `vault rotate-recovery` の非 Screen 経路 fallback。
-#[must_use]
-pub fn render_recovery_rotated_with_fallback_notice(
-    words: &[SerializableSecretBytes],
-    output: OutputTarget,
-    locale: Locale,
-) -> String {
-    let mut out = render_recovery_rotated(words, locale);
-    out.push_str(&fallback_notice(output, locale));
-    out
-}
+// `render_recovery_rotated_with_fallback_notice` も Bug-F-002 で削除済 (同上)。
 
 /// 24 語を 1 語 1 行で push する（番号 1〜n、UTF-8 lossy が secret_bytes 側 helper で適用済）。
 fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
@@ -221,24 +189,7 @@ fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
     }
 }
 
-/// 非 Screen 経路の Phase 2 fallback 注記。
-fn fallback_notice(output: OutputTarget, locale: Locale) -> String {
-    let label = match output {
-        OutputTarget::Print => "print",
-        OutputTarget::Braille => "braille",
-        OutputTarget::Audio => "audio",
-        OutputTarget::Screen => "screen",
-    };
-    let mut out = format!(
-        "\nnote: --output {label} is not yet wired in this build (Phase 5); displayed on screen instead.\n"
-    );
-    if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!(
-            "備考: --output {label} は本ビルドで未実装のため画面に表示しています（Phase 5 で実装予定）。\n"
-        ));
-    }
-    out
-}
+// `fallback_notice` private fn も Bug-F-002 で削除済 (Phase 5 文言残存解消)。
 
 #[cfg(test)]
 mod tests {

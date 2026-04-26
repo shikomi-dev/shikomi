@@ -51,6 +51,12 @@ test-infra:
 test-cli:
     cargo test -p shikomi-cli
 
+# Sub-F (#44) 工程4 マユリ Bug-F-003 解消: shikomi-daemon 専用テスト CI ジョブ。
+# 既存 `unit-core` / `test-infra` で network / IPC 経路がカバーされていなかったため、
+# `cargo test --workspace` 観測ギャップを埋める目的で独立ジョブ化。
+test-daemon:
+    cargo test -p shikomi-daemon
+
 # ------------------------------------------------------------------ bench
 
 # Sub-B (#40) BC-3 リリースブロッカ — KDF 性能ベンチ gating。

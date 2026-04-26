@@ -12,6 +12,7 @@
 //!   §モジュール配置と責務 / §セキュリティ設計 §shell history § C-38
 
 pub mod dto;
+pub mod mnemonic;
 pub mod password;
 
 pub use dto::{AddInput, ConfirmedRemoveInput, EditInput};

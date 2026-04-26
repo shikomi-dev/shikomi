@@ -160,19 +160,22 @@ pub struct OutputArgs {
 
 /// 24 語の出力先（C-39 排他指定 + アクセシビリティ自動切替）。
 ///
-/// 自動切替経路（`SHIKOMI_ACCESSIBILITY=1` / OS スクリーンリーダー検出）は
-/// Phase 5 以降で `accessibility::output_target::resolve` に集約する。
-/// Phase 2 では clap 派生型のみ提供し、実体は `Screen` 経路のみ wire（Phase 5 拡張）。
+/// 自動切替経路 (`SHIKOMI_ACCESSIBILITY=1` env / OS スクリーンリーダー検出) は
+/// `accessibility::output_target::resolve` に集約され、`Screen` 既定時のみ
+/// `Braille` に上書きされる。明示 `--output` フラグは常に最優先。
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "snake_case")]
 pub enum OutputTarget {
     /// 端末標準出力（既定）。`NO_COLOR` / 非 TTY 時はカラー無効化。
     Screen,
-    /// ハイコントラスト PDF 出力（Phase 5 で実装）。
+    /// ハイコントラスト PDF 出力。手書き PDF 1.4、黒地白文字 Helvetica 18pt、
+    /// `umask(0o077)` 内部適用でリダイレクト先 0600 相当。
     Print,
-    /// BRF（Braille Ready Format）テキスト出力（Phase 5 で実装）。
+    /// BRF（Braille Ready Format）テキスト出力。北米 ASCII Braille (Grade 1
+    /// fallback + 一部 UEB single-letter wordsign)。
     Braille,
-    /// OS TTS への直接パイプ出力（Phase 5 で実装）。
+    /// OS TTS への直接パイプ出力（macOS `say` / Linux `espeak` /
+    /// Windows `SAPI`）、中間ファイルなし `Stdio::piped()` のみ + env allowlist。
     Audio,
 }
 
