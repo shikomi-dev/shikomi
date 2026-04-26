@@ -182,7 +182,8 @@ async fn tc_it_010_handshake_then_list_empty() {
     send_request(&mut framed, &IpcRequest::ListRecords).await;
     let resp = recv_response(&mut framed).await;
     match resp {
-        IpcResponse::Records(v) => assert!(v.is_empty()),
+        // Sub-F (#44): `Records` 構造体化、`protection_mode` は破棄 (Plaintext 確認は別経路)
+        IpcResponse::Records { records, .. } => assert!(records.is_empty()),
         other => panic!("expected Records, got {other:?}"),
     }
     drop(framed);
@@ -217,7 +218,7 @@ async fn tc_it_011_add_then_list_roundtrip() {
     send_request(&mut framed, &IpcRequest::ListRecords).await;
     let list_resp = recv_response(&mut framed).await;
     match list_resp {
-        IpcResponse::Records(v) => {
+        IpcResponse::Records { records: v, .. } => {
             assert_eq!(v.len(), 1);
             assert_eq!(v[0].id, added_id);
             assert_eq!(v[0].label.as_str(), "L");
@@ -459,7 +460,7 @@ async fn tc_it_025_broken_connection_does_not_affect_other_connection() {
     send_request(&mut framed_b, &IpcRequest::ListRecords).await;
     let resp_b = recv_response(&mut framed_b).await;
     match resp_b {
-        IpcResponse::Records(_) => {} // 成功
+        IpcResponse::Records { .. } => {} // 成功 (Sub-F: 構造体化)
         other => panic!("expected Records on B, got {other:?}"),
     }
     drop(framed_a);

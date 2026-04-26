@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::vault::id::RecordId;
 
 use super::error_code::IpcErrorCode;
+use super::protection_mode::ProtectionModeBanner;
 use super::secret_bytes::SerializableSecretBytes;
 use super::summary::RecordSummary;
 use super::version::IpcProtocolVersion;
@@ -35,7 +36,23 @@ pub enum IpcResponse {
         client: IpcProtocolVersion,
     },
     /// `ListRecords` への応答（投影された機密非含有 summary 列）。
-    Records(Vec<RecordSummary>),
+    ///
+    /// **Sub-F (#44) Rev1 (PR #69) で構造体化**: 旧 `Records(Vec<RecordSummary>)` から
+    /// `Records { records, protection_mode }` に変更し、保護モードバナー (REQ-S16) を
+    /// 同梱。CLI 側 `presenter::mode_banner::display(protection_mode)` が先頭バナーを
+    /// 描画する責務 (C-37 必須呼出、`presenter::list::display` シグネチャに
+    /// `ProtectionModeBanner` 必須引数として型レベル強制)。
+    ///
+    /// 1 往復で `list` 実行可能な Tell-Don't-Ask 設計 (Sub-F §設計判断: 保護モード
+    /// バナー実装 案 B 採用)。`#[non_exhaustive]` で V1 互換は serde の Default +
+    /// skip_serializing_if で吸収。
+    Records {
+        /// レコード summary 列 (機密非含有、name / id / kind / 時刻のみ)。
+        records: Vec<RecordSummary>,
+        /// 保護モード (Plaintext / EncryptedLocked / EncryptedUnlocked / Unknown)。
+        /// daemon が `Vault::protection_mode` + `VekCache::is_unlocked` から判定。
+        protection_mode: ProtectionModeBanner,
+    },
     /// `AddRecord` 成功。
     Added {
         /// 追加された ID。
@@ -90,6 +107,19 @@ pub enum IpcResponse {
         /// と同義、`Rekey` 経路でも同じ意味論)。
         cache_relocked: bool,
     },
+
+    // ---------------- Sub-F (#44) IPC V2 拡張 ----------------
+    /// **V2 (Sub-F)**: `vault encrypt` 成功。新生成された recovery 24 語を初回 1 度のみ返却。
+    /// CLI 側 `presenter::recovery_disclosure::display(disclosure, target)` で
+    /// `--output {screen,print,braille,audio}` に分岐表示する (Sub-F §F-F1)。
+    /// daemon 側は `RecoveryDisclosure::disclose` 所有権消費後の再表示を C-35 で構造拒否。
+    Encrypted {
+        /// BIP-39 24 語 (Rekeyed/RecoveryRotated と同型、Drop 連鎖 zeroize)。
+        disclosure: Vec<SerializableSecretBytes>,
+    },
+    /// **V2 (Sub-F)**: `vault decrypt` 成功 (Sub-F §F-F2)。
+    /// 暗号化 vault → 平文 vault 戻し完了。VEK / 24 語は IPC に乗らない。
+    Decrypted,
 }
 
 impl IpcResponse {
@@ -99,7 +129,7 @@ impl IpcResponse {
         match self {
             Self::Handshake { .. } => "handshake",
             Self::ProtocolVersionMismatch { .. } => "protocol_version_mismatch",
-            Self::Records(_) => "records",
+            Self::Records { .. } => "records",
             Self::Added { .. } => "added",
             Self::Edited { .. } => "edited",
             Self::Removed { .. } => "removed",
@@ -109,6 +139,8 @@ impl IpcResponse {
             Self::PasswordChanged => "password_changed",
             Self::RecoveryRotated { .. } => "recovery_rotated",
             Self::Rekeyed { .. } => "rekeyed",
+            Self::Encrypted { .. } => "encrypted",
+            Self::Decrypted => "decrypted",
         }
     }
 }
@@ -127,8 +159,41 @@ mod tests {
 
     #[test]
     fn test_variant_name_records() {
-        let resp = IpcResponse::Records(vec![]);
+        let resp = IpcResponse::Records {
+            records: vec![],
+            protection_mode: ProtectionModeBanner::Plaintext,
+        };
         assert_eq!(resp.variant_name(), "records");
+    }
+
+    /// Sub-F (#44): `Records` 構造体化後、`protection_mode` フィールドを 4 variant 全てで
+    /// 構築できることを保証 (REQ-S16 / C-37 設計書 SSoT との整合)。
+    #[test]
+    fn test_records_struct_with_each_protection_mode() {
+        for mode in [
+            ProtectionModeBanner::Plaintext,
+            ProtectionModeBanner::EncryptedLocked,
+            ProtectionModeBanner::EncryptedUnlocked,
+            ProtectionModeBanner::Unknown,
+        ] {
+            let resp = IpcResponse::Records {
+                records: vec![],
+                protection_mode: mode,
+            };
+            assert_eq!(resp.variant_name(), "records");
+        }
+    }
+
+    /// Sub-F (#44): `Encrypted` / `Decrypted` variant_name 凍結文字列確認。
+    #[test]
+    fn test_variant_name_v2_sub_f_encrypted() {
+        let resp = IpcResponse::Encrypted { disclosure: vec![] };
+        assert_eq!(resp.variant_name(), "encrypted");
+    }
+
+    #[test]
+    fn test_variant_name_v2_sub_f_decrypted() {
+        assert_eq!(IpcResponse::Decrypted.variant_name(), "decrypted");
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //! - docs/features/daemon-ipc/detailed-design/protocol-types.md
 
 pub mod error_code;
+pub mod protection_mode;
 pub mod request;
 pub mod response;
 pub mod secret_bytes;
@@ -16,6 +17,7 @@ pub mod summary;
 pub mod version;
 
 pub use error_code::IpcErrorCode;
+pub use protection_mode::ProtectionModeBanner;
 pub use request::IpcRequest;
 pub use response::IpcResponse;
 pub use secret_bytes::SerializableSecretBytes;

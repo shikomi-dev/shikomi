@@ -113,7 +113,13 @@ impl IpcVaultRepository {
     /// IPC 失敗 / 暗号化 vault 検出 / 不正応答時に `PersistenceError`。
     pub fn list_summaries(&self) -> Result<Vec<RecordSummary>, PersistenceError> {
         match self.round_trip(&IpcRequest::ListRecords)? {
-            IpcResponse::Records(s) => Ok(s),
+            // Sub-F (#44): `Records` 構造体化に伴い destructure。`protection_mode` は
+            // 本メソッドでは破棄、後続 Phase 3 で `presenter::mode_banner::display`
+            // 経路に流す責務を `usecase::list` 側に集約する (C-37 必須呼出)。
+            IpcResponse::Records {
+                records,
+                protection_mode: _,
+            } => Ok(records),
             IpcResponse::Error(code) => Err(PersistenceError::from(code)),
             _ => Err(unexpected_response("ListRecords")),
         }
