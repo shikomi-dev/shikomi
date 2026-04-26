@@ -43,6 +43,7 @@
 
 - `Debug`: **`[REDACTED VEK]` 固定文字列**を出力（CI grep で文字列リテラルを検証）
 - `Drop`: 上記
+- **`AeadKey`**（Sub-C 新規、Boy Scout Rule、`crypto::aead_key::AeadKey` trait に対する impl）: `fn with_secret_bytes<R>(&self, f: impl FnOnce(&[u8;32]) -> R) -> R { f(self.expose_within_crate()) }`。クロージャインジェクション経由で shikomi-infra の `AesGcmAeadAdapter` に **借用のみ**を渡す（所有権は `Vek` に保持）。`expose_within_crate` の `pub(crate)` 可視性は変更せず、trait 経由のクロージャでのみ外部 crate に開放（`nonce-and-aead.md` §`AeadKey` trait + 契約 C-15 参照）
 
 ## `Kek<Kind>`
 
@@ -77,6 +78,7 @@
   - `Kek<KekKindPw>` → `[REDACTED KEK<Pw>]`
   - `Kek<KekKindRecovery>` → `[REDACTED KEK<Recovery>]`
 - `Drop`: 上記
+- **`AeadKey`**（Sub-C 新規、Boy Scout Rule）: `Kek<KekKindPw>` / `Kek<KekKindRecovery>` 両方に impl。`AesGcmAeadAdapter::wrap_vek` / `unwrap_vek` への `key: &impl AeadKey` 引数を満たす。phantom 型による KEK 取り違え禁止契約（C-6）は **trait 制約レベルでも継続**（`wrap_vek(&kek_pw, ...)` と `wrap_vek(&kek_recovery, ...)` は両方コンパイル可能だが、呼出側の関数シグネチャが `&Kek<KekKindPw>` を要求すれば C-6 で型レベル弾き）
 
 ### Sealed trait の意図
 
@@ -116,6 +118,7 @@
 
 - `Debug`: **`[REDACTED HEADER AEAD KEY]` 固定文字列**を出力（CI grep で文字列リテラルを検証、`Vek` / `Kek<_>` と同等の機械検証ルール）
 - `Drop`: 上記
+- **`AeadKey`**（**Sub-D 担当の Boy Scout、Sub-C で予告済**）: `Vek` / `Kek<_>` と同形パターンで `with_secret_bytes` impl。Sub-D の vault ヘッダ独立 AEAD 検証経路で `AesGcmAeadAdapter::encrypt_record(&header_key, ...)` / `decrypt_record(&header_key, ...)` を呼ぶために必要。Sub-C 段階では **`Vek` / `Kek<_>` の impl のみ確定**、`HeaderAeadKey` impl は `nonce-and-aead.md` §Sub-D 引継ぎ で予告
 
 ### Sub-0 凍結の型表現
 

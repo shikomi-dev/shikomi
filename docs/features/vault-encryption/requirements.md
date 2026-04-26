@@ -68,12 +68,12 @@
 | 項目 | 内容 |
 |------|------|
 | 担当 Sub | Sub-C (#41) — `feat(shikomi-infra)` |
-| 概要 | per-record 暗号化、AAD = record_id ‖ version ‖ created_at（26B）、random nonce 12B、上限 $2^{32}$ で `NonceLimitExceeded`、NIST CAVP テストベクトル |
-| 関連脅威 ID | L1（AEAD 認証タグで改竄検出、AAD でロールバック検出、random nonce で並行書込時の衝突確率制約）／ L3（VEK 不在時の平文化阻止） |
-| 入力 | TBD by Sub-C |
-| 処理 | TBD by Sub-C |
-| 出力 | TBD by Sub-C（必ず `Verified<Plaintext>` newtype で返す） |
-| エラー時 | TBD by Sub-C（Fail-Secure 必須: タグ不一致は `AeadTagMismatch` で fail fast、nonce 上限到達は `NonceLimitExceeded` で rekey 強制） |
+| 概要 | shikomi-infra に `crypto::aead::AesGcmAeadAdapter` を実装。per-record 暗号化（`encrypt_record` / `decrypt_record`）+ VEK wrap（`wrap_vek` / `unwrap_vek`）の 4 メソッド構成。AAD = `Aad::to_canonical_bytes()` の 26B（record_id 16B + vault_version 2B BE + created_at_micros 8B BE、既存 `shikomi_core::vault::crypto_data::Aad` 再利用）、random nonce 12B（Sub-B `Rng::generate_nonce_bytes`）、上限 $2^{32}$ で `NonceLimitExceeded`（Sub-D 呼出側責務）、NIST CAVP "GCM Test Vectors" KAT を CI で実行（`tech-stack.md` §4.7 `aes-gcm` 行）。**鍵バイト経路**: Sub-C で `crypto::aead_key::AeadKey` trait（クロージャインジェクション、`with_secret_bytes`）を新規追加、`Vek` / `Kek<_>` に impl、shikomi-core 側の `pub(crate)` 可視性ポリシー（Sub-B Rev2 凍結）を破壊せず外部 crate に借用越境（`detailed-design/nonce-and-aead.md` §`AeadKey` trait） |
+| 関連脅威 ID | L1（AEAD 認証タグで改竄検出、AAD でロールバック検出、random nonce で並行書込時の衝突確率制約 ≤ $2^{-32}$）／ L3（VEK 不在時の平文化阻止、AEAD 検証失敗で `Verified<Plaintext>` を構築しない C-14 契約） |
+| 入力 | (a) `&impl AeadKey`（`Vek` for per-record / `Kek<_>` for VEK wrap、Sub-A 凍結型 + Sub-C trait 経由）、(b) `&NonceBytes`（Sub-B `Rng::generate_nonce_bytes()` 由来、12B）、(c) `&Aad`（per-record のみ、`Aad::to_canonical_bytes() -> [u8;26]` で正規化）、(d) `&[u8]` plaintext / `&[u8]` ciphertext + `&AuthTag`（`encrypt_record` / `decrypt_record`） / `&Vek` / `&WrappedVek`（`wrap_vek` / `unwrap_vek`） |
+| 処理 | (1) `key.with_secret_bytes(\|bytes\| ...)` クロージャ内で `Aes256Gcm::new(GenericArray::from_slice(bytes))` 構築（`aes-gcm` crate `aes_gcm::Aes256Gcm`、feature `aes` `alloc` + `zeroize`）、(2) **暗号化**: `aead::AeadInPlace::encrypt_in_place_detached(nonce, aad_bytes, &mut Zeroizing<Vec<u8>>::new(plaintext.to_vec()))` で **tag 分離方式**で AES-256-GCM 暗号化、(3) **復号 + AEAD 検証**: `decrypt_in_place_detached(nonce, aad_bytes, &mut buf, tag.as_array())` でタグ検証、成功時のみ `verify_aead_decrypt(\|\| Ok(Plaintext::new_within_module(buf)))` 経由で `Verified<Plaintext>` 構築（Sub-A caller-asserted マーカー契約）、(4) 中間バッファは `Zeroizing<Vec<u8>>` で囲み Drop 時 zeroize（C-16）、(5) **nonce_counter 統合**: adapter は `NonceCounter::increment` を呼ばない、Sub-D の vault リポジトリ層が encrypt 前に必須呼出（`detailed-design/nonce-and-aead.md` §nonce_counter 統合契約） |
+| 出力 | `encrypt_record` → `Result<(Vec<u8>, AuthTag), CryptoError>`、`decrypt_record` → `Result<Verified<Plaintext>, CryptoError>`、`wrap_vek` → `Result<WrappedVek, CryptoError>`、`unwrap_vek` → `Result<Verified<Plaintext>, CryptoError>`（Sub-D で 32B 長さ検証して `Vek::from_array` 復元） |
+| エラー時 | Fail-Secure 必須: (a) タグ不一致 / AAD 不一致 / nonce-key 取り違え / ciphertext 改竄は全て `CryptoError::AeadTagMismatch` に統一（内部詳細秘匿、MSG-S10）、(b) nonce 上限到達は **Sub-D の `NonceCounter::increment()?` で先行検出**、`CryptoError::NonceLimitExceeded` で `vault rekey` フローへ誘導（MSG-S11）、(c) `unwrap` / `expect` 禁止、`subtle` 経由でない自前 `==` tag 比較禁止（`tech-stack.md` §4.7 `subtle` 行）、(d) AEAD 検証失敗時に `Plaintext::new_within_module` を呼ばない（C-14 構造禁止）、(e) AEAD 中間バッファの `Zeroizing` 包囲を grep で機械検証（C-16） |
 
 ### REQ-S06: 暗号化 Vault リポジトリ
 
@@ -179,10 +179,10 @@
 | 担当 Sub | **Sub-A (#39) で型契約確定**（`NonceCounter::increment` の `Result` 返却 + Boy Scout Rule で責務再定義） + Sub-C (#41) で AEAD 経路統合 + Sub-F (#44) で `vault rekey` フロー |
 | 概要 | shikomi-core 側で `NonceCounter` の責務を「VEK ごとの暗号化回数監視」に再定義し、`increment(&mut self) -> Result<(), DomainError>` が上限 $2^{32}$ 到達時 `NonceLimitExceeded` を返す型契約（Sub-A）。AEAD 経路統合（Sub-C）と `vault rekey` 起動フロー（Sub-F）は後続 |
 | 関連脅威 ID | L1（random nonce 衝突確率を $\le 2^{-32}$ に維持、上限到達後の暗号化を**型レベルで構造禁止**） |
-| 入力 | **Sub-A**: vault ヘッダから読み込む `nonce_counter: u64`（`NonceCounter::resume(count)` 経由）、または新規 vault `NonceCounter::new()` で `count=0`。**Sub-C**: AEAD 暗号化のたびに `NonceCounter::increment` 呼出。**Sub-F**: `NonceLimitExceeded` 検知時の `vault rekey` 起動 |
-| 処理 | **Sub-A**: `count < (1u64 << 32)` なら `count += 1; Ok(())`、上限到達なら `Err(DomainError::NonceLimitExceeded)`。`#[must_use]` 属性で結果無視を clippy lint で検出。既存「8B prefix + 4B counter」設計を**完全廃止**（Boy Scout Rule、per-record nonce は `NonceBytes::from_random([u8;12])` で完全 random 12B に変更）。**Sub-C / Sub-F**: TBD |
-| 出力 | **Sub-A**: `Result<(), DomainError>`（成功時 unit 値、失敗時 variant）、`current(&self) -> u64`（永続化用）。**Sub-C / Sub-F**: TBD |
-| エラー時 | Fail-Secure 必須: (a) 上限到達後の暗号化試行は **`NonceCounter::increment` が `Err` を返すことで構造的に禁止**、(b) `unwrap()` は禁止（`#[must_use]` + clippy lint）、(c) Sub-F の `vault rekey` 完了まで以後のレコード暗号化を全面拒否（Sub-D / Sub-F で詳細化） |
+| 入力 | **Sub-A**: vault ヘッダから読み込む `nonce_counter: u64`（`NonceCounter::resume(count)` 経由）、または新規 vault `NonceCounter::new()` で `count=0`。**Sub-C**: `AesGcmAeadAdapter::encrypt_record` 自体は increment を呼ばない（責務分離 SRP）。`NonceLimitExceeded` の発火は **Sub-D の vault リポジトリ層**が `encrypt_record` 呼出前に `NonceCounter::increment()?` を実行する設計（`detailed-design/nonce-and-aead.md` §nonce_counter 統合契約）。**Sub-F**: `NonceLimitExceeded` 検知時の `vault rekey` 起動 |
+| 処理 | **Sub-A**: `count < (1u64 << 32)` なら `count += 1; Ok(())`、上限到達なら `Err(DomainError::NonceLimitExceeded)`。`#[must_use]` 属性で結果無視を clippy lint で検出。既存「8B prefix + 4B counter」設計を**完全廃止**（Boy Scout Rule、per-record nonce は `NonceBytes::from_random([u8;12])` で完全 random 12B に変更）。**Sub-C**: AEAD adapter は nonce 上限管理を持たない（Sub-D 側に委譲、SRP）。**Sub-F**: `vault rekey` フローで新 VEK 生成 + 全レコード再暗号化、`NonceCounter::new()` で count をリセット |
+| 出力 | **Sub-A**: `Result<(), DomainError>`（成功時 unit 値、失敗時 variant）、`current(&self) -> u64`（永続化用）。**Sub-C**: 出力なし（adapter 経由）。**Sub-F**: TBD |
+| エラー時 | Fail-Secure 必須: (a) 上限到達後の暗号化試行は **`NonceCounter::increment` が `Err` を返すことで構造的に禁止**、(b) `unwrap()` は禁止（`#[must_use]` + clippy lint）、(c) Sub-F の `vault rekey` 完了まで以後のレコード暗号化を全面拒否（Sub-D / Sub-F で詳細化）、(d) **Sub-C adapter 単体の `encrypt_record` を nonce_counter 経由なく呼び出した場合は契約違反**（adapter は責務分離で increment を持たないため、呼出側 = Sub-D が increment を忘れた場合に nonce 上限を超えても adapter は検出不能）。**呼出側責務**として `detailed-design/nonce-and-aead.md` §nonce_counter 統合契約 + Sub-D `repository-and-migration.md` PR レビューチェックリストで担保 |
 
 ### REQ-S15: vault 管理サブコマンド
 

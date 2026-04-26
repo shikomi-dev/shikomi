@@ -12,16 +12,18 @@
 詳細設計に**疑似コード・サンプル実装（python/ts/go等の言語コードブロック）を書くな**。
 ソースコードと二重管理になりメンテナンスコストしか生まない。
 
-## 分冊構成（Sub-B 完了時点、**Sub-A の 4 分冊から 6 分冊へ拡張**）
+## 分冊構成（Sub-C 完了時点、**Sub-B の 6 分冊を維持、新規分冊なし**）
 
 | 分冊 | 主担当範囲 | 主な対象型・契約 |
 |-----|---------|--------------|
-| [`crypto-types.md`](./crypto-types.md) | 鍵階層型（Sub-A） | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey` |
+| [`crypto-types.md`](./crypto-types.md) | 鍵階層型（Sub-A） | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` / `HeaderAeadKey`（**Sub-C で `AeadKey` impl 追加 Boy Scout**） |
 | [`password.md`](./password.md) | パスワード認証境界（Sub-A trait + Sub-B `ZxcvbnGate` 実装） | `MasterPassword` / `PasswordStrengthGate` trait / `WeakPasswordFeedback`（**`warning=None` 契約 + i18n 責務分離**） / **`ZxcvbnGate`（Sub-B 新規）** |
-| [`nonce-and-aead.md`](./nonce-and-aead.md) | nonce / AEAD 境界（Sub-A 型 + Sub-C 実装結合） | `NonceCounter`（責務再定義） / `NonceBytes::from_random` / `WrappedVek` / `AuthTag` / `Verified<T>` / `Plaintext` / `verify_aead_decrypt`（**呼び出し側主張マーカー契約 + 可視性 `pub(in crate::crypto::verified)`**） |
-| [`errors-and-contracts.md`](./errors-and-contracts.md) | エラー型 / リカバリ / 契約サマリ（Sub-A 型 + Sub-B `KdfErrorKind` 詳細 + `InvalidMnemonic` variant） | `RecoveryMnemonic` / `CryptoOutcome<T>` / `CryptoError` / `DomainError` 拡張 / `VekProvider`（**Sub-B 具象 `Argon2idHkdfVekProvider`**） / 設計判断の補足 / **契約 C-1〜C-13 サマリ表** |
+| [`nonce-and-aead.md`](./nonce-and-aead.md) | nonce / AEAD 境界（Sub-A 型 + **Sub-C 実装結合 + `AeadKey` trait + `AesGcmAeadAdapter`**） | `NonceCounter`（責務再定義） / `NonceBytes::from_random` / `WrappedVek` / `AuthTag` / `Verified<T>` / `Plaintext` / `verify_aead_decrypt`（**呼び出し側主張マーカー契約 + 可視性 `pub(in crate::crypto::verified)`**） / **`AeadKey` trait（Sub-C、クロージャインジェクション）** / **`AesGcmAeadAdapter`（Sub-C、`encrypt_record` / `decrypt_record` / `wrap_vek` / `unwrap_vek` 4 メソッド + NIST CAVP KAT + AAD 26B 規約 + nonce_counter 統合契約）** |
+| [`errors-and-contracts.md`](./errors-and-contracts.md) | エラー型 / リカバリ / 契約サマリ（Sub-A 型 + Sub-B `KdfErrorKind` 詳細 + `InvalidMnemonic` variant + **Sub-C `AeadTagMismatch` 発火経路 + `derive_new_wrapped_*` AES-GCM wrap 経路 + `unwrap_vek_with_*`**） | `RecoveryMnemonic` / `CryptoOutcome<T>` / `CryptoError` / `DomainError` 拡張 / `VekProvider`（**Sub-B 具象 `Argon2idHkdfVekProvider` + Sub-C で wrap/unwrap 経路確定**） / 設計判断の補足 / **契約 C-1〜C-16 サマリ表（Sub-C で C-14〜C-16 追加）** |
 | **[`kdf.md`](./kdf.md)（Sub-B 新規）** | KDF アダプタ（shikomi-infra） | `Argon2idAdapter`（`m=19456, t=2, p=1`、RFC 9106 KAT、criterion p95 1 秒） / `Bip39Pbkdf2Hkdf`（24 語 → seed → KEK_recovery、HKDF info `b"shikomi-kek-v1"`、trezor + RFC 5869 KAT） / `Argon2idParams::FROZEN_OWASP_2024_05` const |
 | **[`rng.md`](./rng.md)（Sub-B 新規）** | CSPRNG 単一エントリ点（shikomi-infra） | `Rng`（`rand_core::OsRng` + `getrandom` バックエンド） / `generate_kdf_salt` / `generate_vek` / `generate_nonce_bytes` / `generate_mnemonic_entropy`（Sub-0 凍結文言「KdfSalt::generate() 単一コンストラクタ」の Clean Arch 整合的物理実装） |
+
+**Sub-C で新規分冊を追加しない理由**: AEAD 設計は既存 `nonce-and-aead.md` の延長線上にある（`Verified<T>` / `Plaintext` / `verify_aead_decrypt` クロージャマーカーがすべて Sub-C `AesGcmAeadAdapter` に直結）。`aead-adapter.md` を別ファイルに切り出すと **Verified<T> 契約と AEAD 実装が物理的に分離**し、設計の縦串整合（型契約 → 実装具象）が崩れる。1 分冊 400 行以内のソフトキャップを超えない範囲で `nonce-and-aead.md` 内に集約する判断（Boy Scout Rule、不要な分冊増加を回避）。
 
 ```
 ディレクトリ構造:
@@ -193,13 +195,16 @@ classDiagram
 | C-11: `WrappedVek::new` は ciphertext 空 / 短すぎを拒否 | `ciphertext.is_empty()` / `ciphertext.len() < 32` | ユニットテスト: 各境界条件 | `nonce-and-aead.md` |
 | C-12: `RecoveryMnemonic::from_words` は 24 語固定（型レベル） | 引数 `[String; 24]` | コンパイラ強制 | `errors-and-contracts.md` |
 | C-13: 既存 `DomainError::NonceOverflow` は `NonceLimitExceeded` に rename されている | grep + cargo check | CI で variant 名の一致検証 | `errors-and-contracts.md` |
+| **C-14**: AEAD 検証失敗時に `Plaintext` を構築しない（Sub-C 新規） | `AesGcmAeadAdapter::decrypt_record` / `unwrap_vek` 内で `decrypt_in_place_detached` の `Err` 時に `verify_aead_decrypt` クロージャに到達しない | property test（タグ / AAD / nonce / ciphertext 4 系列書換）で `Verified<Plaintext>` 不在を assert | `nonce-and-aead.md` / `errors-and-contracts.md` |
+| **C-15**: AEAD 鍵バイトの可視性ポリシー差別化維持（Sub-C 新規） | `AeadKey::with_secret_bytes` クロージャインジェクション経由でのみ shikomi-infra に `&[u8;32]` を渡す。`Vek` / `HeaderAeadKey::expose_within_crate` は `pub(crate)` 維持 | grep: shikomi-infra `aead/` 配下で `expose_within_crate` 直接呼出が 0 件 | `nonce-and-aead.md` / `crypto-types.md` |
+| **C-16**: AEAD 中間バッファ zeroize（Sub-C 新規） | `encrypt_in_place_detached` / `decrypt_in_place_detached` の入力 `buf` を `Zeroizing<Vec<u8>>` で囲む | grep: shikomi-infra `aead/aes_gcm.rs` で `Zeroizing<Vec<u8>>` 使用、生 `Vec<u8>` の中間バッファ 0 件 | `nonce-and-aead.md` |
 
 ## 後続 Sub-B〜F の TBD ブロック
 
 各 Sub の設計工程で本ディレクトリ内の対応分冊を READ → EDIT で以下を追記する。
 
 - **Sub-B（完了、本書 Rev により本項目は履歴）**: KDF アダプタの詳細クラス図（`Argon2idAdapter` / `Bip39Pbkdf2Hkdf`）、`PasswordStrengthGate` の `ZxcvbnGate` 実装詳細、KAT データ取得経路、CSPRNG 単一エントリ点 `Rng` → **新規 `kdf.md` + `rng.md` を追加**、`password.md` に `ZxcvbnGate` 章追加、`errors-and-contracts.md` に `KdfErrorKind` source 型詳細 + `InvalidMnemonic` variant + `Argon2idHkdfVekProvider` 具象 を追加
-- **Sub-C**: AEAD アダプタの詳細クラス図（`AesGcmAdapter`）、`verify_aead_decrypt` ラッパ関数の呼び出し経路の補強、ヘッダ AEAD 検証関数 `unverify_header` → `nonce-and-aead.md` + 新規 `aead-adapter.md`（必要なら追加）
-- **Sub-D**: `EncryptedSqliteVaultRepository` の SQLite スキーマ、平文⇄暗号化マイグレーション手順、`vault encrypt` 入口の `MasterPassword::new` 経路、ヘッダ独立 AEAD タグの永続化フォーマット → 新規 `repository-and-migration.md`
+- **Sub-C（完了、本書 Rev により本項目は履歴）**: AEAD アダプタの詳細設計（`AesGcmAeadAdapter` の 4 メソッド + NIST CAVP KAT + AAD 26B 規約 + nonce_counter 統合契約 + AEAD 復号後の VEK 復元経路）、`AeadKey` trait（クロージャインジェクション、Sub-B Rev2 可視性ポリシー差別化との整合）、`verify_aead_decrypt` ラッパ関数の呼び出し経路の補強、`derive_new_wrapped_*` の AES-GCM wrap 経路、`unwrap_vek_with_*` の VEK 復元 + 長さ検証 Fail Fast、契約 C-14〜C-16 追加 → **`nonce-and-aead.md` 拡張**（新規分冊なし、`aead-adapter.md` 不要）+ `errors-and-contracts.md` 補強 + `crypto-types.md` で `Vek` / `Kek<_>` への `AeadKey` impl 追記（Boy Scout）
+- **Sub-D**: `EncryptedSqliteVaultRepository` の SQLite スキーマ、平文⇄暗号化マイグレーション手順、`vault encrypt` 入口の `MasterPassword::new` 経路、ヘッダ独立 AEAD タグの永続化フォーマット、**`HeaderAeadKey::AeadKey` impl 追加**（Sub-C で予告した Boy Scout 完成）、vault リポジトリ層での **`NonceCounter::increment` 統合**（Sub-C `nonce-and-aead.md` §nonce_counter 統合契約 を実装に落とし込む） → 新規 `repository-and-migration.md`
 - **Sub-E**: VEK キャッシュの `tokio::sync::RwLock<Option<Vek>>` 設計、IPC V2 `IpcRequest` variant 追加、アンロック失敗バックオフ実装、`change-password` の `wrapped_VEK_by_pw` 単独更新フロー → 新規 `vek-cache-and-ipc.md`
 - **Sub-F**: `shikomi vault {encrypt, decrypt, unlock, lock, change-password, recovery-show, rekey}` の clap サブコマンド構造、IPC V2 リクエスト発行経路、MSG-S* 文言テーブル → 新規 `cli-subcommands.md`
