@@ -312,18 +312,27 @@ impl<'a> VaultMigration<'a> {
     // F-D4: rekey_vault
     // ---------------------------------------------------------------
 
-    /// VEK 入替 + 全レコード再暗号化 (NonceCounter LIMIT 到達時の必須経路)。
+    /// VEK 入替 + 全レコード再暗号化 (NonceCounter LIMIT 到達時の必須経路、F-D4)。
     ///
-    /// **本 Sub-D 簡略実装**: `current_password` のみを引数に取り、wrapped_vek_by_pw /
-    /// wrapped_vek_by_recovery は **更新しない** (旧 wrap は新 VEK に対応しなくなる)。
-    /// 厳密な「新 wrapped_vek 構築」は Sub-E IPC 統合時に master_password を unlock
-    /// 経路で保持し続ける設計で対応する。本 Sub-D は record 層のみ更新 +
-    /// nonce_counter リセットの責務に閉じる。
+    /// 設計書 §F-D4 step 4-5 通り、新 VEK を **旧 KEK_pw で再 wrap** して
+    /// 新 wrapped_vek_by_pw を構築する (records だけ新 VEK で再暗号化して
+    /// wrapped_vek を旧のまま維持すると post-rekey unlock で旧 VEK が復元され
+    /// records 復号が全件 `AeadTagMismatch` になる、Bug-D-002 対応)。
+    ///
+    /// **recovery 経路 (`wrapped_vek_by_recovery`) は本 Sub-D 範囲では更新しない**:
+    /// recovery rekey は Sub-E IPC 統合で `change_recovery` メソッド追加予定
+    /// (新 mnemonic を呼出側に開示するフローが追加で必要なため、本メソッドの
+    /// `current_password: String` 1 引数 API では責務が混ざる)。
+    /// rekey 後の **recovery 経路 unlock は本実装範囲外** (旧 mnemonic の
+    /// wrapped_vek_by_recovery は旧 VEK を unwrap するため、records 復号で失敗する)。
     ///
     /// # Errors
     ///
     /// 各段階のエラーを `MigrationError` に変換して返す。
     pub fn rekey_vault(&self, current_password: String) -> Result<(), MigrationError> {
+        // 0. password を rewrap 用にも使うため clone (KEK_pw 再導出に使う)
+        let password_for_rewrap = current_password.clone();
+
         // 1. unlock で旧 VEK と現在の暗号化 vault を取得
         let (loaded_vault, old_header, old_vek) =
             self.unlock_internal_with_password(current_password)?;
@@ -351,27 +360,57 @@ impl<'a> VaultMigration<'a> {
         // 4. nonce_counter リセット
         let new_nonce_counter = NonceCounter::resume(0);
 
-        // 5. ヘッダは旧 wrapped_vek を維持し、nonce_counter のみ更新
+        // 5. 旧 KEK_pw を再導出 (kdf_salt 不変、password 同一なので KEK は同じだが、
+        //    rewrap には key 値が必要なため改めて導出する)。
+        let master_pw_rewrap = MasterPassword::new(password_for_rewrap, self.gate)?;
+        let kek_pw_rewrap = self
+            .kdf_pw
+            .derive_kek_pw(&master_pw_rewrap, old_header.kdf_salt())?;
+
+        // 6. 新 VEK を旧 KEK_pw で wrap (新 wrapped_vek_by_pw)
+        let new_wrapped_pw =
+            self.aead
+                .wrap_vek(&kek_pw_rewrap, &self.rng.generate_nonce_bytes(), &new_vek)?;
+
+        // 7. ヘッダ AEAD envelope を新 wrapped_pw + 新 nonce_counter + 旧 kdf_salt +
+        //    旧 wrapped_recovery で再構築 (AAD は新フィールドで再計算、改竄検出に必要)。
+        let header_envelope = build_header_envelope(
+            self.aead,
+            self.rng,
+            &kek_pw_rewrap,
+            old_header.version(),
+            old_header.created_at(),
+            old_header.kdf_salt(),
+            &new_wrapped_pw,
+            old_header.wrapped_vek_by_recovery(),
+            &new_nonce_counter,
+            old_header.kdf_params(),
+        )?;
+
+        // 8. ヘッダ更新: 新 wrapped_vek_by_pw + 旧 wrapped_vek_by_recovery + 新 nonce_counter
+        //    + 新 envelope。NOTE: wrapped_vek_by_recovery は本 Sub-D 範囲では更新しない
+        //    (recovery rekey は Sub-E `change_recovery` で対応、メソッド doc 参照)。
         let new_header = VaultEncryptedHeader::new(
             old_header.version(),
             old_header.created_at(),
             old_header.kdf_salt().clone(),
-            old_header.wrapped_vek_by_pw().clone(),
+            new_wrapped_pw,
             old_header.wrapped_vek_by_recovery().clone(),
             new_nonce_counter,
             old_header.kdf_params(),
-            old_header.header_aead_envelope().clone(),
+            header_envelope,
         );
 
-        // 6. 新 vault 集約構築 + save
+        // 9. 新 vault 集約構築 + save
         let vault_to_save = build_encrypted_vault(&new_header, new_records)?;
         self.repository
             .save(&vault_to_save)
             .map_err(map_persistence_error)?;
 
-        // 旧 VEK / 新 VEK は scope 抜けで Drop & zeroize
+        // 旧 VEK / 新 VEK / 再導出 KEK_pw は scope 抜けで Drop & zeroize
         drop(old_vek);
         drop(new_vek);
+        drop(kek_pw_rewrap);
 
         Ok(())
     }
