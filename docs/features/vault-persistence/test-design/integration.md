@@ -462,16 +462,18 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::fsync_and_rename` step 7.3 Windows 分岐、`../detailed-design/flows.md`） |
 | 種別 | 異常系（race 状態下での正常完了検証） |
 | 前提条件 | `#[cfg(windows)]` ガード付き。`tempfile::TempDir` を使用。初期 `vault.db` を save 済（記録済レコード 1 件）。`std::thread::spawn` で補助スレッドを起動できる |
-| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、150ms（retry 上限 250ms 内）保持してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
-| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜3 回目で rename が成功する）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: 250ms 超過なら fail（retry の上限契約違反） |
+| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、**150ms 保持**（1〜2 回目 retry で吸収される設計、jitter 込み最悪 375ms の内側）してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
+| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜3 回目で rename が成功する）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: **約 375ms 超過なら fail**（jitter 込みの retry 上限契約違反、`../basic-design/security.md` §atomic write の二次防衛線 §jitter — 50ms × 5 + jitter ±25ms × 5 = 最悪 375ms / 平均 ~250ms）|
 
 **実装上の注意（Win API 直叩き、unsafe）**:
 - `std::fs::OpenOptions` は標準では `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` を立てるため race 再現にならない。`std::os::windows::fs::OpenOptionsExt::share_mode(0)` で **share_mode = 0**（排他 open）を指定する必要がある
-- 補助スレッドの保持時間（150ms）が retry 上限（250ms）の内側であることが本 TC の決定性を担保する条件。CI ランナーの遅延を考慮し ±50ms の許容窓を設ける
-- 並行スレッドが retry 上限を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）が、本 TC では正常 retry 経路の検証なので 150ms に固定する
+- 補助スレッドの保持時間（150ms）が **jitter 込み最悪 375ms の内側**（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）であることが本 TC の決定性を担保する条件。150ms 保持は **1〜2 回目 retry（経過 ~50〜150ms）で吸収される設計**であり、CI ランナーの遅延を考慮しても 3 回目 retry（~225ms）までには確実に rename 成功する。許容窓は ±50ms
+- 並行スレッドが jitter 込み最悪 375ms を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）が、本 TC では正常 retry 経路の検証なので 150ms に固定する
 
 ---
 
 *対応 Issue: #10, #14, #65 / 親ドキュメント: `test-design/index.md`*
 
 *改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① §0 「Issue #65 由来の外部 I/O 依存マップ」を新規追加（`rusqlite` / `std::fs::rename` / `MoveFileExW` の境界明示、PR #64 失敗ログを raw fixture として要起票化、assumed mock 禁止の reviewer 却下基準明記）② TC-I28 追加（Sub-D `vault_migration_integration` 5 件 green 化を Issue #65 受入条件として明示、AC-18）③ TC-I29 追加（並行 read open 中の rename race を retry が吸収することを `share_mode(0)` で決定的に再現、AC-19）④ ツール選択根拠に `#[cfg(windows)] #[ignore]` 回避禁止注記を追加（Bug-F-003 再演防止）*
+
+*改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映（`security.md` §atomic write の二次防衛線 §jitter ±25ms 追加に伴う test-design 同期漏れ修正）。① TC-I29 期待結果のタイムアウト閾値を「250ms 超過なら fail」→「**約 375ms 超過なら fail**」に更新、`security.md §jitter` への参照追加 ② TC-I29 実装上の注意を「retry 上限（250ms）の内側」→「**jitter 込み最悪 375ms の内側**、補助スレッド保持 150ms は 1〜2 回目 retry（経過 ~50〜150ms）で吸収される設計」に明確化 ③ `index.md` 側 AC-19 とマトリクス TC-I29 行も同期更新（v6.1）*
