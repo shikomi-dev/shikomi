@@ -132,22 +132,23 @@ flowchart TD
     ShowMnemonic --> Confirm[書き写し完了 ボタン押下]
     Confirm -->|MSG-S01| Encrypted([暗号化完了])
     Encrypted --> Locked([daemon: Locked 状態])
-    Locked --> Unlock[GUI ロック解除パスワード入力]
-    Unlock -->|MSG-S03| Unlocked([daemon: Unlocked])
+    Locked --> Unlock[GUI ロック解除パスワード入力 試行]
+    Unlock -->|正パスワード MSG-S03| Unlocked([daemon: Unlocked])
+    Unlock -->|誤パスワード MSG-S09 a| WrongPw[パスワード違い 待機案内]
+    WrongPw -->|失敗カウンタ < 5| Locked
+    WrongPw -->|失敗 5 回連続 MSG-S09 a + wait_secs| Backoff[次の試行まで 30 秒]
+    Backoff --> Locked
     Unlocked --> List[レコード一覧画面]
     List -->|MSG-S17 [encrypted] バッジ常時| List
-    List -->|15min 操作なし MSG-S04| AutoLock([自動 lock])
-    AutoLock --> Unlock
+    List -->|15 min 操作なし MSG-S04| AutoLock([自動 lock])
+    AutoLock --> Locked
     Unlocked --> ChangePw[パスワード変更画面]
-    ChangePw -->|MSG-S05 VEK不変| Unlocked
+    ChangePw -->|MSG-S05 VEK 不変| Unlocked
     Unlocked --> Rekey[鍵を再生成 ボタン]
-    Rekey -->|atomic write OK + 再キャッシュ OK<br/>MSG-S07| ShowNewMnemonic[新24語表示 MSG-S06 連結]
-    Rekey -->|atomic write OK + 再キャッシュ NG<br/>MSG-S07 + MSG-S20| ShowNewMnemonicAndRelock[新24語表示 + 再ログイン誘導]
-    ShowNewMnemonicAndRelock --> Unlock
+    Rekey -->|atomic write OK + 再キャッシュ OK<br/>MSG-S07| ShowNewMnemonic[新 24 語表示 MSG-S06 連結]
+    Rekey -->|atomic write OK + 再キャッシュ NG<br/>MSG-S07 + MSG-S20| ShowNewMnemonicAndRelock[新 24 語表示 + 再ログイン誘導]
+    ShowNewMnemonicAndRelock --> Locked
     ShowNewMnemonic --> Unlocked
-    Unlocked --> WrongPw[パスワード入力ミス連続]
-    WrongPw -->|5回目 MSG-S09 a| Backoff[次の試行まで 30秒]
-    Backoff --> Unlock
 ```
 
 ### ジャーニー上の Fail Kindly 守護ポイント
