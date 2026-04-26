@@ -30,6 +30,9 @@ use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
+use crate::backoff::UnlockBackoff;
+use crate::cache::lifecycle::{make_default_os_lock_signal, run_os_lock_signal_loop, IdleTimer};
+use crate::cache::VekCache;
 use crate::ipc::server::IpcServer;
 use crate::ipc::transport::ListenerEnum;
 use crate::lifecycle::{shutdown, single_instance::SingleInstanceLock, socket_path};
@@ -100,13 +103,11 @@ pub async fn run() -> ExitCode {
         }
     };
 
-    if vault.protection_mode() == ProtectionMode::Encrypted {
-        tracing::error!(
-            target: "shikomi_daemon::lifecycle",
-            "vault is encrypted; daemon does not support encrypted vaults yet (Issue #26 scope-out)"
-        );
-        return DaemonExit::EncryptionUnsupported.into();
-    }
+    // Sub-E (#43): 暗号化 vault も daemon で受理する。Locked 状態で起動し、
+    // クライアントから `IpcRequest::Unlock` を受信して `VekCache` に VEK を格納する
+    // (C-22 で read/write IPC は Locked 中は VaultLocked 拒否される)。
+    // Issue #26 時代の `EncryptionUnsupported` 早期終了は Sub-E で撤去する。
+    let _ = vault.protection_mode(); // ProtectionMode 参照は保持 (Encrypted/Plaintext 双方を受理)。
 
     let Some(listener) = single_instance.take_listener() else {
         tracing::error!(
@@ -118,6 +119,10 @@ pub async fn run() -> ExitCode {
 
     let repo = Arc::new(repo);
     let vault = Arc::new(Mutex::new(vault));
+
+    // Sub-E (#43): VEK キャッシュ + 連続失敗バックオフ
+    let cache = VekCache::new();
+    let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
 
     // shutdown 通知 channel。`watch::channel<bool>` を使うことで、シグナル到達と
     // receiver の poll 順序に関わらず通知が消失しない（BUG-DAEMON-IPC-002 対策）。
@@ -131,9 +136,35 @@ pub async fn run() -> ExitCode {
         shutdown::wait_for_signal(shutdown_tx).await;
     });
 
-    // server 実行
-    let mut server = IpcServer::new(listener, Arc::clone(&repo), Arc::clone(&vault));
+    // Sub-E §C-24: アイドル 15min タイムアウトで自動 lock する `IdleTimer` を spawn
+    let idle_timer_task = {
+        let timer = IdleTimer::new(cache.clone());
+        let rx = shutdown_rx.clone();
+        tokio::spawn(timer.run(rx))
+    };
+
+    // Sub-E §C-25: OS スクリーンロック / サスペンド購読 task を spawn
+    // (各 OS 具象実装は cfg 分割、現段階は std::future::pending() で他経路に譲るスケルトン)
+    let os_lock_signal_task = {
+        let cache_for_signal = cache.clone();
+        let signal = make_default_os_lock_signal();
+        let rx = shutdown_rx.clone();
+        tokio::spawn(run_os_lock_signal_loop(cache_for_signal, signal, rx))
+    };
+
+    // server 実行 (Sub-E (#43): cache / backoff を注入)
+    let mut server = IpcServer::new(
+        listener,
+        Arc::clone(&repo),
+        Arc::clone(&vault),
+        cache.clone(),
+        Arc::clone(&backoff),
+    );
     let server_result = server.start_with_shutdown(shutdown_rx).await;
+
+    // Sub-E バックグラウンド task の解放
+    idle_timer_task.abort();
+    os_lock_signal_task.abort();
 
     // signal task の解放（shutdown 通知済みなら戻ってくる）
     signal_task.abort();

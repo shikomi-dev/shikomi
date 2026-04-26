@@ -5,16 +5,21 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use shikomi_core::ipc::IpcRequest;
+use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest};
 use shikomi_core::Vault;
+use shikomi_infra::crypto::{AesGcmAeadAdapter, Argon2idAdapter, Bip39Pbkdf2Hkdf, Rng, ZxcvbnGate};
+use shikomi_infra::persistence::vault_migration::VaultMigration;
 use shikomi_infra::persistence::VaultRepository;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
+use crate::backoff::UnlockBackoff;
+use crate::cache::VekCache;
 use crate::error::ServerError;
-use crate::ipc::{framing, handler, handshake};
+use crate::ipc::v2_handler::{dispatch_v2, ClientState, V2Context};
+use crate::ipc::{framing, handshake};
 use crate::permission::peer_credential;
 
 use super::transport::ListenerEnum;
@@ -31,16 +36,26 @@ pub struct IpcServer<R: VaultRepository + Send + Sync + 'static> {
     listener: Option<ListenerEnum>,
     repo: Arc<R>,
     vault: Arc<Mutex<Vault>>,
+    cache: VekCache,
+    backoff: Arc<Mutex<UnlockBackoff>>,
 }
 
 impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
-    /// IpcServer を構築する。
+    /// IpcServer を構築する (Sub-E (#43): cache / backoff を注入)。
     #[must_use]
-    pub fn new(listener: ListenerEnum, repo: Arc<R>, vault: Arc<Mutex<Vault>>) -> Self {
+    pub fn new(
+        listener: ListenerEnum,
+        repo: Arc<R>,
+        vault: Arc<Mutex<Vault>>,
+        cache: VekCache,
+        backoff: Arc<Mutex<UnlockBackoff>>,
+    ) -> Self {
         Self {
             listener: Some(listener),
             repo,
             vault,
+            cache,
+            backoff,
         }
     }
 
@@ -153,9 +168,12 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
                     let repo = Arc::clone(&self.repo);
                     let vault = Arc::clone(&self.vault);
+                    let cache = self.cache.clone();
+                    let backoff = Arc::clone(&self.backoff);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, shutdown_for_task).await;
+                        handle_connection(stream, repo, vault, cache, backoff, shutdown_for_task)
+                            .await;
                     });
                 }
             }
@@ -218,9 +236,12 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
                     let repo = Arc::clone(&self.repo);
                     let vault = Arc::clone(&self.vault);
+                    let cache = self.cache.clone();
+                    let backoff = Arc::clone(&self.backoff);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, shutdown_for_task).await;
+                        handle_connection(stream, repo, vault, cache, backoff, shutdown_for_task)
+                            .await;
                     });
                 }
             }
@@ -234,11 +255,18 @@ impl<R: VaultRepository + Send + Sync + 'static> IpcServer<R> {
 
 /// 接続ハンドラ。ハンドシェイク 1 往復 → リクエスト/レスポンス N 往復 → 切断。
 ///
+/// Sub-E (#43): handshake 完了後 `ClientState::Handshake { version }` を構築し、
+/// 各リクエストを `dispatch_v2` 経由で V1+V2 統合 dispatch する。`VaultMigration`
+/// は `Argon2idAdapter` 等の無状態 adapter から per-connection で構築する
+/// (cheap、各 adapter は zero-sized 相当)。
+///
 /// `shutdown` 受信時にも in-flight リクエストの応答送信は完了させる。
 async fn handle_connection<S, R>(
     stream: S,
     repo: Arc<R>,
     vault: Arc<Mutex<Vault>>,
+    cache: VekCache,
+    backoff: Arc<Mutex<UnlockBackoff>>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -253,6 +281,13 @@ async fn handle_connection<S, R>(
         );
         return;
     }
+    // handshake 完了 → ClientState::Handshake { version } 確定。
+    // 既存 `negotiate` 実装は server_version (V2) との一致のみ Ok を返す設計のため、
+    // ここでは V2 を仮定する (V1 client 互換は許可リスト方式 §C-28 で別経路、
+    // negotiate 改修は後続 commit で対応)。
+    let client_state = ClientState::Handshake {
+        version: IpcProtocolVersion::current(),
+    };
 
     // 既に shutdown=true なら handshake 完了直後に閉じる
     if *shutdown.borrow_and_update() {
@@ -294,11 +329,27 @@ async fn handle_connection<S, R>(
                                 return;
                             }
                         };
-                        // ロック取得 → ハンドラ呼出 → ロック解放（応答送信前に解放）
-                        let response = {
-                            let mut vault_guard = vault.lock().await;
-                            handler::handle_request(&*repo, &mut vault_guard, request)
+                        // Sub-E: per-request に VaultMigration を構築 (無状態、cheap)。
+                        // Sub-D `VaultMigration::new` は具体型 `&'a` を取るため、本関数の
+                        // スコープでスタック上に adapter を構築 → `&` 借用を渡す形にする。
+                        let kdf_pw = Argon2idAdapter::default();
+                        let kdf_recovery = Bip39Pbkdf2Hkdf;
+                        let aead = AesGcmAeadAdapter;
+                        let rng = Rng;
+                        let gate = ZxcvbnGate::default();
+                        let migration = VaultMigration::new(
+                            &*repo, &kdf_pw, &kdf_recovery, &aead, &rng, &gate,
+                        );
+
+                        let ctx = V2Context {
+                            repo: &*repo,
+                            vault: &vault,
+                            cache: &cache,
+                            backoff: &backoff,
+                            migration: &migration,
                         };
+
+                        let response = dispatch_v2(&ctx, client_state, request).await;
                         let response_bytes = match rmp_serde::to_vec(&response) {
                             Ok(b) => b,
                             Err(err) => {
