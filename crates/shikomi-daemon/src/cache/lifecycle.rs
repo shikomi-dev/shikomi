@@ -345,6 +345,7 @@ pub fn make_default_os_lock_signal() -> Box<dyn OsLockSignal> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::vek::CacheError;
     use super::*;
     use shikomi_core::crypto::Vek;
 
