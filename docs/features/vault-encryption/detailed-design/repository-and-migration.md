@@ -77,7 +77,7 @@ crates/shikomi-infra/src/                ~ 既存改訂 + 新規モジュール
 
 - `pub struct HeaderAeadEnvelope { ciphertext: Vec<u8>, nonce: NonceBytes, tag: AuthTag }`
 - ヘッダ独立 AEAD タグの永続化形。`WrappedVek` と同じ 3 フィールド構造（DRY、Sub-A `WrappedVek` Boy Scout 後の知見再利用）
-- AAD は **vault.db 全体の context** = `version (2B BE) ‖ created_at_micros (8B BE) ‖ kdf_salt (16B) ‖ wrapped_vek_by_pw_serialized ‖ wrapped_vek_by_recovery_serialized ‖ kdf_params (12B)`（**ヘッダ全フィールドの正規化バイト列**、ヘッダ内任意フィールドの改竄を AEAD 検証で検出）
+- AAD は **vault.db 全体の context** = `version (2B BE) ‖ created_at_micros (8B BE) ‖ kdf_salt (16B) ‖ wrapped_vek_by_pw_serialized ‖ wrapped_vek_by_recovery_serialized ‖ nonce_counter (8B BE u64) ‖ kdf_params (12B)`（**ヘッダ全フィールドの正規化バイト列**、ヘッダ内任意フィールドの改竄を AEAD 検証で検出。**`nonce_counter` 含有は L1 攻撃者によるカウンタ巻戻し改竄を構造防衛**: $2^{32}$ rekey 強制契約を破壊する nonce_counter→0 書戻し攻撃が AEAD 検証で fail fast、Sub-0 凍結「random nonce + 上限 $2^{32}$ rekey」契約と整合、`requirements.md` REQ-S06 関連脅威 ID 文言「`kdf_params` / `wrapped_VEK_*` / `nonce_counter` 差替検出」と同期、Sub-D 工程5 服部指摘で明文化）
 - ciphertext の中身は **空 `&[]`**（鍵を運ばない、改竄検出専用の空 AEAD タグ）。AAD 改竄時に GMAC 不一致で `Err(AeadTagMismatch)`
 - 派生: `Debug, Clone`（ciphertext / nonce / tag は秘密でない）
 
@@ -88,7 +88,7 @@ crates/shikomi-infra/src/                ~ 既存改訂 + 新規モジュール
 | `VaultEncryptedHeader::new` | `pub` | `(version, created_at, kdf_salt, wrapped_vek_by_pw, wrapped_vek_by_recovery, nonce_counter, kdf_params, header_aead_envelope) -> Result<Self, DomainError>` | 全フィールドを受取り構築。各フィールドは型レベル強制（長さ・範囲検証は構築済型に委譲） |
 | `VaultEncryptedHeader::header_aead_envelope` | `pub` | `(&self) -> &HeaderAeadEnvelope` | ヘッダ AEAD タグへの参照 |
 | `VaultEncryptedHeader::canonical_bytes_for_aad` | `pub` | `(&self) -> Vec<u8>` | AEAD 検証用の正規化バイト列（ヘッダ全フィールドを上記順序で連結）。`HeaderAeadEnvelope` 自身は含まない（自己参照を避ける） |
-| `VaultEncryptedHeader::increment_nonce` | `pub` | `(&mut self) -> Result<NonceBytes, CryptoError>` | `nonce_counter.increment()?` を呼び、`Rng::generate_nonce_bytes()` 由来の `NonceBytes` を**呼出側が受取り**返す。**adapter は呼ばない**（Sub-C `nonce_counter 統合契約` 維持、`encrypt_record` 前段で必須実行） |
+| `VaultEncryptedHeader::increment_nonce_counter` | `pub` | `(&mut self) -> Result<(), CryptoError>` | `self.nonce_counter.increment()` 呼出のみ（Sub-A `NonceCounter::increment` の `Err(NonceLimitExceeded)` を `CryptoError::NonceLimitExceeded` に透過）。**`Rng` への依存を一切持たない**（shikomi-core no-I/O 制約継承、Clean Arch 維持）。**per-record AEAD nonce の生成は呼出側 `VaultMigration` の責務**（`let nonce = rng.generate_nonce_bytes()` を `encrypt_record` 直前に呼ぶ、`adapter.encrypt_record(&vek, &nonce, &aad, plaintext)` で消費）。Sub-D 工程5 服部指摘で「案A: increment 責務のみ、nonce 生成は完全分離」採用、メソッド名も `increment_nonce_counter` に変更（旧 `increment_nonce` は「nonce バイトを返すかカウンタを進めるか」が曖昧、Sub-D 実装担当の誤解を防止）|
 
 ### Drop 契約
 

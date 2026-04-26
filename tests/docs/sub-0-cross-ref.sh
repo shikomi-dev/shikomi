@@ -416,8 +416,17 @@ fi
 SPLIT_DIR="$ROOT/docs/features/vault-encryption/detailed-design"
 if [[ -d "$SPLIT_DIR" ]]; then
     drift=()
-    for f in "$ROOT/docs/features/vault-encryption/test-design.md" \
-             "$ROOT/docs/features/vault-encryption/basic-design.md" \
+    for f in "$ROOT/docs/features/vault-encryption/test-design/index.md" \
+             "$ROOT/docs/features/vault-encryption/test-design/sub-0-threat-model.md" \
+             "$ROOT/docs/features/vault-encryption/test-design/sub-a-crypto-types.md" \
+             "$ROOT/docs/features/vault-encryption/test-design/sub-b-kdf-rng-zxcvbn.md" \
+             "$ROOT/docs/features/vault-encryption/test-design/sub-c-aead.md" \
+             "$ROOT/docs/features/vault-encryption/test-design/sub-d-repository-migration.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design/index.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design/architecture.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design/processing-flows.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design/security.md" \
+             "$ROOT/docs/features/vault-encryption/basic-design/ux-and-msg.md" \
              "$ROOT/docs/features/vault-encryption/requirements.md" \
              "$ROOT/docs/features/vault-encryption/requirements-analysis.md"; do
         [[ -f "$f" ]] || continue
