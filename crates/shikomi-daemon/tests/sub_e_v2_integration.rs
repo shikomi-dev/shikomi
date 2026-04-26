@@ -598,8 +598,13 @@ async fn tc_e_i08_rekey_atomic_recovery_consistency() {
         IpcResponse::Rekeyed {
             records_count,
             words,
+            cache_relocked,
         } => {
             assert_eq!(records_count, 4, "rekey must re-encrypt all 4 records");
+            assert!(
+                cache_relocked,
+                "rekey 正常経路では cache_relocked=true (atomic save 成功 + 再unlock成功)"
+            );
             words
         }
         other => panic!("expected Rekeyed, got {other:?}"),

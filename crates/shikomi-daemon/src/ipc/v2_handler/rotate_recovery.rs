@@ -45,29 +45,40 @@ pub async fn handle_rotate_recovery<R: VaultRepository + ?Sized>(
         Err(err) => return IpcResponse::Error(migration_error_to_ipc(err)),
     };
 
-    // cache を新 VEK で再構築: lock → 再 unlock
+    // cache を新 VEK で再構築: lock → 再 unlock。
+    // **ペガサス工程5 致命指摘解消**: 旧実装は再 unlock 失敗時に `tracing::warn!` のみで
+    // `RecoveryRotated` を **成功として返却** していた (Lie-Then-Surprise)。本修正で
+    // `cache_relocked: bool` を IPC 応答に含め、Sub-F CLI/GUI が「鍵情報の再キャッシュ
+    // に失敗、もう一度 unlock してください」を田中ペルソナに表示できる経路を確保する
+    // (Fail Kindly 維持)。
     if let Err(err) = ctx.cache.lock().await {
         return IpcResponse::Error(IpcErrorCode::Internal {
             reason: format!("cache-lock-failed: {err}"),
         });
     }
-    match ctx.migration.unlock_with_password(password_str) {
-        Ok(new_vek) => {
-            if let Err(err) = ctx.cache.unlock(new_vek).await {
-                return IpcResponse::Error(IpcErrorCode::Internal {
-                    reason: format!("cache-unlock-failed: {err}"),
-                });
+    let cache_relocked = match ctx.migration.unlock_with_password(password_str) {
+        Ok(new_vek) => match ctx.cache.unlock(new_vek).await {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(
+                    target: "shikomi_daemon::ipc::v2_handler",
+                    "rotate_recovery: cache.unlock failed after atomic save: {err:?}; \
+                     responding with cache_relocked=false (Pegasus 工程5)"
+                );
+                false
             }
-        }
+        },
         Err(err) => {
-            // ここに来た場合は atomic write は成功しているが daemon 側 cache 復旧失敗。
-            // 次回 IPC で `vault unlock` 再試行が必要。warning ログのみ。
+            // atomic write は成功、daemon 側 cache 復旧のみ失敗。
+            // ユーザは再 unlock が必要。`cache_relocked: false` で田中ペルソナへ通知。
             tracing::warn!(
                 target: "shikomi_daemon::ipc::v2_handler",
-                "rotate_recovery: cache re-unlock failed after atomic save: {err:?}"
+                "rotate_recovery: cache re-unlock failed after atomic save: {err:?}; \
+                 responding with cache_relocked=false (Pegasus 工程5)"
             );
+            false
         }
-    }
+    };
 
     // 新 24 語を IPC 応答用に変換
     let words = disclosure.disclose();
@@ -79,7 +90,10 @@ pub async fn handle_rotate_recovery<R: VaultRepository + ?Sized>(
     // words: RecoveryWords は Drop 連鎖で String::zeroize() (a)
     drop(words);
 
-    IpcResponse::RecoveryRotated { words: words_vec }
+    IpcResponse::RecoveryRotated {
+        words: words_vec,
+        cache_relocked,
+    }
 }
 
 fn secret_bytes_to_string(secret: &SerializableSecretBytes) -> String {

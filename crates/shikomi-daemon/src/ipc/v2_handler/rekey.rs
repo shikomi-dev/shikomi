@@ -40,27 +40,37 @@ pub async fn handle_rekey<R: VaultRepository + ?Sized>(
         Err(err) => return IpcResponse::Error(migration_error_to_ipc(err)),
     };
 
-    // cache を新 VEK で再構築 (lock → 再 unlock)
+    // cache を新 VEK で再構築 (lock → 再 unlock)。
+    // **ペガサス工程5 致命指摘解消**: 旧実装は再 unlock 失敗時に `tracing::warn!` のみで
+    // `Rekeyed` を成功として返却 (Lie-Then-Surprise)。`cache_relocked: bool` を IPC 応答
+    // に含め Sub-F CLI/GUI が「鍵情報の再キャッシュに失敗、もう一度 unlock してください」
+    // を表示できる経路を確保 (Fail Kindly)。
     if let Err(err) = ctx.cache.lock().await {
         return IpcResponse::Error(IpcErrorCode::Internal {
             reason: format!("cache-lock-failed: {err}"),
         });
     }
-    match ctx.migration.unlock_with_password(password_str) {
-        Ok(new_vek) => {
-            if let Err(err) = ctx.cache.unlock(new_vek).await {
-                return IpcResponse::Error(IpcErrorCode::Internal {
-                    reason: format!("cache-unlock-failed: {err}"),
-                });
+    let cache_relocked = match ctx.migration.unlock_with_password(password_str) {
+        Ok(new_vek) => match ctx.cache.unlock(new_vek).await {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!(
+                    target: "shikomi_daemon::ipc::v2_handler",
+                    "rekey: cache.unlock failed after atomic save: {err:?}; \
+                     responding with cache_relocked=false (Pegasus 工程5)"
+                );
+                false
             }
-        }
+        },
         Err(err) => {
             tracing::warn!(
                 target: "shikomi_daemon::ipc::v2_handler",
-                "rekey: cache re-unlock failed after atomic save: {err:?}"
+                "rekey: cache re-unlock failed after atomic save: {err:?}; \
+                 responding with cache_relocked=false (Pegasus 工程5)"
             );
+            false
         }
-    }
+    };
 
     // 新 24 語を IPC 応答用に変換
     let words = disclosure.disclose();
@@ -74,6 +84,7 @@ pub async fn handle_rekey<R: VaultRepository + ?Sized>(
     IpcResponse::Rekeyed {
         records_count,
         words: words_vec,
+        cache_relocked,
     }
 }
 
