@@ -36,7 +36,10 @@ pub fn is_screen_reader_active() -> bool {
 fn is_screen_reader_active_impl() -> bool {
     // VoiceOver の OS-level 状態を低コストで判定するヒント env を採用 (Phase 7)。
     // 真の `defaults read com.apple.universalaccess` 経路は将来 minor で追加。
-    matches!(std::env::var("VOICEOVER_RUNNING").ok().as_deref(), Some("1"))
+    matches!(
+        std::env::var("VOICEOVER_RUNNING").ok().as_deref(),
+        Some("1")
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -58,9 +61,9 @@ fn is_screen_reader_active_impl() -> bool {
     // Windows: PowerShell で Narrator.exe 検出。`Get-Process` は missing で
     // 非ゼロ exit を返すので、その場合 false。
     let mut cmd = Command::new("powershell");
-    cmd.arg("-NoProfile")
-        .arg("-Command")
-        .arg("if (Get-Process -Name Narrator -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }");
+    cmd.arg("-NoProfile").arg("-Command").arg(
+        "if (Get-Process -Name Narrator -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }",
+    );
     cmd.env_clear();
     if let Ok(path) = std::env::var("PATH") {
         cmd.env("PATH", path);

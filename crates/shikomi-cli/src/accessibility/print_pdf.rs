@@ -83,9 +83,7 @@ pub fn build_pdf_bytes(words: &[SerializableSecretBytes]) -> Vec<u8> {
     );
 
     offsets.push(pdf.len());
-    pdf.push_str(
-        "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-    );
+    pdf.push_str("4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
 
     offsets.push(pdf.len());
     let _ = write!(pdf, "5 0 obj\n<< /Length {content_len} >>\nstream\n");
@@ -183,7 +181,10 @@ mod tests {
         let tail = std::str::from_utf8(&pdf[pdf.len() - 6..])
             .expect("ascii tail")
             .trim();
-        assert!(tail.ends_with("%%EOF"), "expected %%EOF tail, got: {tail:?}");
+        assert!(
+            tail.ends_with("%%EOF"),
+            "expected %%EOF tail, got: {tail:?}"
+        );
     }
 
     #[test]
