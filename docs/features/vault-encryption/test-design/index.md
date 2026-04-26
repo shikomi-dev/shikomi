@@ -14,6 +14,7 @@
 | [`sub-b-kdf-rng-zxcvbn.md`](./sub-b-kdf-rng-zxcvbn.md) | Sub-B (#40) KDF + Rng + ZxcvbnGate | `TC-B-{U,I,E}*` |
 | [`sub-c-aead.md`](./sub-c-aead.md) | Sub-C (#41) AEAD アダプタ + AeadKey trait | `TC-C-{U,I,P,E}*` |
 | [`sub-d-repository-migration.md`](./sub-d-repository-migration.md) | Sub-D (#42) 暗号化 Vault リポジトリ + マイグレーション + 横断 REQ-P11 改訂 | `TC-D-{U,I,P,E,S}*` |
+| [`sub-e-vek-cache-ipc.md`](./sub-e-vek-cache-ipc.md) | Sub-E (#43) VEK キャッシュ + IPC V2 拡張 + 横断 daemon-ipc V2 ラウンドトリップ | `TC-E-{U,I,P,E,S}*` |
 
 ## 共通方針
 
@@ -22,7 +23,7 @@
 - TC ID prefix は **Sub 単位で物理分離**（`TC-A-` / `TC-B-` / `TC-C-` / `TC-D-` / `TC-DOC-`）。ID 重複ゼロ
 - META チェック（TC 件数 assert）は各分冊が独立に管理（lint スクリプトもファイル単位で参照）
 
-## TC 総数（Sub-D Rev1 / 工程5 分割後）
+## TC 総数（Sub-E 工程2 追加後）
 
 | Sub | TC 数 | 分冊 |
 |---|---|---|
@@ -31,7 +32,10 @@
 | Sub-B | 25 | `sub-b-kdf-rng-zxcvbn.md` |
 | Sub-C | 26 | `sub-c-aead.md` |
 | Sub-D | 26 | `sub-d-repository-migration.md` |
-| **合計** | **125** | — |
+| Sub-E | 24 | `sub-e-vek-cache-ipc.md` |
+| **合計** | **149** | — |
+
+**静的検査（grep gate）**: Sub-D 7 件（TC-D-S01..S07）+ Sub-E 6 件（TC-E-S01..S06）= 13 件、`tests/docs/sub-{d,e}-static-checks.sh` で機械検証。Sub-D Rev3〜Rev4 で凍結した「実装直読 + grep gate」原則を Sub-E に継承し、4 度目以降の同型ドリフトを構造封鎖。
 
 ## 関連スクリプト
 
@@ -39,4 +43,4 @@
 
 - `sub-0-structure-lint.py`: `test-design/sub-0-threat-model.md` を対象
 - `sub-0-cross-ref.sh`: `test-design/` 配下全ファイルを参照
-- `sub-{a,b,c,d}-static-checks.sh`: 各 Sub の対応分冊を参照
+- `sub-{a,b,c,d,e}-static-checks.sh`: 各 Sub の対応分冊を参照
