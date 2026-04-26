@@ -2,16 +2,19 @@
 
 <!-- 親: docs/features/vault-encryption/detailed-design/index.md -->
 <!-- 配置先: docs/features/vault-encryption/detailed-design/nonce-and-aead.md -->
-<!-- 主担当: Sub-A (#39) で型契約 + Verified<T>、Sub-C (#41) で AEAD 実装結合。 -->
+<!-- 主担当: Sub-A (#39) で型契約 + Verified<T>、Sub-C (#41) で AEAD 実装結合 + AeadKey trait 追加 (Boy Scout)、Sub-D (#42) で HeaderAeadKey 経路統合。 -->
 
 ## 対象型
 
 - `shikomi_core::crypto::verified::Plaintext`
 - `shikomi_core::crypto::verified::Verified<T>` + `verify_aead_decrypt` ラッパ関数
+- `shikomi_core::crypto::aead_key::AeadKey` trait（**Sub-C 新規、Boy Scout Rule**）
 - `shikomi_core::vault::nonce::NonceCounter`（責務再定義、Boy Scout Rule）
 - `shikomi_core::vault::nonce::NonceBytes`（拡張、Boy Scout Rule）
 - `shikomi_core::vault::crypto_data::WrappedVek`（内部構造分離型化、Boy Scout Rule）
 - `shikomi_core::vault::crypto_data::AuthTag`（新規）
+- `shikomi_core::vault::crypto_data::Aad`（既存、Sub-C は `to_canonical_bytes()` 26B 規約を消費するのみ）
+- `shikomi_infra::crypto::aead::aes_gcm::AesGcmAeadAdapter`（**Sub-C 新規**）
 
 ## `Plaintext`
 
@@ -110,6 +113,46 @@
 - **採用方針**: クロージャマーカー方式 + 二段防御 + 呼び出し側契約。Sub-C PR レビューでの構造的検証を最終防衛線とする
 - **過信防止**: basic-design.md §セキュリティ設計 §Fail-Secure の `Verified<T>` 行で「**caller-asserted マーカーであり、AEAD 検証 bypass は契約レベル + Sub-C PR レビューで検出**」と注記する（basic-design.md Rev1 で更新）
 
+## `AeadKey` trait（**Sub-C 新規、Boy Scout Rule**）
+
+### 追加の動機
+
+Sub-B Rev2（PR #52）で「**鍵バイト型（`Vek` / `Kek<_>` / `HeaderAeadKey`）の `expose_within_crate` は `pub(crate)` 維持、KDF 入力（`MasterPassword` / `RecoveryMnemonic`）のみ `pub` 格上げ**」という可視性ポリシー差別化が凍結された（`password.md` §可視性ポリシー差別化）。結果として **shikomi-infra の AEAD アダプタは `Vek` / `HeaderAeadKey` の内部 32B に直接アクセスできない**。要件 issue #41「`AES-256-GCM(Vek, Nonce, plaintext, Aad) → ciphertext ‖ tag`」を Clean Architecture 準拠で実装するために、**鍵側にクロージャインジェクションメソッドを追加**するのが本 trait の役割。
+
+### 型定義
+
+- `pub trait AeadKey { fn with_secret_bytes<R>(&self, f: impl FnOnce(&[u8; 32]) -> R) -> R; }`
+- **配置先**: `crates/shikomi-core/src/crypto/aead_key.rs`（Sub-C 新規モジュール）
+- **dyn-safe ではない**: `impl FnOnce` を持つため `&dyn AeadKey` には作れない（型パラメータ `R` も含めて静的ディスパッチのみ）。これは意図的（dyn 経由で trait オブジェクト化されると最適化機会を失い、`Vek` / `HeaderAeadKey` の構造が attacker-readable になる経路を増やす）
+
+### 契約
+
+| 項目 | 内容 |
+|---|---|
+| 鍵バイトの所有権 | クロージャ `f` は `&[u8; 32]` 参照のみを受け取り、**所有権は鍵側に残る**。クロージャ実行後、鍵バイト参照は dangle 不可（borrow checker が保証） |
+| 鍵バイトの寿命 | クロージャ内のみで有効。クロージャ実行終了後、shikomi-infra 側で鍵バイトを保持してはならない（`for<'a> Fn(&'a [u8;32])` ライフタイム制約 + コードレビューで担保） |
+| クロージャの戻り値 | `R` は呼出側が決める（AES-GCM 暗号文 `Vec<u8>` + `AuthTag` の組、または `Result<Verified<Plaintext>, CryptoError>` 等）|
+| 副作用 | `with_secret_bytes` 自体は副作用を持たない。クロージャ内の AES-GCM 操作も I/O を持たない |
+| Drop タイミング | 鍵バイトは `Vek` / `HeaderAeadKey` の `SecretBox<Zeroizing<[u8;32]>>` 内に保持され、**鍵自体が Drop されるまで zeroize されない**（`with_secret_bytes` 呼出毎に再 zeroize は発生しない、性能劣化を避けるため）|
+
+### `Vek` への impl（`crypto-types.md` 側で別途記述、Boy Scout Rule）
+
+- `impl AeadKey for Vek { fn with_secret_bytes<R>(&self, f: impl FnOnce(&[u8; 32]) -> R) -> R { f(self.expose_within_crate()) } }`
+- `Vek::expose_within_crate` は **`pub(crate)` 可視性のまま**（鍵バイト外部非公開原則維持）。trait 経由のクロージャインジェクションのみが外部 crate に開放される
+
+### `HeaderAeadKey` への impl（Sub-D 側で同パターンを Boy Scout、本 Sub-C は方針確定のみ）
+
+- 同形の `impl AeadKey for HeaderAeadKey { ... }` を Sub-D の vault ヘッダ AEAD 検証経路で追加
+- Sub-C 段階では **`Vek` impl のみ確定**、`HeaderAeadKey` impl は本書 §Sub-D 引継ぎ で予告
+
+### 代替案との比較
+
+| 案 | 説明 | 採否 |
+|---|---|------|
+| **A: `Vek::expose_within_crate` を `pub` 格上げ** | shikomi-infra から直接 `Vek` の内部 32B を取得して AES-GCM 計算 | **却下**: Sub-B Rev2 で凍結した「鍵バイト型は `pub(crate)` 維持」契約を破壊。服部・ペテルギウスから即却下確実 |
+| **B: shikomi-core 側に `Vek::aes_gcm_encrypt` / `aes_gcm_decrypt` メソッド直書き** | shikomi-core が `aes-gcm` crate に直接依存し、Vek が暗号操作を提供 | **却下**: shikomi-core の no-I/O / pure Rust 制約と「shikomi-core は暗号アルゴリズム実装を持たない」契約に違反。Clean Architecture の依存方向が崩れる |
+| **C: `AeadKey` trait + クロージャインジェクション（採用）** | 鍵バイト所有権は鍵側に保持、shikomi-infra がクロージャ越境で借用 | **採用**: `verify_aead_decrypt` の caller-asserted マーカー思想と完全同型、Sub-A/B 凍結契約を一切破壊しない、Tell-Don't-Ask 整合 |
+
 ## `NonceCounter`（責務再定義、Boy Scout Rule）
 
 ### 型定義（変更後）
@@ -195,3 +238,121 @@
 - **ただし AEAD 計算自体は `shikomi-infra`**: ここに本質的な制約がある。shikomi-core は AEAD アルゴリズム実装を持たない（pure Rust / no-I/O 制約）ため、AEAD 検証実行を**型レベルで完全保証することは不可能**
 - **採用する解決策**: `verify_aead_decrypt(|| ...)` クロージャ経由 + `Plaintext::new_within_module` の `pub(in crate::crypto::verified)` 可視性絞り込み（指摘 #5 対応）+ Sub-C PR レビューでの「クロージャ内が AEAD 検証を実装しているか」の構造確認、の三段防御
 - **誇大宣伝の訂正**: basic-design.md の従前の表記「**型レベル禁止**」は「**型レベル + 契約レベル + PR レビューレベルの三段防御**」に訂正（Rev1 で basic-design.md セキュリティ設計セクション更新）
+
+## `AesGcmAeadAdapter`（**Sub-C 新規、shikomi-infra**）
+
+### 型定義
+
+- `pub struct AesGcmAeadAdapter;`（無状態 unit struct、`#[derive(Clone, Copy, Default)]`）
+- **配置先**: `crates/shikomi-infra/src/crypto/aead/aes_gcm.rs`（モジュール `crypto::aead`、Sub-C 新規）
+- **無状態根拠**: `aes-gcm` crate の `Aes256Gcm::new(key)` は鍵ごとに毎回構築する（軽量、内部 cipher state 不持有）。adapter 自体に state は不要、`Default::default()` で構築
+
+### モジュール配置
+
+```
+crates/shikomi-infra/src/crypto/
+  aead/                    +  本 Sub-C 新規モジュール
+    mod.rs                 +  AesGcmAeadAdapter 再エクスポート
+    aes_gcm.rs             +  AesGcmAeadAdapter 本体実装
+    kat.rs                 +  NIST CAVP テストベクトル const 配列（test cfg）
+```
+
+### メソッド
+
+| 関数名 | 可視性 | シグネチャ | 仕様 |
+|-------|------|----------|------|
+| `AesGcmAeadAdapter::encrypt_record` | `pub` | `(&self, key: &impl AeadKey, nonce: &NonceBytes, aad: &Aad, plaintext: &[u8]) -> Result<(Vec<u8>, AuthTag), CryptoError>` | per-record 暗号化。`key.with_secret_bytes(\|bytes\| ...)` クロージャ内で `Aes256Gcm::new(GenericArray::from_slice(bytes))` 構築 → `aes_gcm::aead::AeadInPlace::encrypt_in_place_detached(nonce, aad.to_canonical_bytes(), &mut buf)` で **tag 分離方式**で暗号化（`buf` は plaintext のコピー、戻り値で `(buf, AuthTag::try_new(tag.as_slice())?)`）。**AAD は `Aad::to_canonical_bytes()` の 26B 固定**（既存型再利用）。**nonce_counter の increment は呼ばない**（呼出側 = Sub-D 責務、本ファイル §nonce_counter 統合契約 参照） |
+| `AesGcmAeadAdapter::decrypt_record` | `pub` | `(&self, key: &impl AeadKey, nonce: &NonceBytes, aad: &Aad, ciphertext: &[u8], tag: &AuthTag) -> Result<Verified<Plaintext>, CryptoError>` | per-record 復号 + AEAD タグ検証。`key.with_secret_bytes(\|bytes\| ...)` クロージャ内で `Aes256Gcm::new(...)` → `decrypt_in_place_detached(nonce, aad.to_canonical_bytes(), &mut buf, tag.as_array())` で検証付き復号。**タグ検証成功時のみ** `verify_aead_decrypt(\|\| Ok(Plaintext::new_within_module(buf)))?` 経由で `Verified<Plaintext>` を構築（shikomi-core の caller-asserted マーカー契約に従う）。**タグ検証失敗時** `Err(CryptoError::AeadTagMismatch)` を返し `Plaintext` を構築しない |
+| `AesGcmAeadAdapter::wrap_vek` | `pub` | `(&self, kek: &impl AeadKey, nonce: &NonceBytes, vek: &Vek) -> Result<WrappedVek, CryptoError>` | VEK の wrap（Sub-D `derive_new_wrapped_pw` / `derive_new_wrapped_recovery` から呼出）。AAD は **空** `&[]`（`WrappedVek` は vault ヘッダの一部として独立 AEAD タグで保護される、record AAD とは別経路）。`vek.with_secret_bytes(\|vek_bytes\| ...)` で 32B 平文を取得 → AES-GCM 暗号化 → `WrappedVek::new(ciphertext, nonce.clone(), tag)` |
+| `AesGcmAeadAdapter::unwrap_vek` | `pub` | `(&self, kek: &impl AeadKey, wrapped: &WrappedVek) -> Result<Verified<Plaintext>, CryptoError>` | VEK の unwrap。AAD は空 `&[]`、ciphertext + tag は `WrappedVek` から取得。**戻り値の `Verified<Plaintext>` 内 32B が新 `Vek::from_array` の入力**となる（呼出側 = Sub-D / Sub-E、本ファイル §AEAD 復号後の VEK 復元経路 参照） |
+
+### `aes-gcm` crate 呼出契約
+
+| 項目 | 値 / 方針 |
+|-----|---------|
+| 呼出パス | `aes_gcm::Aes256Gcm::new(GenericArray::from_slice(&[u8;32]))` → `aead::AeadInPlace::{encrypt,decrypt}_in_place_detached` の **tag 分離 API のみ**使用。`Aead::encrypt` / `Aead::decrypt` の連結返却 API（ciphertext + tag を `Vec<u8>` 末尾連結）は使わない（`WrappedVek` の構造分離型化と整合、byte offset 演算を呼出側に漏らさない、Tell-Don't-Ask） |
+| Algorithm | `aes_gcm::Aes256Gcm`（AES-256 鍵長 32B、GMAC 認証タグ 16B、IV 12B 固定） |
+| Cipher key 型 | `aes_gcm::Key<aes_gcm::Aes256Gcm>` = `GenericArray<u8, U32>`、内部は `&[u8;32]` ラッパ |
+| Nonce 型 | `aes_gcm::Nonce<aes_gcm::Aes256Gcm>` = `GenericArray<u8, U12>`、`NonceBytes::as_array()` から構築 |
+| KAT | NIST CAVP "GCM Test Vectors"（`gcmEncryptExtIV256.rsp` / `gcmDecrypt256.rsp`）から **encryption / decryption 各 8 件以上**を `crypto/aead/kat.rs` に const として埋め込み、`#[cfg(test)] fn aes_256_gcm_nist_cavp_kat()` で実行（CI ジョブ `test-infra` で必須 pass）。出典: https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/cavp-testing-block-cipher-modes |
+| `subtle` v2.5+ 制約 | tag 比較は `aes-gcm` 内部の constant-time 経路に委譲。adapter 側で `==` による tag 比較を**書かない**（`tech-stack.md` §4.7 `subtle` 行の「自前で `==` 演算子を使った定数比較を書くことは禁止」契約） |
+| 中間バッファ zeroize | `encrypt_in_place_detached` / `decrypt_in_place_detached` の入力 `buf: Vec<u8>` は **`Zeroizing<Vec<u8>>` で囲む**。`with_secret_bytes` クロージャを抜けるとき `Drop` で zeroize（plaintext / VEK 中間バッファの滞留時間最小化、L2 メモリスナップショット対策） |
+| `aes-gcm` feature | `aes` `alloc` + `zeroize` 連携を有効化（`tech-stack.md` §4.7 凍結） |
+
+### nonce_counter 統合契約（**Sub-D 責務との分離**）
+
+`AesGcmAeadAdapter::encrypt_record` は **`NonceCounter::increment` を呼ばない**。理由：
+- **責務分離（SRP）**: adapter は「鍵 + nonce + AAD + plaintext → ciphertext + tag」の暗号関数。nonce 上限管理は **vault リポジトリ層（Sub-D）の責務**
+- **複数経路の整合**: `encrypt_record` は per-record 暗号化、`wrap_vek` は VEK wrap、両者で `NonceCounter` の更新タイミングが異なる（per-record は毎回 increment、VEK wrap は初回のみ）。adapter 内に閉じ込めると分岐が複雑化
+
+呼出側（Sub-D）の契約：
+1. **encrypt 前**: `nonce_counter.increment()?;` で上限チェック → `Err(CryptoError::NonceLimitExceeded)` なら fail fast、Sub-F の `vault rekey` フローに誘導
+2. **encrypt 実行**: `let nonce = rng.generate_nonce_bytes(); adapter.encrypt_record(&vek, &nonce, &aad, plaintext)?;`
+3. **永続化時**: `nonce_counter.current()` を vault ヘッダに保存
+
+### AEAD 復号後の VEK 復元経路
+
+`AesGcmAeadAdapter::unwrap_vek` の戻り値 `Verified<Plaintext>` から `Vek` を復元する経路：
+
+1. `let verified = adapter.unwrap_vek(&kek_pw, &wrapped_vek_by_pw)?;` （shikomi-infra / Sub-D）
+2. `let plaintext = verified.into_inner();` （shikomi-core `Verified::into_inner`）
+3. `let bytes_array: [u8; 32] = plaintext.expose_secret().try_into().map_err(|_| CryptoError::AeadTagMismatch)?;` （長さ検証、32B 以外は AEAD 復号成功でも構造異常として拒否）
+4. `let vek = Vek::from_array(bytes_array);` （Sub-A `Vek::from_array`）
+5. `plaintext` / `bytes_array` は scope 抜けで Drop 連鎖 zeroize（L2 対策）
+
+**注**: 上記手順 3 の長さ検証は **Sub-D で実装**（adapter の責務外）。adapter は AEAD 検証付き復号までを保証し、`Plaintext` の中身が 32B である保証は **wrap 時の構造（`WrappedVek::new(ct, nonce, tag)` で `ct.len() >= 32`）に由来する間接保証**であり、復号後の長さ検証は Sub-D の `unwrap_vek_with_password` 等の上位関数で必須。
+
+### AAD 入れ替え攻撃検出（per-record）
+
+| 攻撃シナリオ | 検出経路 |
+|---|---|
+| L1 攻撃者が record A の ciphertext + tag を record B の (record_id_B, version_B, created_at_B) と組み合わせて daemon に注入 | `decrypt_record(&vek, &nonce_A, &aad_B, &ciphertext_A, &tag_A)` の AEAD 検証で **`Aad::to_canonical_bytes()` が AAD として GMAC 計算に組み込まれる**ため、`aad_A != aad_B` で tag 不一致 → `CryptoError::AeadTagMismatch` で fail fast |
+| ロールバック攻撃: 古い record ciphertext + 旧 vault_version の AAD を新 vault に注入 | `vault_version` は `Aad` 内に含まれる（既存規約、`crypto_data.rs` `Aad::to_canonical_bytes` `[16..18]`）、AEAD 検証で旧 version の AAD が新 vault key で復号失敗 |
+| 同 record_id で内容差し替え | `record_id` は `Aad` 内 `[0..16]` に含まれ、ciphertext と紐付く。差し替え時 AAD は同じだが nonce が異なれば AEAD 計算結果が変わり tag 不一致。**ただし同じ nonce + 同じ AAD で別 plaintext を暗号化された場合は L1 受容範囲外**（random nonce 12B の衝突確率 $\le 2^{-32}$ で確率的排除、Sub-0 §脅威モデル §4 L1 受容） |
+
+検証: テスト `tc_c_property_aad_swap_rejected` で property test として網羅（本書 §後続テスト設計引継ぎ + test-design.md §12.5 参照）。
+
+## 設計判断の補足（Sub-C 追加分）
+
+### なぜ `AesGcmAeadAdapter` を unit struct にするか
+
+- **無状態**: `aes-gcm` crate の `Aes256Gcm::new(key)` は呼出毎に cipher state を構築する軽量操作（key schedule のみ、AES round key 展開）。adapter 内に state を持つ必要なし
+- **Default 構築**: `let adapter = AesGcmAeadAdapter::default();` で即構築可能、テストで mock 不要、Sub-D / Sub-E から複数経路で並列呼出しても安全
+- **Sub-B `Argon2idAdapter` / `Bip39Pbkdf2Hkdf` と命名・構築規約整合**
+
+### なぜ `encrypt_record` / `decrypt_record` と `wrap_vek` / `unwrap_vek` を別メソッドにするか
+
+| 観点 | per-record (`encrypt_record`/`decrypt_record`) | VEK wrap (`wrap_vek`/`unwrap_vek`) |
+|---|---|---|
+| 鍵 | `Vek`（VEK） | `Kek<KekKindPw>` または `Kek<KekKindRecovery>`（KEK） |
+| 平文サイズ | 任意（レコード本文、可変長） | 固定 32B（VEK 本体） |
+| AAD | `Aad::to_canonical_bytes()` 26B（record_id + version + created_at） | 空 `&[]`（vault ヘッダ独立 AEAD タグで別途保護、Sub-D） |
+| 戻り値 | `(Vec<u8>, AuthTag)` または `Verified<Plaintext>` | `WrappedVek` または `Verified<Plaintext>` |
+| 呼出頻度 | レコード暗号化のたびに `NonceCounter::increment` 必須 | 初回 vault 作成 + change-password / rekey 時のみ |
+
+両者を 1 メソッドに統合すると分岐コードが膨らみ、AAD の有無 / 鍵型 / nonce_counter 更新タイミングが混在する。**4 メソッドに分割して責務を明示**するほうが Tell-Don't-Ask + Single Responsibility 整合。
+
+### なぜ `decrypt_record` の戻り値を `Verified<Plaintext>` にするか
+
+- **AEAD 検証成功の型レベル証跡**: shikomi-core の `Verified<T>` は「呼び出し側主張マーカー」。adapter が `aes_gcm::aead::AeadInPlace::decrypt_in_place_detached` で **タグ検証成功時のみ** `verify_aead_decrypt(|| Ok(Plaintext::new_within_module(buf)))` を呼ぶことで、Sub-D 以降の経路に「この `Plaintext` は AEAD 検証済み」という型レベル契約を引き渡す
+- **タグ検証失敗時は `Plaintext` を構築しない**: `Err(CryptoError::AeadTagMismatch)` を返し、`Plaintext::new_within_module` を呼ばない。これにより **未検証 ciphertext を平文として扱う事故**を構造禁止（Sub-A `verify_aead_decrypt` の caller-asserted マーカー契約と整合、`pub(in crate::crypto::verified)` 可視性絞り込み）
+
+### なぜ AAD を `Aad::to_canonical_bytes()` の `[u8; 26]` で固定するか
+
+- **既存型の再利用（Boy Scout Rule、新規型作成禁止）**: `shikomi_core::vault::crypto_data::Aad` が **既に 26B 固定の決定論的バイト列を提供**（`record_id 16B + vault_version 2B BE + created_at_micros 8B BE`）。Sub-C で再発明すると DRY 違反、設計判断の一貫性破綻
+- **vault_version の big-endian エンコーディングは既存契約**: `Aad::to_canonical_bytes()` のレイアウトを変更する場合は **`VaultVersion` のメジャーアップとセットでのみ許可**（既存 doc-comment 規約）。Sub-C は本契約を消費するのみ、変更を要求しない
+
+## Sub-C → 後続 Sub への引継ぎ
+
+### Sub-D（#42）への引継ぎ
+
+1. **`HeaderAeadKey` への `AeadKey` impl 追加**: 同形パターンで Boy Scout、`crypto-types.md` 同期更新
+2. **`derive_new_wrapped_pw` / `derive_new_wrapped_recovery` の AES-GCM wrap 部分**: `AesGcmAeadAdapter::wrap_vek` を呼出（`errors-and-contracts.md` §VekProvider Sub-D 追記対象）
+3. **`unwrap_vek_with_password` / `unwrap_vek_with_recovery` の実装**: `unwrap_vek` 戻り値 `Verified<Plaintext>` から `Vek` 復元（本書 §AEAD 復号後の VEK 復元経路 手順）
+4. **`encrypt_record` 呼出前の `NonceCounter::increment`**: vault リポジトリ層で必須、本書 §nonce_counter 統合契約 を Sub-D `repository-and-migration.md` に反映
+5. **vault ヘッダ独立 AEAD タグ**: `HeaderAeadKey` を使った `AesGcmAeadAdapter::encrypt_record(&header_key, ...)` 経路、AAD は ヘッダ全体の bincode 等の正規化バイト列（Sub-D 確定）
+
+### Sub-F（#44）への引継ぎ
+
+- `vault rekey` フローで `CryptoError::NonceLimitExceeded` を捕捉、新 VEK 生成 + 全レコード再暗号化フロー
+- MSG-S11 文言確定（nonce 上限到達時のユーザ向け案内）

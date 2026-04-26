@@ -31,6 +31,9 @@
 | REQ-S04 | `shikomi_infra::crypto::kdf::bip39_pbkdf2_hkdf` | `crates/shikomi-infra/src/crypto/kdf/bip39_pbkdf2_hkdf.rs` | `Bip39Pbkdf2Hkdf`（24 語 → seed → KEK_recovery、HKDF info `b"shikomi-kek-v1"`、trezor + RFC 5869 KAT） | **Sub-B 新規追加** |
 | REQ-S02 / 全 Sub | `shikomi_infra::crypto::rng` | `crates/shikomi-infra/src/crypto/rng.rs` | `Rng`（`rand_core::OsRng` + `getrandom` バックエンド、`generate_kdf_salt` / `generate_vek` / `generate_nonce_bytes` / `generate_mnemonic_entropy` の単一エントリ点、Sub-0 凍結文言「`KdfSalt::generate()` 単一コンストラクタ」の Clean Arch 整合的物理実装） | **Sub-B 新規追加** |
 | REQ-S08（実装） | `shikomi_infra::crypto::password::zxcvbn_gate` | `crates/shikomi-infra/src/crypto/password/zxcvbn_gate.rs` | `ZxcvbnGate`（zxcvbn 強度 ≥ 3、英語 raw `Feedback` をそのまま運ぶ、i18n は呼出側責務） | **Sub-B 新規追加（旧 Sub-D 担当の Boy Scout Rule 再分配）** |
+| REQ-S05 | `shikomi_core::crypto::aead_key` | `crates/shikomi-core/src/crypto/aead_key.rs` | `AeadKey` trait（`with_secret_bytes` クロージャインジェクション、Sub-B Rev2 可視性ポリシー差別化との整合） | **Sub-C 新規追加（Boy Scout Rule、shikomi-core 側に trait のみ、impl は `Vek` / `Kek<_>` / `HeaderAeadKey`）** |
+| REQ-S05 | `shikomi_infra::crypto::aead::aes_gcm` | `crates/shikomi-infra/src/crypto/aead/aes_gcm.rs` | `AesGcmAeadAdapter`（AES-256-GCM、`encrypt_record` / `decrypt_record` / `wrap_vek` / `unwrap_vek` 4 メソッド、AAD = `Aad::to_canonical_bytes()` 26B、NIST CAVP KAT、`Zeroizing<Vec<u8>>` 中間バッファ） | **Sub-C 新規追加** |
+| REQ-S05 / REQ-S14 | `shikomi_core::crypto::key` / `shikomi_core::crypto::header_aead` | 上記 `key.rs` / `header_aead.rs` | `Vek` / `Kek<KekKindPw>` / `Kek<KekKindRecovery>` への `AeadKey` impl 追加（**`expose_within_crate` の `pub(crate)` 可視性は変更せず**、trait 経由のみ外部 crate に開放） | **Sub-C で Boy Scout 改訂**（`HeaderAeadKey` impl は Sub-D で同形パターン追加） |
 
 ```
 ディレクトリ構造（Sub-A 完了時点、+ が新規、~ が改訂）:
@@ -69,6 +72,22 @@ crates/shikomi-infra/src/
     vek_provider.rs      +  Argon2idHkdfVekProvider (shikomi_core::VekProvider 具象実装、Sub-C/D で wrap 経路を結合)
   benches/                + 
     argon2id.rs          +  criterion benchmark (p95 ≤ 1.0 秒、CI bench-kdf job で必須 pass)
+
+ディレクトリ構造（Sub-C 完了時点、+ が新規、~ が改訂）:
+crates/shikomi-core/src/
+  crypto/
+    aead_key.rs          +  AeadKey trait（with_secret_bytes クロージャインジェクション、Sub-C 新規）
+    key.rs               ~  Vek / Kek<_> に AeadKey impl 追加（Boy Scout、expose_within_crate は pub(crate) 維持）
+    header_aead.rs       ~  HeaderAeadKey に AeadKey impl 追加は Sub-D 担当（Boy Scout 予告のみ）
+    mod.rs               ~  pub use aead_key::AeadKey を追記
+crates/shikomi-infra/src/
+  crypto/
+    aead/                +  本 Sub-C 新規モジュール
+      mod.rs             +  AesGcmAeadAdapter 再エクスポート
+      aes_gcm.rs         +  AesGcmAeadAdapter（encrypt_record / decrypt_record / wrap_vek / unwrap_vek 4 メソッド、Zeroizing<Vec<u8>> 中間バッファ）
+      kat.rs             +  NIST CAVP gcmEncryptExtIV256.rsp / gcmDecrypt256.rsp 抜粋 const 配列（test cfg、各 8 件以上）
+    vek_provider.rs      ~  derive_new_wrapped_pw / derive_new_wrapped_recovery の AES-GCM wrap 経路を AesGcmAeadAdapter::wrap_vek 経由で確定（Sub-B 段階の TBD を Sub-C で完成）
+  Cargo.toml             ~  aes-gcm minor pin + rand_core minor pin + subtle major pin v2.5+ を [dependencies] に追加
 ```
 
 **モジュール設計方針**:
@@ -242,14 +261,58 @@ classDiagram
 3. **Sub-D の MSG-S08 文言層**で `warning.is_none()` を検出 → フォールバック警告文（既定文言 / `suggestions[0]` / 強度スコア値のいずれか）を提示（`detailed-design/password.md` §`warning=None` 時の代替警告文契約）
 4. `WeakPasswordFeedback` を IPC 経由で daemon → CLI / GUI に渡し、ユーザ提示まで Fail Kindly 維持
 
-### Sub-C〜F の処理フロー
+### REQ-S05 / REQ-S14（実装結合）: AEAD 経路（Sub-C 主機能）
+
+#### F-C1: per-record 暗号化フロー（呼び出し側 = Sub-D の `vault encrypt` レコード追加 / 更新）
+
+1. Sub-D の vault リポジトリ層で **`nonce_counter.increment()?`** を実行（上限 $2^{32}$ チェック、`Err(NonceLimitExceeded)` なら fail fast → MSG-S11）
+2. `let nonce = rng.generate_nonce_bytes();`（Sub-B `Rng`、12B random、衝突確率 ≤ $2^{-32}$ で運用範囲内）
+3. `let aad = Aad::new(record_id, vault_version, record_created_at)?;`（既存 `shikomi_core::vault::crypto_data::Aad`、26B 正規化）
+4. `let aead = AesGcmAeadAdapter::default();`（Sub-C、無状態 unit struct）
+5. `let (ciphertext, tag) = aead.encrypt_record(&vek, &nonce, &aad, plaintext)?;`（Sub-C、`vek.with_secret_bytes(|bytes| Aes256Gcm::new(bytes).encrypt_in_place_detached(...))` 経由）
+6. `EncryptedRecord { ciphertext, nonce, aad, tag }` を構築（Sub-D の永続化型、本ファイル §データモデルで Sub-D が確定）
+7. **AEAD 中間バッファ**: 手順 5 内部の `Zeroizing<Vec<u8>>` は scope 抜けで Drop 連鎖 zeroize（C-16 / L2 対策）
+8. **Vek の Drop**: vault unlock セッションが続く限り `Vek` は daemon RAM に滞留（Sub-E `tokio::sync::RwLock<Option<Vek>>`、最大アイドル 15min）
+
+#### F-C2: per-record 復号フロー（呼び出し側 = Sub-D の `vault unlock` 後のレコード読出）
+
+1. SQLite から `EncryptedRecord { ciphertext, nonce, aad_components, tag }` を読み出し（Sub-D `vault-persistence`）
+2. `let aad = Aad::new(record_id, vault_version, record_created_at)?;`（永続化された components から再構築）
+3. `let aead = AesGcmAeadAdapter::default();`
+4. `let verified = aead.decrypt_record(&vek, &nonce, &aad, &ciphertext, &tag)?;`（Sub-C）
+   - 内部: `vek.with_secret_bytes(|bytes| Aes256Gcm::new(bytes).decrypt_in_place_detached(...))` でタグ検証、成功時のみ `verify_aead_decrypt(|| Ok(Plaintext::new_within_module(buf)))` で `Verified<Plaintext>` 構築
+   - **タグ検証失敗時**: `Err(CryptoError::AeadTagMismatch)` → MSG-S10「vault.db 改竄の可能性」、`Plaintext` は構築されない（C-14）
+5. `let plaintext = verified.into_inner();`（Sub-A `Verified::into_inner`）
+6. plaintext を呼出側に渡す（Sub-D / Sub-E でクリップボード投入 30 秒タイマー、L2 対策）
+
+#### F-C3: VEK wrap 経路（呼び出し側 = Sub-D の `vault encrypt` 初回 / `change-password` / `rekey`）
+
+1. `let vek = rng.generate_vek();`（初回のみ、Sub-B `Rng`）または既存 `vek`（change-password 時）
+2. `let kek_pw = argon2.derive_kek_pw(&master_password, &salt)?;`（Sub-B `Argon2idAdapter`）
+3. `let nonce = rng.generate_nonce_bytes();`（Sub-B `Rng`）
+4. `let aead = AesGcmAeadAdapter::default();`
+5. `let wrapped = aead.wrap_vek(&kek_pw, &nonce, &vek)?;`（Sub-C、AAD は空 `&[]`、ciphertext 32B + tag 16B = `WrappedVek { ciphertext, nonce, tag }`）
+6. **KEK_pw の Drop**: 手順 5 完了で scope 抜け、`SecretBox<Zeroizing<[u8;32]>>` が Drop 連鎖 zeroize（滞留 < 1 秒、L2 対策）
+7. recovery 経路は同形（`Bip39Pbkdf2Hkdf::derive_kek_recovery` で `Kek<KekKindRecovery>` を導出 → `wrap_vek` の `key` 引数に渡す、phantom-typed の C-6 契約は `WrappedVek` 受け側の関数シグネチャで担保）
+
+#### F-C4: VEK unwrap 経路（呼び出し側 = Sub-D の `vault unlock`）
+
+1. SQLite から `wrapped_VEK_by_pw: WrappedVek` を読み出し（Sub-D）
+2. `let kek_pw = argon2.derive_kek_pw(&master_password, &salt)?;`（Sub-B）
+3. `let aead = AesGcmAeadAdapter::default();`
+4. `let verified = aead.unwrap_vek(&kek_pw, &wrapped_vek_by_pw)?;`（Sub-C、AAD は空、戻り値は `Verified<Plaintext>`）
+5. `let bytes: [u8;32] = verified.into_inner().expose_secret().try_into().map_err(|_| CryptoError::AeadTagMismatch)?;`（Sub-D 側で 32B 長さ検証 Fail Fast）
+6. `let vek = Vek::from_array(bytes);`（Sub-A）
+7. **Drop 連鎖**: `Plaintext` / `bytes` / `kek_pw` は scope 抜けで全 zeroize（L2 対策）
+8. `vek` を Sub-E の VEK キャッシュに格納（`tokio::sync::RwLock<Option<Vek>>`、unlock〜lock 間滞留）
+
+### Sub-D〜F の処理フロー
 
 各 Sub の設計工程で本ファイルを READ → EDIT で追記する。
 
-- F-C*: AEAD 経路（AES-256-GCM per-record + ヘッダ独立 AEAD タグ）— Sub-C
-- F-D*: 暗号化 vault リポジトリ + 平文⇄暗号化マイグレーション — Sub-D
+- F-D*: 暗号化 vault リポジトリ + 平文⇄暗号化マイグレーション + ヘッダ独立 AEAD タグ — Sub-D
 - F-E*: VEK キャッシュ + IPC V2 — Sub-E
-- F-F*: vault 管理サブコマンド — Sub-F
+- F-F*: vault 管理サブコマンド + `vault rekey` フロー — Sub-F
 
 ## シーケンス図
 
@@ -336,7 +399,7 @@ flowchart LR
 
 | 想定攻撃者 | 攻撃経路 | 保護資産 | Sub-A 型レベル対策 |
 |-----------|---------|---------|------------------|
-| **L1**: 同ユーザ別プロセス | vault.db 改竄、IPC スプーフィング（Sub-E 担当） | `wrapped_VEK_*` / `kdf_params` / records ciphertext | `Verified<T>` newtype で「未検証 ciphertext を `Plaintext` として扱う」事故を**三段防御で構造封鎖**: (1) `Verified::new_from_aead_decrypt` が `pub(crate)` 可視性で外部 crate から構築不可、(2) `Plaintext::new_within_module` が `pub(in crate::crypto::verified)` 可視性で `Verified` を実装する同一モジュール内からのみ構築可、(3) Sub-C PR レビューで `verify_aead_decrypt(\|\| ...)` クロージャ内が AEAD 検証を実装しているか必須確認。**型レベル完全保証ではなく caller-asserted マーカー契約**（`detailed-design/nonce-and-aead.md` §`verify_aead_decrypt` ラッパ関数の契約 参照） |
+| **L1**: 同ユーザ別プロセス | vault.db 改竄、IPC スプーフィング（Sub-E 担当） | `wrapped_VEK_*` / `kdf_params` / records ciphertext | `Verified<T>` newtype で「未検証 ciphertext を `Plaintext` として扱う」事故を**三段防御で構造封鎖**: (1) `Verified::new_from_aead_decrypt` が `pub(crate)` 可視性で外部 crate から構築不可、(2) `Plaintext::new_within_module` が `pub(in crate::crypto::verified)` 可視性で `Verified` を実装する同一モジュール内からのみ構築可、(3) Sub-C PR レビューで `verify_aead_decrypt(\|\| ...)` クロージャ内が AEAD 検証を実装しているか必須確認。**型レベル完全保証ではなく caller-asserted マーカー契約**（`detailed-design/nonce-and-aead.md` §`verify_aead_decrypt` ラッパ関数の契約 参照）。**Sub-C 追加対策**: (a) `AesGcmAeadAdapter::decrypt_record` / `unwrap_vek` で AEAD 検証失敗時に `Plaintext` を構築しない（C-14 構造禁止）、(b) `Aad::to_canonical_bytes()` 26B（record_id + version + created_at）を AAD として GMAC 計算に組み込み、AAD 入れ替え攻撃を tag 不一致で検出、(c) random nonce 12B（Sub-B `Rng::generate_nonce_bytes`）+ `NonceCounter::increment` 上限 $2^{32}$ で衝突確率 ≤ $2^{-32}$ 維持、上限到達時 `vault rekey` 強制（Sub-F、`detailed-design/nonce-and-aead.md` §nonce_counter 統合契約） |
 | **L2**: メモリスナップショット | コアダンプ / ハイバネーションファイル / スワップから VEK / KEK / MasterPassword / 平文抽出 | `Vek` / `Kek` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` | 全て `secrecy::SecretBox` ベース、`Drop` 連鎖で**派生集約も連動消去**。`Clone` を**意図的に未実装**（誤コピーで滞留時間延長を構造禁止）。`Debug` は `[REDACTED ...]` 固定、`Display` 未実装、`serde::Serialize` 未実装（コンパイル時に誤シリアライズを排除） |
 | **L3**: 物理ディスク奪取 | offline brute force | `wrapped_VEK_*`（KDF 作業証明依存） | Sub-A 型レベル対策**なし**（KDF 計算は Sub-B、AEAD 計算は Sub-C 担当）。ただし `MasterPassword::new` で `PasswordStrengthGate` 通過を**型コンストラクタ要件**として強制し、弱パスワードを構造的に Sub-D の Argon2id 入力から排除（**KDF 強度の前提条件を型で担保**） |
 | **L4**: 同ユーザ root / OS 侵害 | ptrace / kernel keylogger / `/proc/<pid>/mem` 等 | 全て | **対象外**（`requirements-analysis.md` §脅威モデル §4 L4 / §5 スコープ外）。型レベルで防御不能、Sub-A は対策追加せず |
@@ -358,11 +421,11 @@ flowchart LR
 | # | カテゴリ | 対応状況 |
 |---|---------|---------|
 | A01 | Broken Access Control | 該当なし — 理由: Sub-A はドメイン型ライブラリで、認可境界は持たない。アクセス制御は IPC（Sub-E）/ OS パーミッション（既存 `vault-persistence`）担当 |
-| A02 | Cryptographic Failures | **主担当**。`Verified<T>` newtype + `Plaintext::new_within_module` の二段可視性 + Sub-C PR レビューで AEAD 検証 bypass を**三段防御で構造封鎖**（caller-asserted マーカー契約）、`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `HeaderAeadKey` を `secrecy` + `zeroize` で滞留時間最小化、`Clone` 禁止で誤コピー排除、`Debug` 秘匿で誤ログ漏洩排除、`PasswordStrengthGate` で弱鍵禁止 |
+| A02 | Cryptographic Failures | **主担当**。`Verified<T>` newtype + `Plaintext::new_within_module` の二段可視性 + Sub-C PR レビューで AEAD 検証 bypass を**三段防御で構造封鎖**（caller-asserted マーカー契約）、`Vek` / `Kek<_>` / `MasterPassword` / `RecoveryMnemonic` / `Plaintext` / `HeaderAeadKey` を `secrecy` + `zeroize` で滞留時間最小化、`Clone` 禁止で誤コピー排除、`Debug` 秘匿で誤ログ漏洩排除、`PasswordStrengthGate` で弱鍵禁止。**Sub-C 追加**: `AeadKey` trait（クロージャインジェクション）で鍵バイトを shikomi-infra に**借用越境のみ**で渡し、所有権は shikomi-core 側に保持（Sub-B Rev2 可視性ポリシー差別化との整合）、AEAD 中間バッファを `Zeroizing<Vec<u8>>` で囲み Drop 時 zeroize（C-16）、`subtle` v2.5+ の constant-time 比較に委譲（自前 `==` 禁止） |
 | A03 | Injection | 該当なし — 理由: shikomi-core は SQL / shell / HTML を扱わない |
 | A04 | Insecure Design | **主担当**。Fail-Secure を**型システムで強制**する設計（`Verified<T>` / `pub(crate)` 可視性 / phantom-typed `Kek<Kind>` 取り違え禁止 / `#[must_use]` 結果無視検出）。Issue #33 の `(_, Ipc) => Secret` 思想を継承し、暗号化境界も型で fail-secure |
 | A05 | Security Misconfiguration | 該当なし — 理由: 設定値は Sub-B（KDF パラメータ）/ Sub-C（nonce 上限）担当 |
-| A06 | Vulnerable Components | 該当なし — 理由: 本 Sub で新規導入する crate は**ない**（`secrecy` / `zeroize` / `thiserror` / `time` は Issue #7 で導入済、§4.3.2 暗号クリティカル登録済） |
+| A06 | Vulnerable Components | **Sub-C 追加**: `aes-gcm`（RustCrypto、minor pin、`tech-stack.md` §4.7 凍結）+ `subtle` v2.5+（major pin、constant-time 比較）+ `rand_core` minor pin（既存導入済）。すべて §4.3.2 暗号クリティカル ignore 禁止リスト対象。NIST CAVP テストベクトルで Sub-C 工程4 KAT を CI 必須実行 |
 | A07 | Auth Failures | 部分担当。`MasterPassword` の強度検証契約のみ確定（実装は Sub-D zxcvbn）、リトライ回数管理は Sub-E |
 | A08 | Data Integrity Failures | 該当なし — 理由: ヘッダ AEAD タグの実検証は Sub-C / Sub-D 担当、Sub-A は `HeaderAeadKey` 型と `Verified<T>` 契約のみ提供 |
 | A09 | Logging Failures | **主担当**。`Debug` を `[REDACTED VEK]` / `[REDACTED KEK]` / `[REDACTED MASTER PASSWORD]` / `[REDACTED MNEMONIC]` / `[REDACTED PLAINTEXT]` の固定文字列に統一、`tracing` で誤った構造化ログを出さない契約。`Display` / `serde::Serialize` 未実装で誤シリアライズを**コンパイル時禁止** |
@@ -433,7 +496,7 @@ Sub-A で **`DomainError` の拡張**として暗号特化エラーを追加（`
 | 例外種別 | 処理方針 | ユーザーへの通知 |
 |---------|---------|----------------|
 | `CryptoError::WeakPassword(WeakPasswordFeedback)` | `MasterPassword::new` の構築失敗。呼び出し側（Sub-D）が `Feedback` をそのまま MSG-S08 に変換 | MSG-S08「パスワード強度不足」+ zxcvbn の `warning` / `suggestions`（Fail Kindly） |
-| `CryptoError::AeadTagMismatch` | AEAD 復号失敗。**`Verified<Plaintext>` を構築せず**、Sub-D が即拒否 → vault.db 改竄の可能性をユーザに通知 | MSG-S10「vault.db 改竄の可能性、バックアップから復元を案内」 |
+| `CryptoError::AeadTagMismatch` | AEAD 復号失敗。**`Verified<Plaintext>` を構築せず**、Sub-D が即拒否 → vault.db 改竄の可能性をユーザに通知。**Sub-C 発火経路**: `AesGcmAeadAdapter::{decrypt_record, unwrap_vek}` 内の `aes_gcm::aead::AeadInPlace::decrypt_in_place_detached` が `Err(aes_gcm::Error)` を返した時に変換。タグ不一致 / AAD 不一致 / nonce-key 取り違え / ciphertext 改竄を**全て本 variant に統一**（内部詳細秘匿、攻撃者へのオラクル排除） | MSG-S10「vault.db 改竄の可能性、バックアップから復元を案内」 |
 | `CryptoError::NonceLimitExceeded` | `NonceCounter::increment` の上限到達。Sub-D が即 `vault rekey` フロー（Sub-F）へ誘導 | MSG-S11「nonce 上限到達、`vault rekey` 実行を案内」 |
 | `CryptoError::KdfFailed { kind, source }` | Argon2id / HKDF / PBKDF2 計算失敗（メモリ不足 / 入力長不正等）。Sub-B が即拒否、リトライしない（KDF 失敗は決定論的バグまたはリソース枯渇のため） | MSG-S09 カテゴリ「(c) キャッシュ揮発タイムアウト」隣接の「KDF 失敗」カテゴリ（Sub-B / Sub-E で文言確定） |
 | `CryptoError::VerifyRequired` | `Plaintext` を `Verified` 経由なしで直接構築しようとした（`pub(crate)` 可視性で**コンパイルエラーになる経路**だが、テストでの構築シナリオに限り runtime 検出の余地） | 開発者向けエラー、ユーザ通知なし（`tracing` で audit log のみ） |
