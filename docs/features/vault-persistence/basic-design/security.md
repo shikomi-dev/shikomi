@@ -28,8 +28,8 @@
 | テンポラリファイル経由のレース | `.new` 作成から rename までの間に攻撃者が介入 | vault.db 差替え | `.new` は作成時に `0600` / ACL 所有者のみ。属しないトラスティが書込不可であることで TOCTOU を狭める。rename 自体は atomic |
 | 起動時のドメイン整合性違反 | vault.db の行が壊れている | ドメイン不変条件 | **復元時検証**（REQ-P09）: 全 newtype の `try_new` を通す。`RecordId` / `RecordLabel` / `VaultHeader` / `RecordPayloadEncrypted` / `NonceBytes` / `KdfSalt` / `WrappedVek` 全て検証済み型でしか `Vault` に入らない |
 | **SQLite サイドカー漏洩**（Issue #65） | `.new-journal` / `.new-wal` / `.new-shm` を同ユーザ別プロセスが checkpoint 完了前に open し、進行中トランザクションの平文/暗号文 BLOB を読取 | レコード平文・暗号文 | §atomic write の二次防衛線 §サイドカーの DACL 適用 — `PRAGMA wal_checkpoint(TRUNCATE)` + `journal_mode = DELETE` で物理消去を契約化、加えてサイドカーパスにも `ensure_file` を適用 |
-| **Win rename retry 中 TOCTOU**（Issue #65） | 50ms × 5 = 250ms の retry 窓中に攻撃者が `vault.db` / `.new` を symlink/junction に差し替え、retry 成功時に攻撃者制御パスへ書込される | vault ディレクトリ完全性 | §atomic write の二次防衛線 §Win retry 中 TOCTOU — retry 直前に `fs::symlink_metadata` で symlink 再検証、検出時 `InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast |
-| **rename retry DoS 兆候**（Issue #65） | 攻撃者が他プロセスから `vault.db` を意図的に open/lock して daemon を retry ループ（最大 250ms）で繰返ストールさせ、サービス停止を誘発 | 可用性 | §atomic write の二次防衛線 §retry 監査ログ — `audit::retry_event` で発火を監査ログに記録、daemon 側で「異常頻度の retry」を検知して上位通報（OWASP A09 連携）|
+| **Win rename retry 中 TOCTOU**（Issue #65） | jitter 込み**最悪 ~375ms** の retry 窓中（§jitter、平均 ~250ms）に攻撃者が `vault.db` / `.new` を symlink/junction に差し替え、retry 成功時に攻撃者制御パスへ書込される | vault ディレクトリ完全性 | §atomic write の二次防衛線 §Win retry 中 TOCTOU — retry 直前に `fs::symlink_metadata` で symlink 再検証、検出時 `InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast |
+| **rename retry DoS 兆候**（Issue #65） | 攻撃者が他プロセスから `vault.db` を意図的に open/lock して daemon を retry ループ（**最悪 ~375ms / 平均 ~250ms**、§jitter）で繰返ストールさせ、サービス停止を誘発 | 可用性 | §atomic write の二次防衛線 §retry 監査ログ — `audit::retry_event` で発火を監査ログに記録、daemon 側で「異常頻度の retry」を検知して上位通報（OWASP A09 連携）|
 | **timing oracle**（Issue #65） | 50ms 固定インターバルが外部観測者に「rename retry 発火中」を観測可能にし、状態推定の signal となる | プロセス内部状態の機密 | §atomic write の二次防衛線 §jitter — `±25ms` 一様乱数 jitter を retry 間隔に追加、固定タイミングを排除 |
 | `SHIKOMI_VAULT_DIR` の悪用 | 環境変数で `../../etc` / `/proc/self/root` / シンボリックリンクを指定 | システム保護領域・任意ディレクトリへの書込、TOCTOU 差替え | **`VaultPaths::new` バリデーション**（§vault ディレクトリ検証）: 絶対パス必須、`..` 早期拒否、シンボリックリンク全面禁止、`canonicalize` 後の保護領域 prefix 一致拒否、ディレクトリ判定 |
 | 並行書込レース（daemon 未起動時） | CLI / リカバリツール / 別 CLI が同時に `save` を呼ぶ | vault.db 壊れ、`.new` 錯綜 | **プロセス間 advisory lock**（`VaultLock::acquire_exclusive`）: `fs4` / `LockFileEx` で非ブロッキング排他取得、失敗時は `Locked { holder_hint }` で即 return（待機・再試行しない、Fail Fast） |
@@ -126,7 +126,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 #### Win retry 中 TOCTOU 対策（A01）
 
-**問題**: `cfg(windows)` rename retry の 50ms × 5 = 250ms 窓中に、攻撃者が `vault.db` / `.new` を symlink / junction（NTFS reparse point）に差し替えれば、retry 成功時に**攻撃者制御パス**へ書込される。`VaultPaths::new` の `SymlinkNotAllowed` 検証は初回のみで、retry ループ中の再検証はない。
+**問題**: `cfg(windows)` rename retry の jitter 込み**最悪 ~375ms 窓中**（§jitter、平均 ~250ms）に、攻撃者が `vault.db` / `.new` を symlink / junction（NTFS reparse point）に差し替えれば、retry 成功時に**攻撃者制御パス**へ書込される。`VaultPaths::new` の `SymlinkNotAllowed` 検証は初回のみで、retry ループ中の再検証はない。
 
 **対策**:
 
@@ -136,7 +136,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 #### retry 監査ログ（A09）
 
-**問題**: retry 発火を可視化しないと、攻撃者が `vault.db` を他プロセスから open し続けて daemon を 250ms × N 回ストールさせる **DoS 兆候**が検知できない。
+**問題**: retry 発火を可視化しないと、攻撃者が `vault.db` を他プロセスから open し続けて daemon を**最悪 ~375ms × N 回**（§jitter、平均 ~250ms × N）ストールさせる **DoS 兆候**が検知できない。
 
 **対策**:
 
@@ -152,7 +152,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 1. **`±25ms` 一様乱数 jitter** を各 retry 間隔に加算: `sleep_duration = Duration::from_millis(50) + Duration::from_millis(rng.gen_range(0..=25)) - Duration::from_millis(12)` 相当（実装は `rand` crate `gen_range`、または `getrandom` 直接呼出）
 2. **乱数源**: 既存の `rand_core::OsRng` を流用（`shikomi-infra` の AEAD nonce 生成と同じ CSPRNG 経路、新規依存追加なし）
-3. **jitter の上限**: 合計 retry 時間 ≤ 約 250ms 制約は維持。最悪ケース `(50+25) × 5 = 375ms` だが、平均は 250ms 近傍
+3. **jitter 込み合計 retry 時間の物語**: 最悪ケース `(50+25) × 5 = 約 375ms`、平均 `50 × 5 = 約 250ms`。**SSoT 上の上限値は「最悪 ~375ms」**（`./error.md` §Windows rename PermissionDenied / `../detailed-design/flows.md` §`save` step 7 / `../test-design/integration.md` TC-I29 / `../test-design/index.md` AC-19 と同一語彙で整合）。「平均 ~250ms」は CI 期待値・SLA 評価指標として併記
 
 #### `Connection::close()` 失敗時の `.new` クリーンアップ
 
