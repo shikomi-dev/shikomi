@@ -11,7 +11,7 @@
 - `shikomi_core::error::DomainError`（拡張、Boy Scout Rule）
 - `shikomi_core::error::CryptoError`（新規列挙型、**Sub-C で `AeadTagMismatch` 発火経路詳細を追記**）
 - `shikomi_core::vault::VekProvider` trait（既存、Sub-B で精緻化、**Sub-C で `derive_new_wrapped_*` の AES-GCM wrap 経路確定 + `unwrap_vek_with_*` 追加**）
-- 契約 C-1〜C-13 サマリ（`index.md` §不変条件・契約サマリ への補強・対応マッピング）+ **Sub-C 新規 C-14〜C-16**（AEAD 検証失敗時 Plaintext 構築禁止 / AEAD 鍵可視性ポリシー / AEAD 中間バッファ zeroize）
+- 契約 C-1〜C-13 サマリ（`index.md` §不変条件・契約サマリ への補強・対応マッピング）+ **Sub-C 新規 C-14〜C-16**（AEAD 検証失敗時 Plaintext 構築禁止 / AEAD 鍵可視性ポリシー / AEAD 中間バッファ zeroize）+ **Sub-D 新規 C-17〜C-21**（ヘッダ AEAD AAD 全フィールド網羅 / kdf_params 改竄検出 / RecoveryDisclosure 1 度のみ / DecryptConfirmation 強制 / マイグレーション原状復帰）
 
 ## `RecoveryMnemonic`
 
@@ -174,6 +174,11 @@ classDiagram
 | **C-14** AEAD 検証失敗時に `Plaintext` を構築しない（Sub-C 新規） | `AesGcmAeadAdapter::decrypt_record` / `unwrap_vek` 内で `decrypt_in_place_detached` が `Err` を返した場合、`verify_aead_decrypt(\|\| ...)` クロージャに到達しない（早期 return）。タグ不一致 → `CryptoError::AeadTagMismatch` のみ、`Plaintext::new_within_module` 呼出ゼロ | property test（タグ書換 / AAD 書換 / nonce 書換 / ciphertext 書換 4 系列）で `Verified<Plaintext>` が**返らない**ことを assert（Sub-C テスト TC-C-U05〜U08） |
 | **C-15** AEAD 鍵バイトの可視性ポリシー差別化維持（Sub-C 新規） | `AeadKey::with_secret_bytes` クロージャインジェクション経由で shikomi-infra に `&[u8;32]` を渡す。`Vek::expose_within_crate` / `HeaderAeadKey::expose_within_crate` の `pub(crate)` 可視性は**変更しない**（Sub-B Rev2 凍結契約維持） | grep: `crates/shikomi-infra/src/crypto/aead/` 配下で `expose_within_crate` 直接呼出が 0 件、`with_secret_bytes` 経由のみ。CI 静的検証 |
 | **C-16** AEAD 中間バッファ zeroize（Sub-C 新規） | `encrypt_in_place_detached` / `decrypt_in_place_detached` の入力 `buf` を `Zeroizing<Vec<u8>>` で囲む。`with_secret_bytes` クロージャを抜けるとき Drop で zeroize | grep: `crates/shikomi-infra/src/crypto/aead/aes_gcm.rs` 内で `Zeroizing<Vec<u8>>` の使用、`Vec::new()` で生 `Vec<u8>` を中間バッファに使う経路 0 件 |
+| **C-17** ヘッダ AEAD タグの AAD はヘッダ全フィールド正規化バイト列を含む（Sub-D 新規） | `VaultEncryptedHeader::canonical_bytes_for_aad()` が `version ‖ created_at_micros ‖ kdf_salt ‖ wrapped_vek_by_pw_serialized ‖ wrapped_vek_by_recovery_serialized ‖ kdf_params` を上記順序で連結（envelope 自身は含まず自己参照回避）。AAD 改竄時 GMAC 不一致で `Err(AeadTagMismatch)` | ユニット: `canonical_bytes_for_aad` の bit-exact 検証 + property test: ヘッダ任意フィールドの 1 byte 書換 → AEAD 検証失敗 |
+| **C-18** `vault_header.kdf_params` 改竄をヘッダ AEAD タグで検出（Sub-D 新規） | C-17 経路で AAD に `kdf_params` を含める。`m=1, t=1` 等の弱パラメータ改竄でも GMAC 検証で fail fast | property test: kdf_params の任意 byte 書換 → `MigrationError::Crypto(AeadTagMismatch)` |
+| **C-19** `RecoveryDisclosure::disclose` は 1 度しか呼べない（Sub-D 新規） | `disclose(self) -> Result<RecoveryWords, _>` の所有権消費 | compile_fail doc test: `disclosure.disclose()?; disclosure.disclose()?;` がコンパイルエラー（move 後の使用）|
+| **C-20** `vault decrypt` は `DecryptConfirmation` 引数必須、`--force` でも省略不可（Sub-D 新規） | `VaultMigration::decrypt_vault(.., confirmation: DecryptConfirmation)` 型シグネチャ強制、`DecryptConfirmation` の構築は `confirm("DECRYPT", &reentered_password, &master_password)` のみ（`_private: ()` フィールドで外部直接構築禁止）| compile_fail doc test: `decrypt_vault(password)` （confirmation なし）がコンパイルエラー |
+| **C-21** 平文⇄暗号化マイグレーション中の atomic write 失敗で原状復帰（Sub-D 新規） | `vault-persistence` の `.new` cleanup 経路に委譲（REQ-P04 / REQ-P05 継承）、`MigrationError::AtomicWriteFailed { stage, source }` で fail fast、原状（変更前 vault）復帰 | integration test: `write_new_only` フック相当（`vault-persistence` TC-I06 同型）で `.new` 残存 → 次回 load 時に `OrphanNewFile` 検出 → `vault.db` 本体未変更を確認 |
 
 ## `VekProvider::derive_new_wrapped_*` の AES-GCM wrap 経路（**Sub-C 確定**）
 
@@ -203,7 +208,7 @@ vault unlock 経路の VEK 復元関数。Sub-C で adapter 経路を確定、Su
 
 - **Sub-B（完了）**: `KdfErrorKind::Argon2id` / `KdfErrorKind::Pbkdf2` / `KdfErrorKind::Hkdf` の各 source エラー型詳細、`VekProvider` の `Argon2idHkdfVekProvider` 具象実装シグネチャ確定
 - **Sub-C（完了）**: `CryptoError::AeadTagMismatch` の発火経路詳細（`AesGcmAeadAdapter::{encrypt_record, decrypt_record, wrap_vek, unwrap_vek}`）、`verify_aead_decrypt(|| ...)` クロージャ内での `aes_gcm::aead::AeadInPlace::decrypt_in_place_detached` 呼出パターン、`AeadKey` trait 経由のクロージャインジェクション、`derive_new_wrapped_*` の AES-GCM wrap 経路、`unwrap_vek_with_*` の Vek 復元 + 長さ検証 Fail Fast
-- **Sub-D**: 以下の **5 系列**を responsibility として明示。引継ぎ表をそのままチェックリスト化し、Sub-D 設計時に取りこぼしを防ぐ。
+- **Sub-D（完了、本書 Rev により本項目は履歴）**: 以下の **5 系列** responsibility として明示し、`detailed-design/repository-and-migration.md` §`VaultMigration` service / §マイグレーションフロー / §`MigrationError` で実装契約を確定。
   1. `CryptoError::WeakPassword` から **MSG-S08** への変換層、`warning=None` / i18n 戦略（`password.md` §`warning=None` 契約 / §i18n 戦略責務分離 を実装に落とし込む）
   2. **`CryptoError::AeadTagMismatch` から MSG-S10 への Fail Kindly 変換層**（**Sub-C 工程5 ペガサス指摘で本項目追加**）。文言設計指針：
      - **過信防止**: 「**vault.db 改竄の可能性があります**」のように**断定しない**（発火源は悪意ある改竄だけでなくディスク破損 / 実装バグも含むため、「攻撃された」と断定すると過剰恐怖を煽る）
@@ -217,5 +222,5 @@ vault unlock 経路の VEK 復元関数。Sub-C で adapter 経路を確定、Su
      - **rekey の所要時間目安は提示可**: 「再暗号化には全レコード件数に応じた時間がかかります」のような UX ヒントは OK（操作完了予測のため）
   4. **`HeaderAeadKey::AeadKey` impl 追加**（Boy Scout、Sub-C で予告済）。`crypto-types.md` `HeaderAeadKey` セクションに `impl AeadKey for HeaderAeadKey` 行を Sub-C 同形パターンで追記
   5. **vault リポジトリ層での `NonceCounter::increment` 統合**（`nonce-and-aead.md` §nonce_counter 統合契約 を実装に落とし込む）。`encrypt_record` 呼出前の `nonce_counter.increment()?` を `repository-and-migration.md` の処理フロー図に明示、PR レビューチェックリストで取りこぼし防止
-- **Sub-E**: VEK キャッシュ寿命と `Drop` 連鎖の統合、IPC V2 でのエラー variant マッピング、MSG-S09 カテゴリ別ヒント（パスワード違い / IPC 接続不能 / キャッシュ揮発タイムアウト）の Fail Kindly 文言確定
-- **Sub-F**: CLI サブコマンドからの `CryptoOutcome<T>` ハンドリング、終了コード割当、**Sub-D で凍結した MSG-S10 / MSG-S11 の文言を CLI 経路で実装**（GUI 経路と文言統一、i18n 翻訳辞書経由）。`vault rekey` フローで `NonceLimitExceeded` 検知 → 新 VEK 生成 → 全レコード再暗号化
+- **Sub-E**: VEK キャッシュ寿命と `Drop` 連鎖の統合（Sub-D `unlock_with_password` 戻り値 `Vek` を `tokio::sync::RwLock<Option<Vek>>` でキャッシュ、アイドル 15min タイムアウト）、IPC V2 でのエラー variant マッピング（`VaultMigration` の各メソッドを `IpcRequest::Encrypt / Decrypt / Unlock / Lock / ChangePassword / RotateRecovery / Rekey` に 1:1 マップ）、MSG-S09 カテゴリ別ヒント（パスワード違い / IPC 接続不能 / キャッシュ揮発タイムアウト）の Fail Kindly 文言確定、MSG-S03 / MSG-S04 / MSG-S05 daemon 側統合
+- **Sub-F**: CLI サブコマンドからの `CryptoOutcome<T>` / `MigrationError` ハンドリング、終了コード割当、**Sub-D で凍結した MSG-S01 / S02 / S05 / S06 / S08 / S10 / S11 / S13 / S14 / S16 / S18 文言を CLI 経路で実装**（GUI 経路と文言統一、i18n 翻訳辞書経由）。`vault rekey` フローで `NonceLimitExceeded` 検知 → MSG-S11 → 新 VEK 生成 → 全レコード再暗号化（`VaultMigration::rekey` 呼出）。`vault recovery-show --print` / `--braille` / `--audio` のアクセシビリティ代替経路実装（MSG-S18）。MSG-S07 文言確定

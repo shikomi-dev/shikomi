@@ -4,7 +4,7 @@
 Verifies the structural completeness of:
   - docs/features/vault-encryption/requirements-analysis.md
   - docs/features/vault-encryption/requirements.md
-  - docs/features/vault-encryption/test-design.md (self-integrity)
+  - docs/features/vault-encryption/test-design/sub-0-threat-model.md (self-integrity)
 
 This script is the "unit" tier of the document quality verification
 defined in test-design.md §6 / §6.1.
@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RA_PATH = REPO_ROOT / "docs/features/vault-encryption/requirements-analysis.md"
 REQ_PATH = REPO_ROOT / "docs/features/vault-encryption/requirements.md"
-TD_PATH = REPO_ROOT / "docs/features/vault-encryption/test-design.md"
+TD_PATH = REPO_ROOT / "docs/features/vault-encryption/test-design/sub-0-threat-model.md"
 
 
 @dataclass

@@ -12,7 +12,7 @@
 詳細設計に**疑似コード・サンプル実装（python/ts/go等の言語コードブロック）を書くな**。
 ソースコードと二重管理になりメンテナンスコストしか生まない。
 
-## 分冊構成（Sub-C 完了時点、**Sub-B の 6 分冊を維持、新規分冊なし**）
+## 分冊構成（Sub-D 完了時点、**Sub-C の 6 分冊 + repository-and-migration.md 新設で 7 分冊**）
 
 | 分冊 | 主担当範囲 | 主な対象型・契約 |
 |-----|---------|--------------|
@@ -22,8 +22,11 @@
 | [`errors-and-contracts.md`](./errors-and-contracts.md) | エラー型 / リカバリ / 契約サマリ（Sub-A 型 + Sub-B `KdfErrorKind` 詳細 + `InvalidMnemonic` variant + **Sub-C `AeadTagMismatch` 発火経路 + `derive_new_wrapped_*` AES-GCM wrap 経路 + `unwrap_vek_with_*`**） | `RecoveryMnemonic` / `CryptoOutcome<T>` / `CryptoError` / `DomainError` 拡張 / `VekProvider`（**Sub-B 具象 `Argon2idHkdfVekProvider` + Sub-C で wrap/unwrap 経路確定**） / 設計判断の補足 / **契約 C-1〜C-16 サマリ表（Sub-C で C-14〜C-16 追加）** |
 | **[`kdf.md`](./kdf.md)（Sub-B 新規）** | KDF アダプタ（shikomi-infra） | `Argon2idAdapter`（`m=19456, t=2, p=1`、RFC 9106 KAT、criterion p95 1 秒） / `Bip39Pbkdf2Hkdf`（24 語 → seed → KEK_recovery、HKDF info `b"shikomi-kek-v1"`、trezor + RFC 5869 KAT） / `Argon2idParams::FROZEN_OWASP_2024_05` const |
 | **[`rng.md`](./rng.md)（Sub-B 新規）** | CSPRNG 単一エントリ点（shikomi-infra） | `Rng`（`rand_core::OsRng` + `getrandom` バックエンド） / `generate_kdf_salt` / `generate_vek` / `generate_nonce_bytes` / `generate_mnemonic_entropy`（Sub-0 凍結文言「KdfSalt::generate() 単一コンストラクタ」の Clean Arch 整合的物理実装） |
+| **[`repository-and-migration.md`](./repository-and-migration.md)（Sub-D 新規）** | 暗号化 Vault リポジトリ + 平文⇄暗号化マイグレーション（shikomi-infra） | `VaultMigration` service（`encrypt_vault` / `decrypt_vault` / `unlock_with_*` / `rekey` / `change_password` の 6 メソッド）/ `VaultEncryptedHeader`（`KdfParams` + `HeaderAeadEnvelope` 含む）/ `EncryptedRecord` / `RecoveryDisclosure` + `RecoveryWords`（24 語初回 1 度表示の型レベル強制 C-19）/ `DecryptConfirmation`（型レベル二段確認証跡 C-20）/ `MigrationError` / `Aad::HeaderEnvelope(Vec<u8>)` 拡張 / SQLite DDL 拡張（`kdf_params` / `header_aead_*` カラム、`PRAGMA user_version` bump） |
 
 **Sub-C で新規分冊を追加しない理由**: AEAD 設計は既存 `nonce-and-aead.md` の延長線上にある（`Verified<T>` / `Plaintext` / `verify_aead_decrypt` クロージャマーカーがすべて Sub-C `AesGcmAeadAdapter` に直結）。`aead-adapter.md` を別ファイルに切り出すと **Verified<T> 契約と AEAD 実装が物理的に分離**し、設計の縦串整合（型契約 → 実装具象）が崩れる。1 分冊 400 行以内のソフトキャップを超えない範囲で `nonce-and-aead.md` 内に集約する判断（Boy Scout Rule、不要な分冊増加を回避）。
+
+**Sub-D で新規分冊 `repository-and-migration.md` を追加する理由**: 暗号化 Vault リポジトリ + 双方向マイグレーション + ヘッダ AEAD タグ + RecoveryDisclosure + DecryptConfirmation の 5 軸が同一責務領域（Sub-A/B/C で凍結された型を**消費する側のサービス層**）を構成。既存 6 分冊（鍵階層 / パスワード / nonce-AEAD / エラー契約 / KDF / RNG）はすべて**型・契約レベルの分冊**であり、サービス層の意味論を既存分冊に詰め込むと**型契約とサービス実装が混在して設計の縦串整合が崩れる**。Sub-C の判断（既存分冊延長で集約）と対称的に、Sub-D は**新規責務領域**のため新規分冊が正しい。`repository-and-migration.md` は約 470 行（5 軸 × 6 メソッド + 横断的変更で 400 行ソフトキャップを意図的に許容超過、これ以上の分割は責務横断で意味論が分散するため不採用）。
 
 ```
 ディレクトリ構造:
@@ -198,6 +201,11 @@ classDiagram
 | **C-14**: AEAD 検証失敗時に `Plaintext` を構築しない（Sub-C 新規） | `AesGcmAeadAdapter::decrypt_record` / `unwrap_vek` 内で `decrypt_in_place_detached` の `Err` 時に `verify_aead_decrypt` クロージャに到達しない | property test（タグ / AAD / nonce / ciphertext 4 系列書換）で `Verified<Plaintext>` 不在を assert | `nonce-and-aead.md` / `errors-and-contracts.md` |
 | **C-15**: AEAD 鍵バイトの可視性ポリシー差別化維持（Sub-C 新規） | `AeadKey::with_secret_bytes` クロージャインジェクション経由でのみ shikomi-infra に `&[u8;32]` を渡す。`Vek` / `HeaderAeadKey::expose_within_crate` は `pub(crate)` 維持 | grep: shikomi-infra `aead/` 配下で `expose_within_crate` 直接呼出が 0 件 | `nonce-and-aead.md` / `crypto-types.md` |
 | **C-16**: AEAD 中間バッファ zeroize（Sub-C 新規） | `encrypt_in_place_detached` / `decrypt_in_place_detached` の入力 `buf` を `Zeroizing<Vec<u8>>` で囲む | grep: shikomi-infra `aead/aes_gcm.rs` で `Zeroizing<Vec<u8>>` 使用、生 `Vec<u8>` の中間バッファ 0 件 | `nonce-and-aead.md` |
+| **C-17**: ヘッダ AEAD タグの AAD はヘッダ全フィールド正規化バイト列を含む（Sub-D 新規） | `VaultEncryptedHeader::canonical_bytes_for_aad()` 実装で全フィールド連結強制 | ユニット bit-exact + property test（任意 byte 書換 → AEAD 検証失敗）| `repository-and-migration.md` / `errors-and-contracts.md` |
+| **C-18**: `kdf_params` 改竄をヘッダ AEAD タグで検出（Sub-D 新規） | C-17 経路で AAD に `kdf_params` を含める | property test: kdf_params 任意書換 → `MigrationError::Crypto(AeadTagMismatch)` | `repository-and-migration.md` |
+| **C-19**: `RecoveryDisclosure::disclose` は 1 度しか呼べない（Sub-D 新規） | `disclose(self)` 所有権消費 + `Display` / `Serialize` 未実装 | compile_fail doc test | `repository-and-migration.md` |
+| **C-20**: `vault decrypt` は `DecryptConfirmation` 引数必須、`--force` でも省略不可（Sub-D 新規） | `VaultMigration::decrypt_vault(.., confirmation: DecryptConfirmation)` 型シグネチャ強制 | compile_fail doc test（confirmation なしでの呼出）| `repository-and-migration.md` |
+| **C-21**: 平文⇄暗号化マイグレーション中の atomic write 失敗で原状復帰（Sub-D 新規） | vault-persistence の `.new` cleanup 経路継承（REQ-P04/P05） | integration test: SIGKILL 論理等価フック（`vault-persistence` TC-I06 同型）| `repository-and-migration.md` |
 
 ## 後続 Sub-B〜F の TBD ブロック
 
@@ -205,6 +213,6 @@ classDiagram
 
 - **Sub-B（完了、本書 Rev により本項目は履歴）**: KDF アダプタの詳細クラス図（`Argon2idAdapter` / `Bip39Pbkdf2Hkdf`）、`PasswordStrengthGate` の `ZxcvbnGate` 実装詳細、KAT データ取得経路、CSPRNG 単一エントリ点 `Rng` → **新規 `kdf.md` + `rng.md` を追加**、`password.md` に `ZxcvbnGate` 章追加、`errors-and-contracts.md` に `KdfErrorKind` source 型詳細 + `InvalidMnemonic` variant + `Argon2idHkdfVekProvider` 具象 を追加
 - **Sub-C（完了、本書 Rev により本項目は履歴）**: AEAD アダプタの詳細設計（`AesGcmAeadAdapter` の 4 メソッド + NIST CAVP KAT + AAD 26B 規約 + nonce_counter 統合契約 + AEAD 復号後の VEK 復元経路）、`AeadKey` trait（クロージャインジェクション、Sub-B Rev2 可視性ポリシー差別化との整合）、`verify_aead_decrypt` ラッパ関数の呼び出し経路の補強、`derive_new_wrapped_*` の AES-GCM wrap 経路、`unwrap_vek_with_*` の VEK 復元 + 長さ検証 Fail Fast、契約 C-14〜C-16 追加 → **`nonce-and-aead.md` 拡張**（新規分冊なし、`aead-adapter.md` 不要）+ `errors-and-contracts.md` 補強 + `crypto-types.md` で `Vek` / `Kek<_>` への `AeadKey` impl 追記（Boy Scout）
-- **Sub-D**: `EncryptedSqliteVaultRepository` の SQLite スキーマ、平文⇄暗号化マイグレーション手順、`vault encrypt` 入口の `MasterPassword::new` 経路、ヘッダ独立 AEAD タグの永続化フォーマット、**`HeaderAeadKey::AeadKey` impl 追加**（Sub-C で予告した Boy Scout 完成）、vault リポジトリ層での **`NonceCounter::increment` 統合**（Sub-C `nonce-and-aead.md` §nonce_counter 統合契約 を実装に落とし込む） → 新規 `repository-and-migration.md`
+- **Sub-D（完了、本書 Rev により本項目は履歴）**: `VaultMigration` service（`encrypt_vault` / `decrypt_vault` / `unlock_with_*` / `rekey` / `change_password` の 6 メソッド）、SQLite スキーマ拡張（`kdf_params` / `header_aead_*` カラム、`PRAGMA user_version` bump）、`VaultEncryptedHeader` / `KdfParams` / `HeaderAeadEnvelope` / `EncryptedRecord` 完成、`HeaderAeadKey::AeadKey` impl 追加（Sub-C 予告 Boy Scout 完成）、`RecoveryDisclosure` + `RecoveryWords`（24 語初回 1 度表示の型レベル強制 C-19）、`DecryptConfirmation`（二段確認 C-20）、`Aad::HeaderEnvelope(Vec<u8>)` 拡張（既存 `Aad::Record` と並列）、`MigrationError` 列挙型、ヘッダ独立 AEAD タグ AAD 規約（C-17/C-18）、契約 C-17〜C-21 追加、MSG-S01/S02/S05 部分/S06/S08/S10/S11/S12/S13/S14/S16/S18 文言確定 → **新規 `repository-and-migration.md`** + `errors-and-contracts.md` Sub-D 完了反映 + `crypto-types.md` `HeaderAeadKey::AeadKey` impl 同期 + `requirements.md` REQ-S06/S07/S13 確定 + `basic-design.md` Sub-D モジュール構成 + F-D1〜F-D5 処理フロー追記。**横断的変更**: `vault-persistence` の REQ-P11 改訂（「暗号化モード即時拒否」→「未対応バージョン拒否」）、`flows.md` の `UnsupportedYet` 即 return 削除、`integration.md` 旧 TC 退役 + 新 TC 置換
 - **Sub-E**: VEK キャッシュの `tokio::sync::RwLock<Option<Vek>>` 設計、IPC V2 `IpcRequest` variant 追加、アンロック失敗バックオフ実装、`change-password` の `wrapped_VEK_by_pw` 単独更新フロー → 新規 `vek-cache-and-ipc.md`
 - **Sub-F**: `shikomi vault {encrypt, decrypt, unlock, lock, change-password, recovery-show, rekey}` の clap サブコマンド構造、IPC V2 リクエスト発行経路、MSG-S* 文言テーブル → 新規 `cli-subcommands.md`

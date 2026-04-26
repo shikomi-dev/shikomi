@@ -96,14 +96,18 @@
 | 出力 | `PersistenceError` 値 |
 | エラー時 | エラー型自体は Fail しない（エラーを表現する型） |
 
-### REQ-P11: 暗号化モード vault の明示拒否
+### REQ-P11: 未対応バージョンの暗号化スキーマ拒否（Sub-D Rev による意味論変更）
+
+<!-- Boy Scout Rule (Issue #42 / Sub-D): 旧文言「暗号化モード**全般**を即時拒否」→「**未対応バージョン**の暗号化スキーマを拒否」に意味論変更。
+     現行 v1（Sub-D 完了時の最新）は受入、未来バージョン（v999 等）は UnsupportedYet で拒否。
+     根拠: Issue #42 §REQ-P11 改訂のトレーサビリティ凍結文言、`vault-encryption/requirements.md` REQ-S07 と双方向参照。 -->
 
 | 項目 | 内容 |
 |------|------|
-| 入力 | `VaultHeader::Encrypted` variant を持つ `Vault`（save 側）／ vault.db の `vault_header.protection_mode='encrypted'` 行（load 側） |
-| 処理 | 本 Issue のスコープは平文モードのみ。暗号化モードを受けたら入口で即時拒否（Fail Fast）。レコード BLOB を読み書きせず、スキーマが壊れない状態で早期 return |
-| 出力 | `Err(PersistenceError::UnsupportedYet { feature: "encrypted vault persistence", tracking_issue: <番号> })` |
-| エラー時 | 同上。別 Issue で `VekProvider` 実装と合わせて解除する |
+| 入力 | (a) `VaultHeader::Encrypted` variant を持つ `Vault`（save 側）／ vault.db の `vault_header.protection_mode='encrypted'` 行（load 側）— **両方とも v1 は受入対象**、(b) `vault_header.vault_version` の値（バージョン判定の入力） |
+| 処理 | (1) **暗号化モード自体は受入**（`UnsupportedYet` 即 return を**削除**）、`Mapping::row_to_vault_header` で `VaultEncryptedHeader` 構築 → `Vault::new_encrypted` 集約構築 → 通常経路で進行。AEAD 計算 / wrap_VEK 復号 / record AEAD 検証は **`SqliteVaultRepository` の責務外**（呼出側 = `VaultMigration` / Sub-E daemon が `AesGcmAeadAdapter` と組合せて実施、Issue #42 凍結の責務境界）、(2) **`PRAGMA user_version` 範囲外**判定を追加（既存 step 9 のスキーマバージョン検証を拡張）、`[USER_VERSION_SUPPORTED_MIN, USER_VERSION_SUPPORTED_MAX]` 範囲外なら `UnsupportedYet { feature: "vault schema version", supported_range: (V_MIN, V_MAX), actual: <version> }`、(3) `vault-persistence` は引き続き暗号化に「無知」（暗号文は不透明 BLOB、CHECK 制約のみで構造整合担保）、(4) DDL 拡張（`kdf_params` / `header_aead_*` カラム追加）は `PRAGMA user_version` bump + `ALTER TABLE` で既存 plaintext vault に影響なし |
+| 出力 | (a) 既存 v1 暗号化 vault: `Ok(Vault)` / `Ok(())`（**解禁**）、(b) v999 等の未来バージョン: `Err(PersistenceError::UnsupportedYet { feature: "vault schema version", supported_range: (V_MIN, V_MAX), actual })` |
+| エラー時 | 既存の `PersistenceError` 各バリアントは維持、`UnsupportedYet` の意味論のみ変更。新規エラー variant は追加せず、既存 11 variants で完結（最小差分原則） |
 
 ### REQ-P12: SQL インジェクション禁止設計
 
