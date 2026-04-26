@@ -373,7 +373,7 @@ classDiagram
 | `PlaintextNotUtf8` | `#[error("decrypted plaintext is not valid UTF-8")]` | 復号成功したが UTF-8 不正（AEAD 検証通過後の追加検証層、ありえない経路の防衛的 variant）| 開発者向けエラー、`MSG-S10` カテゴリに統合可 |
 | `RecoveryAlreadyConsumed` | `#[error("recovery disclosure already consumed")]` | `RecoveryDisclosure::disclose` 2 度目呼出（通常は所有権消費でコンパイルエラー、`drop_without_disclose` 後の runtime 検出経路）| 開発者向けエラー |
 | `AtomicWriteFailed { stage: AtomicWriteStage, source: std::io::Error }` | `#[error("vault migration atomic write failed at stage {stage}")]` | マイグレーション中の atomic write 失敗で原状復帰（C-21）。`stage` の取り得る値は **§`AtomicWriteStage` の 6 値**（後述）| MSG-S13 |
-| `RecoveryRequired` | `#[error("recovery path required")]` | パスワード経路 unlock が `MasterPassword::new` 失敗等で進めない時、リカバリ経路への誘導を要求する | MSG-S12（リカバリ経路誘導） |
+| `RecoveryRequired` | `#[error("recovery path required")]` | パスワード経路 unlock が `MasterPassword::new` 失敗等で進めない時、リカバリ経路への誘導を要求する | **MSG-S09 (a) パスワード違いカテゴリの「リカバリ経路 (`vault unlock --recovery`) も可能」案内**（Sub-D Rev5 / 工程5 ペガサス指摘で MSG-S12 から修正、Sub-E IPC V2 / Sub-F CLI 文言確定責務）。**MSG-S12 ではない**理由: MSG-S12 は `CryptoError::InvalidMnemonic` 由来のリカバリ**入力検証失敗**専用（チェックサム不一致 / 単語数不正）。`RecoveryRequired` はリカバリを**未入力**の段階でパスワード失敗時に経路誘導するため、MSG-S12 を流用すると田中ペルソナが「リカバリは入力していないのに認識できない」と混乱する Fail Kindly 崩壊経路 |
 
 ### `AtomicWriteStage`（vault-persistence 既存型を `MigrationError::AtomicWriteFailed { stage }` で transitive 利用）
 
@@ -486,7 +486,7 @@ REQ-S07 / Issue #42 §マイグレーション方針で「`--force` でも 1 段
 2. **アイドル 15min タイムアウト**: `Vek` Drop で zeroize、再 unlock 強制
 3. **MSG-S05 文言確定**: `change-password` 完了時のユーザ向け成功メッセージ
 4. **IPC V2 拡張**: `VaultMigration` の各メソッドを IPC `IpcRequest::Encrypt / Decrypt / Unlock / Lock / ChangePassword / RotateRecovery / Rekey` の variant に 1:1 マップ
-5. **MSG-S09 カテゴリ別ヒント**: unlock 失敗時の (a) パスワード違い (b) IPC 接続不能 (c) キャッシュ揮発タイムアウト の 3 カテゴリ文言
+5. **MSG-S09 カテゴリ別ヒント**: unlock 失敗時の (a) パスワード違い (b) IPC 接続不能 (c) キャッシュ揮発タイムアウト の 3 カテゴリ文言。**特に (a) パスワード違いカテゴリの「リカバリ経路案内」文言**には `MigrationError::RecoveryRequired` の発火経路を含めて統合（Sub-D 工程5 ペガサス指摘で MSG-S09(a) 変換責務として確定、`requirements.md` MSG-S09 行 + `repository-and-migration.md` §`MigrationError` テーブルと整合）
 
 ### Sub-F（#44）への引継ぎ
 
