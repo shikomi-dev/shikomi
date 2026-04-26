@@ -213,7 +213,8 @@ classDiagram
 | **C-25**: OS スクリーンロック / サスペンド受信で 100ms 以内に lock（Sub-E 新規） | `OsLockSignal::next_lock_event` 受信 → `cache.lock()` 呼出 | integration test: `MockLockSignal` から `LockEvent::ScreenLocked` 注入 → 100ms 以内に `Locked` 遷移 | `vek-cache-and-ipc.md` |
 | **C-26**: 連続失敗 5 回で指数バックオフ発動、unlock 成功でリセット（Sub-E 新規） | `UnlockBackoff::record_failure` / `record_success` の状態遷移 | ユニットテスト: 5 回連続失敗 → `BackoffActive` 返却 / unlock 成功 → カウンタゼロ | `vek-cache-and-ipc.md` |
 | **C-27**: `MigrationError::RecoveryRequired` を `IpcError::RecoveryRequired` 透過 → MSG-S09 (a)（Sub-E 新規） | `From<MigrationError> for IpcError` 実装で transparent 透過 | ユニットテスト: パスワード失敗で `RecoveryRequired` 発火 → IPC 応答が `RecoveryRequired` variant、MSG-S09 (a) 文言を含む | `vek-cache-and-ipc.md` |
-| **C-28**: V1 クライアントが V2 専用 variant 送信時に `ProtocolDowngrade` で拒否（Sub-E 新規） | handshake で client_version 確認、V1 クライアントには V2 variant を deserialize 失敗させる | integration test: V1 セッションで V2 variant 送信 → `IpcResponse::Error(ProtocolDowngrade)` 返却 | `vek-cache-and-ipc.md` |
+| **C-28**: V1 クライアントが V2 専用 variant 送信時に `ProtocolDowngrade` で拒否（Sub-E 新規） | handshake 許可リスト方式で `(client_version, request_variant)` の組合せを daemon ハンドラで検証（Sub-E Rev1 で旧 `#[non_exhaustive]` serde 誤認を訂正） | integration test: V1 セッションで V2 variant 送信 → `IpcResponse::Error(ProtocolDowngrade)` 返却 | `vek-cache-and-ipc.md` |
+| **C-29**: handshake 必須、handshake 前は全 IPC variant 拒否（Sub-E 新規、Sub-E 工程2 服部指摘） | daemon ハンドラに `ClientState::PreHandshake` / `Handshake { version }` を保持、`PreHandshake` 状態で `Handshake` 以外の variant 受信時に接続即切断 + `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` 返却 | integration test: handshake バイパスで V2 variant を直接送信 → 接続切断 + `ProtocolDowngrade` 返却 | `vek-cache-and-ipc.md` |
 
 ## 後続 Sub-B〜F の TBD ブロック
 

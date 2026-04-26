@@ -128,8 +128,11 @@ stateDiagram-v2
 
 ### trait 定義
 
-- `pub trait OsLockSignal: Send + Sync { async fn next_lock_event(&mut self) -> LockEvent; }`
 - `pub enum LockEvent { ScreenLocked, SystemSuspended }`（`#[non_exhaustive]`）
+- trait 定義は **`#[trait_variant::make(OsLockSignal: Send)]`** マクロで **AFIT (Async Fn In Trait) + `Send` future 自動推論**を有効化（Rust 1.75+ AFIT は `Send` 自動推論不可、`tokio::spawn` で `Send` 要求時の型エラーを未然防止、Sub-E 工程2 ペテルギウス指摘で明文化）
+  - 元 trait: `pub trait LocalOsLockSignal { async fn next_lock_event(&mut self) -> LockEvent; }`（spawn 不要のローカル経路用、デフォルトでは生成された `OsLockSignal: Send` を使用）
+  - 自動派生: `pub trait OsLockSignal: LocalOsLockSignal + Send` (`Send` future + `Send` トレイトオブジェクト)
+- **代替**: `#[trait_variant::make]` macro 採用が困難な場合は **`async-trait` crate**（`#[async_trait::async_trait]` 属性）を使用、`Box<dyn OsLockSignal>` 経由で動的ディスパッチ可能（テスト容易性向上、ただし 1 回のヒープ確保コスト発生）。**採用方針**: 工程3 実装担当が Rust エディション / コンパイラバージョンと相談して `trait_variant` または `async-trait` のいずれかを選択、`tech-stack.md` §4.7 に追記
 
 ### 採用方針
 
@@ -169,11 +172,25 @@ stateDiagram-v2
 
 ## IPC V2 拡張（横断的変更、`daemon-ipc` feature 側 SSoT と双方向同期）
 
-### `IpcProtocolVersion::V2` 非破壊昇格
+### `IpcProtocolVersion::V2` 非破壊昇格 + handshake 許可リスト方式
 
 - 既存 `IpcProtocolVersion::V1` を維持、新規 `V2` を `#[non_exhaustive]` enum に追加
-- handshake で V1 クライアントが接続した場合、V1 サブセット（`ListRecords` / `AddRecord` / `EditRecord` / `RemoveRecord`）のみ受理
-- V2 クライアントが V1 サーバに接続した場合（理論上ありえないが防御的に）は `IpcResponse::ProtocolVersionMismatch` で切断
+- **handshake 許可リスト方式**（Sub-E 工程2 ペテルギウス指摘で旧誤認を訂正）: 旧設計の「`#[non_exhaustive]` の serde 経路保護」記述は**技術的誤認**。`#[non_exhaustive]` 属性は **Rust API stability 用**で **serde とは独立**、V1 deserializer が V2 variant を `unknown variant "unlock"` で拒否するのは serde の通常挙動で `#[non_exhaustive]` 効果ではない。実態は **daemon ハンドラが `client_version + request_variant` の組合せを許可リスト検証**する方式
+- **許可リスト具体仕様**: handshake で client_version 確認後、daemon は以下のテーブルで request 受理可否を判定:
+
+| `client_version` | 受理する `IpcRequest` variant |
+|---|---|
+| `V1` | `Handshake` / `ListRecords` / `AddRecord` / `EditRecord` / `RemoveRecord`（V1 サブセット 5 件のみ） |
+| `V2` | V1 サブセット 5 件 + V2 新 variant 5 件（`Unlock` / `Lock` / `ChangePassword` / `RotateRecovery` / `Rekey`） |
+
+- 許可リスト外の組合せ（V1 client が V2 専用 variant 送信）は `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` で拒否（C-28 機械検証）
+- V2 クライアントが V1 サーバに接続した場合（理論上ありえないが防御的に）は handshake 段階で `IpcResponse::ProtocolVersionMismatch` で切断
+
+### handshake 必須契約（Sub-E 工程2 服部指摘で C-29 として追加）
+
+- **handshake 完了前は全 IPC variant を拒否**: daemon は client から最初に届くフレームが `IpcRequest::Handshake { client_version }` であることを必須とし、そうでない場合は **handshake バイパス攻撃**として接続を即切断
+- **localhost Unix socket / Named Pipe の保護範囲**: L1 同ユーザ別プロセスからの handshake バイパス試行を防御（KDF パスワード認証で守られているが、handshake 前の他 variant 送信を受理すると `client_version` 不明状態で許可リスト検証が破綻するため、**多層防御の入口**として handshake 必須を構造化）
+- **実装契約**: daemon の IPC ハンドラエントリで `client_state: ClientState` enum（`PreHandshake` / `Handshake { version: IpcProtocolVersion }`）を保持、`PreHandshake` 状態で `Handshake` 以外の variant を受信した場合は `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` 返却 + 接続切断
 
 ### 新規 `IpcRequest` variant（5 件）
 
@@ -245,7 +262,8 @@ stateDiagram-v2
 3. `cache.state()` を確認、`Unlocked` なら `Err(IpcErrorCode::Internal { reason: "already-unlocked" })` で拒否
 4. `vault_migration.unlock_with_password(&master_password)?` を呼出（Sub-D）
    - **失敗時** `MigrationError::RecoveryRequired` → `IpcError::RecoveryRequired` 透過 → MSG-S09 (a)「リカバリ経路 (`vault unlock --recovery`) も可能」案内（Sub-D Rev5 ペガサス指摘契約の実装）
-   - **失敗時** `MigrationError::Crypto(_)` → `backoff.record_failure()` → 5 回連続なら指数バックオフ発動
+   - **失敗時** `MigrationError::Crypto(CryptoError::WrongPassword)` のみ `backoff.record_failure()` → 5 回連続なら指数バックオフ発動。**他の `Crypto(_)` variant（`AeadTagMismatch` / `NonceLimitExceeded` / `InvalidMnemonic` / `KdfFailed`）は backoff カウントしない**（Sub-E 工程2 服部指摘）。理由: (a) `AeadTagMismatch` で backoff 発動すると L2 攻撃者が vault.db を 5 回連続破損させて正規ユーザの unlock を DoS する経路、(b) ディスク破損 / 実装バグでも 5 回再試行で backoff 発動する誤検出、(c) backoff は**パスワード違いに対する brute force レート制限**が本来の目的、それ以外のエラーは即返却で fail fast
+   - **Sub-D への要求**: `MigrationError::Crypto(_)` をワイルドカードで扱わず、`CryptoError::WrongPassword` variant を Sub-D に追加要求する（既存 `CryptoError` には KDF 失敗 / WeakPassword / AeadTagMismatch 等はあるが、「パスワード認証失敗」専用 variant が不在）。Sub-D 設計書 `repository-and-migration.md` `MigrationError → IpcError` マッピング表に `CryptoError::WrongPassword → IpcError::Crypto { reason: "wrong-password" }` 透過行を Boy Scout 追加（Sub-E 工程5 完了後の Sub-D Rev6 で同期）
 5. 戻り値 `(Vault, Vek)` の `Vek` を `cache.unlock(vek).await?` で `VaultUnlockState::Unlocked` に遷移
 6. `backoff.record_success()` で失敗カウンタリセット
 7. `IpcResponse::Unlocked {}` で応答（VEK 自体は IPC に乗せない）
@@ -270,24 +288,31 @@ stateDiagram-v2
 ### F-E4: `rotate_recovery`（IPC `RotateRecovery` 受信）
 
 1. `cache.state()` を確認、`Locked` なら `Err(IpcError::VaultLocked)` で拒否
-2. パスワード再認証: `vault_migration.unlock_with_password(&master_password)?` で資格確認（戻り値 `Vek` は破棄、cache 既に保持）
+2. **パスワード再認証**: `vault_migration.verify_password(&master_password, &cache_vek)?` で資格確認。**`unlock_with_password` 流用を廃止**（Sub-E 工程2 ペテルギウス指摘）：旧設計の流用は **Argon2id を再計算して結果を破棄**する KISS/DRY 違反。新設計は (a) `vault_migration.derive_kek_pw_only(&master_password, &salt)?` で KEK_pw を導出、(b) `cache.with_vek(|cached_vek| aead.unwrap_vek_with_kek_pw(&kek_pw, &wrapped_vek_by_pw_in_header) == cached_vek)?` で**bit-exact 比較**（`subtle::ConstantTimeEq` 経由で side-channel 排除）、(c) 一致時のみ進行。**Sub-D への要求**: `VaultMigration::derive_kek_pw_only(&MasterPassword, &KdfSalt) -> Result<Kek<KekKindPw>, MigrationError>` および `verify_password(&MasterPassword, &Vek) -> Result<(), MigrationError>` メソッド追加（Sub-D Rev6 で Boy Scout）
 3. **新 mnemonic entropy 生成**: `rng.generate_mnemonic_entropy()` → `bip39::Mnemonic::from_entropy(&entropy)?` → `RecoveryMnemonic::from_words(words)?`
 4. 新 `kek_recovery` 導出: `Bip39Pbkdf2Hkdf::derive_kek_recovery(&new_mnemonic)?`
-5. **既存 VEK を新 kek_recovery で wrap**: `aead.wrap_vek(&kek_recovery, &nonce, &cache.with_vek(|v| v.clone_into_temp())?)?`（VEK の一時クローンは `Zeroizing` で囲む）
+5. **既存 VEK を新 kek_recovery で wrap**: `cache.with_vek(|vek| aead.wrap_vek(&kek_recovery, &nonce, vek))?` で **クロージャ内完結**（Sub-E 工程2 ペテルギウス + 服部指摘）。旧設計の `clone_into_temp` 経路は (a) Sub-A `Vek::Clone` 禁止契約に違反、(b) クロージャ外に VEK コピーが漏出する Sub-C `AeadKey` 哲学逆行、両面で却下。クロージャインジェクションの本来の目的「鍵をクロージャ境界から出さない」を遵守、AEAD wrap 自体をクロージャ内で完結させる
 6. ヘッダ更新: `wrapped_vek_by_recovery` のみ新値で置換、`wrapped_vek_by_pw` / `nonce_counter` / `kdf_params` は維持
 7. ヘッダ AEAD envelope 再構築（C-17/C-18 通り、AAD = 全フィールド正規化バイト列）
 8. atomic write
-9. `IpcResponse::RecoveryRotated { disclosure: RecoveryWords }` で**新 24 語を初回 1 度のみ返却**（`RecoveryDisclosure::disclose` の所有権消費を IPC 経路で表現、disclosure は IPC 応答に含めて即 Drop、daemon は `RecoveryWords` をログ出力しない）
+9. `IpcResponse::RecoveryRotated { disclosure: RecoveryWordsDisclosure }` で**新 24 語を初回 1 度のみ返却**（`RecoveryDisclosure::disclose` の所有権消費を IPC 経路で表現）。**daemon 側 zeroize の型レベル強制**（Sub-E 工程2 服部指摘）: (a) `RecoveryWordsDisclosure` は `Drop` で `String::zeroize()` 連鎖（Sub-A `RecoveryWords` 同型）、(b) daemon ハンドラは `tokio::write_all` で IPC フレーム送信完了後、`disclosure` を `mem::replace(&mut disclosure, RecoveryWordsDisclosure::empty())` で取り出して即 `drop` → Drop 連鎖で zeroize、(c) `tracing::debug!` / `info!` / `error!` のいずれにも `disclosure` の Debug 出力を含めない（`Debug` 実装は `[REDACTED RECOVERY WORDS (24)]` 固定、Sub-A 同型）、(d) IPC エラー応答時 `Err(_)` 経路でも disclosure が構築済の場合は同様に zeroize（Drop 連鎖で透過）
 
 ### F-E5: `rekey`（IPC `Rekey` 受信、nonce overflow / 明示 rekey）
 
 1. `cache.state()` を確認、`Locked` なら `Err(IpcError::VaultLocked)` で拒否
-2. `vault_migration.rekey(&master_password)?`（Sub-D §F-D4）
-   - 旧 VEK で全レコード復号 → 新 VEK 生成 → 全レコード再暗号化
-   - `wrapped_vek_by_pw` 再 wrap、`nonce_counter` リセット、ヘッダ AEAD envelope 再構築
-   - `wrapped_vek_by_recovery` は本 Sub-E 範囲外（Sub-F の `change_recovery` で対応、銀時 PR #58 透明性報告）
+2. **rekey + recovery rotation atomic 化**（Sub-E 工程2 服部指摘で整合性破壊ウィンドウ封鎖）: 旧設計は rekey 完了時点〜ユーザが `rotate_recovery` 実行までの**ウィンドウ**で `wrapped_vek_by_pw=新VEK` / `wrapped_vek_by_recovery=旧VEK` の不整合状態を残し、recovery 経路 unlock で AEAD tag mismatch（MSG-S10 過信防止文言が表示されるが**実際は内部状態不整合**）を発火する経路があった。新設計は **rekey と recovery rotation を 1 atomic write トランザクションで同時実行**:
+   - `vault_migration.rekey_with_recovery_rotation(&master_password)?` を Sub-D に追加要求（**Sub-D Rev6 への Boy Scout 要求**）。旧 `rekey` メソッドは内部で本メソッドに委譲する形に改訂、外向き API 後方互換維持
+   - 内部処理: ① 旧 VEK で全レコード復号 → 新 VEK 生成 → 全レコード再暗号化、② `wrapped_vek_by_pw` 再 wrap（旧 KEK_pw 流用）、③ **新 mnemonic 生成** + `wrapped_vek_by_recovery` 再 wrap（新 mnemonic で wrap 済の値）、④ `nonce_counter` リセット、⑤ ヘッダ AEAD envelope 再構築、⑥ atomic write 1 回、⑦ 新 `RecoveryDisclosure` を返却
 3. **キャッシュ更新**: `cache.lock().await` で旧 VEK を破棄 → `cache.unlock(new_vek).await` で新 VEK を格納
-4. `IpcResponse::Rekeyed { records_count }` 応答（再暗号化レコード件数）
+4. `IpcResponse::Rekeyed { records_count, disclosure: RecoveryWordsDisclosure }` 応答（再暗号化レコード件数 + 新 24 語、F-E4 §step 9 と同じ zeroize 経路）。**ユーザは rekey 完了直後に新 24 語をメモする責務**: rekey は片方向操作（旧 mnemonic invalidated）、新 24 語を記録しない場合は次回パスワード忘失時に永久損失するリスクが残る（MSG-S07 文言で明示誘導、Sub-F 担当）
+
+### 旧設計（rekey と rotate_recovery 分離案）の却下理由
+
+| 案 | 説明 | 採否 |
+|---|---|---|
+| **A: rekey 完了時点で `rekey-pending` マーカー書き込み** | recovery 経路 unlock 時に MSG-S09 (a) で `vault rotate-recovery` 実行を強制誘導 | **却下**: ユーザが rekey と rotate_recovery を**忘れる**経路を残す。マーカーが何らかの理由で破損した場合に整合性破壊が再発、設計穴の根本解決にならない |
+| **B: rekey と rotate_recovery を atomic write で同時実行（採用）** | 1 トランザクション内で wrapped_vek_by_pw / wrapped_vek_by_recovery を同時更新、新 mnemonic を rekey 応答に含める | **採用**: 不整合ウィンドウゼロ、ユーザは「rekey = 新 24 語が出る」と単純に認識可能、Sub-F の MSG-S07 文言も簡素化 |
+| **C: Sub-F 丸投げ（旧設計）** | rekey は wrapped_vek_by_pw のみ更新、wrapped_vek_by_recovery は Sub-F の `change_recovery` で別途対応 | **却下**: Sub-F 実装担当が忘却すれば永久に整合性破壊、Sub-E 段階で**設計穴の責任放棄**として服部指摘で却下 |
 
 ## 不変条件・契約（Sub-E 新規）
 
@@ -299,7 +324,8 @@ stateDiagram-v2
 | **C-25**: OS スクリーンロック / サスペンド受信で即 lock | `OsLockSignal::next_lock_event` 受信 → `cache.lock()` 呼出 | integration test: `MockLockSignal` から `LockEvent::ScreenLocked` 注入 → 100ms 以内に `Locked` 遷移 |
 | **C-26**: 連続失敗 5 回で指数バックオフ発動、unlock 成功でリセット | `UnlockBackoff::record_failure` / `record_success` の状態遷移 | ユニットテスト: 5 回連続失敗 → `BackoffActive` 返却 / unlock 成功 → カウンタゼロ |
 | **C-27**: `MigrationError::RecoveryRequired` を `IpcError::RecoveryRequired` 透過 → MSG-S09 (a) | `From<MigrationError> for IpcError` 実装で transparent 透過 | ユニットテスト: パスワード失敗で `RecoveryRequired` 発火 → IPC 応答が `RecoveryRequired` variant、MSG-S09 (a) 文言を含む |
-| **C-28**: V1 クライアントが V2 専用 variant 送信時に `ProtocolDowngrade` で拒否 | handshake で client_version 確認、V1 クライアントには V2 variant を deserialize 失敗させる | integration test: V1 セッションで V2 variant 送信 → `IpcResponse::Error(ProtocolDowngrade)` 返却 |
+| **C-28**: V1 クライアントが V2 専用 variant 送信時に `ProtocolDowngrade` で拒否 | handshake 許可リスト方式で `(client_version, request_variant)` の組合せを daemon ハンドラで検証（旧設計の「`#[non_exhaustive]` の serde 経路保護」誤認は Sub-E 工程2 ペテルギウス指摘で訂正、許可リストテーブルが SSoT） | integration test: V1 セッションで V2 variant 送信 → `IpcResponse::Error(ProtocolDowngrade)` 返却 |
+| **C-29**: handshake 必須、handshake 前は全 IPC variant 拒否（Sub-E 工程2 服部指摘） | daemon ハンドラに `ClientState::PreHandshake` / `Handshake { version }` を保持、`PreHandshake` 状態で `Handshake` 以外の variant を受信した場合は接続即切断 + `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` 返却 | integration test: handshake バイパスで V2 variant を直接送信 → 接続切断 + `ProtocolDowngrade` 返却 |
 
 ## Sub-E → 後続 Sub への引継ぎ
 
