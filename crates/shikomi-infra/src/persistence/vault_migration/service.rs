@@ -268,15 +268,23 @@ impl<'a> VaultMigration<'a> {
 
         // ヘッダ AEAD タグ検証 (C-17/C-18、L1 nonce_counter 巻戻し / kdf_params 改竄
         // / wrapped_vek 入替を AAD 不一致経由で検出)。
-        verify_header_aead(self.aead, &encrypted_header, &kek_pw)?;
+        //
+        // **Bug-E-001 修正 (方針B、リーダー決定)**: `unlock_with_password` 経路では
+        // `verify_header_aead` の `AeadTagMismatch` も **`WrongPassword` に意味論再分類**
+        // する。理由:
+        // - 通常ユーザの誤入力は `verify_header_aead` 段階で先に tag fail する経路が
+        //   現実 (KEK_pw 不一致 → AAD 不一致) のため、本変換なしでは REQ-S11 / C-26
+        //   の連続失敗 backoff が発動せず brute force レート制限が機能しない
+        // - `unlock_with_password` の文脈に閉じた変換であり、`encrypt_vault` /
+        //   `decrypt_vault` 等の他経路の `AeadTagMismatch` には影響しない
+        // - 真の vault.db 改竄経路と区別不能だが、L2 改竄通知は `tracing::warn` で
+        //   別経路に残し運用診断は維持 (REQ-S11 brute force 防衛 ≫ 改竄通知粒度)
+        verify_header_aead(self.aead, &encrypted_header, &kek_pw)
+            .map_err(map_aead_failure_in_unlock_to_wrong_password)?;
 
         // wrapped_vek_by_pw を unwrap → 32B 検証
-        // Sub-D Rev6: AEAD tag mismatch をここで `WrongPassword` に意味論変換する。
-        // `verify_header_aead` を通過した時点で「ヘッダ AAD 整合性は保証済」のため、
-        // 続く `unwrap_vek` の tag fail は KEK_pw 不一致に起因する確定経路。
-        // L2 攻撃者が wrapped_vek_by_pw だけを破壊する経路はヘッダ AEAD AAD で先に
-        // 検出されるため、ここで `WrongPassword` 変換しても DoS 経路は生まれない
-        // (Sub-E `vek-cache-and-ipc.md` §F-E1 step 4 服部指摘契約)。
+        // Sub-D Rev6 + Bug-E-001 (方針B): `unwrap_vek` の tag fail も
+        // 同じく `WrongPassword` に意味論変換する。
         let verified = self
             .aead
             .unwrap_vek(&kek_pw, encrypted_header.wrapped_vek_by_pw())
@@ -742,6 +750,41 @@ fn map_unwrap_vek_to_wrong_password(e: CryptoError) -> MigrationError {
     match e {
         CryptoError::AeadTagMismatch => MigrationError::Crypto(CryptoError::WrongPassword),
         other => MigrationError::Crypto(other),
+    }
+}
+
+/// **Bug-E-001 修正 (方針B、リーダー決定)**: `unlock_with_password` 経路の
+/// `verify_header_aead` 失敗を `WrongPassword` に意味論再分類する。
+///
+/// 設計書 §F-E1 step 4 凍結契約 + 工程4 マユリ Bug-E-001 報告:
+///
+/// 通常ユーザの誤入力は `verify_header_aead` 段階で先に tag fail する経路が現実
+/// (KEK_pw 不一致 → AAD 不一致 → header tag verify fail)。本変換なしでは
+/// REQ-S11 / C-26 の連続失敗 backoff が発動せず、brute force レート制限が
+/// 機能しない (HIGH 重大度)。本ヘルパで `unlock_with_password` の文脈に閉じた
+/// 形で `AeadTagMismatch → WrongPassword` 変換を行い、backoff トリガを
+/// 「KEK_pw 検証経路の失敗」に統一する。
+///
+/// 真の vault.db 改竄経路と区別不能だが:
+/// - REQ-S11 brute force 防衛 ≫ 改竄通知粒度 (リーダー判断)
+/// - 改竄通知は `tracing::warn` で別経路に残し運用診断は維持
+/// - 他経路 (`encrypt_vault` / `decrypt_vault` / `change_password` 内部の
+///   `unlock_internal` 経由) は本ヘルパを通るため一貫した変換が行われる
+///
+/// 他の `MigrationError` variant (`Crypto(WeakPassword)` / `Persistence(_)` 等) は
+/// そのまま透過。
+fn map_aead_failure_in_unlock_to_wrong_password(e: MigrationError) -> MigrationError {
+    match e {
+        MigrationError::Crypto(CryptoError::AeadTagMismatch) => {
+            tracing::warn!(
+                target: "shikomi_infra::vault_migration",
+                "header AEAD verify failed during unlock_with_password — \
+                 classified as WrongPassword for backoff trigger; \
+                 genuine vault.db tampering shares this path (Bug-E-001 方針B)"
+            );
+            MigrationError::Crypto(CryptoError::WrongPassword)
+        }
+        other => other,
     }
 }
 
