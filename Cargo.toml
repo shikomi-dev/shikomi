@@ -80,3 +80,5 @@ zxcvbn          = { version = "3",    default-features = false, features = ["def
 # 単一 derive 時間を計測し、median を 750 ms (p95 ≤ 1.0 s の proxy) と比較する。
 # `bench-kdf` ワークフロー (`.github/workflows/bench-kdf.yml`) で 3 OS gating。
 criterion       = { version = "0.5", default-features = false }
+# Sub-C (#41) AEAD アダプタ。AES-256-GCM (RustCrypto)、tech-stack §4.7 凍結。
+aes-gcm         = { version = "0.10", default-features = false, features = ["alloc", "aes", "zeroize"] }

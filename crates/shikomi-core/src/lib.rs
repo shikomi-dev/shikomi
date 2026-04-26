@@ -22,11 +22,11 @@ pub use error::{
 // --- 秘密値ラッパ ---
 pub use secret::{SecretBytes, SecretString};
 
-// --- 暗号ドメイン型 (Sub-A 新規) ---
+// --- 暗号ドメイン型 (Sub-A 新規 / Sub-C 拡張) ---
 pub use crypto::{
-    verify_aead_decrypt, CryptoOutcome, HeaderAeadKey, Kek, KekKind, KekKindPw, KekKindRecovery,
-    MasterPassword, PasswordStrengthGate, Plaintext, RecoveryMnemonic, Vek, Verified,
-    WeakPasswordFeedback,
+    verify_aead_decrypt, verify_aead_decrypt_to_plaintext, AeadKey, CryptoOutcome, HeaderAeadKey,
+    Kek, KekKind, KekKindPw, KekKindRecovery, MasterPassword, PasswordStrengthGate, Plaintext,
+    RecoveryMnemonic, Vek, Verified, WeakPasswordFeedback,
 };
 
 // --- vault 集約・ヘッダ ---

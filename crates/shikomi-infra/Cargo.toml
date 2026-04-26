@@ -27,6 +27,10 @@ getrandom     = { workspace = true }
 zxcvbn        = { workspace = true }
 secrecy       = { workspace = true }
 zeroize       = { workspace = true }
+# Sub-C (#41) AEAD アダプタ (AES-256-GCM)。`subtle` は aes-gcm が transitive で
+# 引くため**直接追加しない** (nonce-and-aead.md §`subtle` v2.5+ 制約: tag 比較は
+# aes-gcm 内部の constant-time 経路に委譲)。
+aes-gcm       = { workspace = true }
 
 [dev-dependencies]
 tempfile     = { workspace = true }
