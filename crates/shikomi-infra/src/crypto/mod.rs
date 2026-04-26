@@ -10,11 +10,14 @@
 //! - [`rng`]: `rand_core::OsRng` を用いた CSPRNG 単一エントリ点 (Sub-B、`rng.md`)
 //! - [`kdf`]: Argon2id / BIP-39+PBKDF2+HKDF KDF アダプタ (Sub-B、`kdf.md`)
 //! - [`password`]: zxcvbn ベース `PasswordStrengthGate` 実装 (Sub-B、`password.md`)
+//! - [`aead`]: AES-256-GCM AEAD アダプタ (Sub-C、`nonce-and-aead.md`)
 
+pub mod aead;
 pub mod kdf;
 pub mod password;
 pub mod rng;
 
+pub use aead::AesGcmAeadAdapter;
 pub use kdf::{Argon2idAdapter, Argon2idParams, Bip39Pbkdf2Hkdf, HKDF_INFO};
 pub use password::ZxcvbnGate;
 pub use rng::Rng;

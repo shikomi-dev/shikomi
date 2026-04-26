@@ -151,6 +151,34 @@ where
     decrypt_fn().map(Verified::new_from_aead_decrypt)
 }
 
+/// `verify_aead_decrypt` の `Plaintext` 特化版 (Sub-C 新規)。
+///
+/// shikomi-infra::crypto::aead::AesGcmAeadAdapter が AEAD 検証成功時にのみ呼ぶ
+/// 正規経路。`Plaintext::new_within_module` は `pub(in crate::crypto::verified)`
+/// 限定可視性のため shikomi-infra から直接構築不可だが、本関数経由で `Vec<u8>` を
+/// 渡せば AEAD 検証済み `Verified<Plaintext>` を取得できる。
+///
+/// 三段防御 (Sub-A 凍結):
+/// - 第一層 (型レベル): `Verified::new_from_aead_decrypt` が `pub(crate)` 限定
+/// - 第二層 (モジュール内): `Plaintext::new_within_module` が
+///   `pub(in crate::crypto::verified)` 限定
+/// - 第三層 (呼出側契約): 本関数のクロージャ内で AEAD 検証実行を契約宣言
+///   (Sub-C `AesGcmAeadAdapter::decrypt_record` / `unwrap_vek` が
+///   `decrypt_in_place_detached` でタグ検証成功時のみ本関数を呼ぶ)
+///
+/// # Errors
+///
+/// `decrypt_fn` が `Err(E)` を返した場合は `Err(E)` を伝播 (AEAD 検証失敗)。
+pub fn verify_aead_decrypt_to_plaintext<F, E>(decrypt_fn: F) -> Result<Verified<Plaintext>, E>
+where
+    F: FnOnce() -> Result<Vec<u8>, E>,
+{
+    let bytes = decrypt_fn()?;
+    Ok(Verified::new_from_aead_decrypt(
+        Plaintext::new_within_module(bytes),
+    ))
+}
+
 // -------------------------------------------------------------------
 // CryptoOutcome<T>
 // -------------------------------------------------------------------
@@ -240,6 +268,34 @@ mod tests {
     fn verify_aead_decrypt_propagates_err_from_closure() {
         let result: Result<Verified<u32>, &'static str> = verify_aead_decrypt(|| Err("boom"));
         assert_eq!(result.unwrap_err(), "boom");
+    }
+
+    // -----------------------------------------------------------------
+    // verify_aead_decrypt_to_plaintext (Sub-C 新規)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn verify_aead_decrypt_to_plaintext_wraps_ok_bytes_into_verified_plaintext() {
+        let result: Result<Verified<Plaintext>, ()> =
+            verify_aead_decrypt_to_plaintext(|| Ok(b"hello".to_vec()));
+        let v = result.unwrap();
+        assert_eq!(v.as_inner().expose_secret(), b"hello");
+    }
+
+    #[test]
+    fn verify_aead_decrypt_to_plaintext_propagates_err_from_closure() {
+        let result: Result<Verified<Plaintext>, &'static str> =
+            verify_aead_decrypt_to_plaintext(|| Err("aead-fail"));
+        assert_eq!(result.unwrap_err(), "aead-fail");
+    }
+
+    #[test]
+    fn verify_aead_decrypt_to_plaintext_accepts_empty_bytes() {
+        // 0 byte plaintext は AES-GCM 仕様上有効 (ciphertext は tag のみ)。
+        let result: Result<Verified<Plaintext>, ()> =
+            verify_aead_decrypt_to_plaintext(|| Ok(Vec::new()));
+        let v = result.unwrap();
+        assert_eq!(v.into_inner().expose_secret(), b"");
     }
 
     // -----------------------------------------------------------------
