@@ -131,4 +131,44 @@ mod tests {
         let resp = IpcResponse::Error(IpcErrorCode::EncryptionUnsupported);
         assert_eq!(resp.variant_name(), "error");
     }
+
+    // -----------------------------------------------------------------
+    // TC-E-U13: V2 IpcResponse variant_name 全網羅
+    // -----------------------------------------------------------------
+    //
+    // 設計書凍結文字列:
+    //   "unlocked" / "locked" / "password_changed" / "recovery_rotated" / "rekeyed"
+
+    #[test]
+    fn test_variant_name_v2_unlocked() {
+        assert_eq!(IpcResponse::Unlocked.variant_name(), "unlocked");
+    }
+
+    #[test]
+    fn test_variant_name_v2_locked() {
+        assert_eq!(IpcResponse::Locked.variant_name(), "locked");
+    }
+
+    #[test]
+    fn test_variant_name_v2_password_changed() {
+        assert_eq!(
+            IpcResponse::PasswordChanged.variant_name(),
+            "password_changed"
+        );
+    }
+
+    #[test]
+    fn test_variant_name_v2_recovery_rotated() {
+        let resp = IpcResponse::RecoveryRotated { words: vec![] };
+        assert_eq!(resp.variant_name(), "recovery_rotated");
+    }
+
+    #[test]
+    fn test_variant_name_v2_rekeyed() {
+        let resp = IpcResponse::Rekeyed {
+            records_count: 0,
+            words: vec![],
+        };
+        assert_eq!(resp.variant_name(), "rekeyed");
+    }
 }

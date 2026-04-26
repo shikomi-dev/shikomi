@@ -119,4 +119,59 @@ mod tests {
         };
         assert_eq!(code.to_string(), "persistence error: persistence error");
     }
+
+    // -----------------------------------------------------------------
+    // TC-E-U13 / TC-E-U11: V2 IpcErrorCode の Display 文字列固定確認
+    // -----------------------------------------------------------------
+    //
+    // 設計書 §14.4 TC-E-U11: `RecoveryRequired` Display は「recovery path required」を含む。
+    // §14.4 TC-E-U13: V2 4 新 variant Display 固定確認。
+
+    #[test]
+    fn test_display_vault_locked() {
+        let s = IpcErrorCode::VaultLocked.to_string();
+        assert!(
+            s.contains("vault is locked"),
+            "VaultLocked Display must contain 'vault is locked', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_display_backoff_active_includes_wait_secs() {
+        let s = IpcErrorCode::BackoffActive { wait_secs: 30 }.to_string();
+        assert!(
+            s.contains("30s"),
+            "BackoffActive Display must include wait_secs '30s', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_display_recovery_required() {
+        let s = IpcErrorCode::RecoveryRequired.to_string();
+        assert!(
+            s.contains("recovery path required"),
+            "RecoveryRequired Display must contain 'recovery path required', got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_display_protocol_downgrade() {
+        let s = IpcErrorCode::ProtocolDowngrade.to_string();
+        assert!(
+            s.contains("V1 client") || s.contains("V2-only"),
+            "ProtocolDowngrade Display should mention V1/V2 boundary, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_display_crypto_with_kebab_reason() {
+        let code = IpcErrorCode::Crypto {
+            reason: "wrong-password".to_owned(),
+        };
+        let s = code.to_string();
+        assert!(
+            s.contains("wrong-password"),
+            "Crypto Display must contain kebab-case reason, got: {s}"
+        );
+    }
 }

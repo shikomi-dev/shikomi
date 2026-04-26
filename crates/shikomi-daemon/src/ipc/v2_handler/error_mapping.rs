@@ -122,4 +122,121 @@ mod tests {
             other => panic!("expected Internal, got {other:?}"),
         }
     }
+
+    // -----------------------------------------------------------------
+    // TC-E-U11: RecoveryRequired 透過変換 + Display 文字列確認
+    // -----------------------------------------------------------------
+    //
+    // 設計書 §14.4 TC-E-U11: `MigrationError::RecoveryRequired` →
+    // `IpcErrorCode::RecoveryRequired` 透過。Display 文字列が「recovery path
+    // required」を含む (Sub-D Rev5 ペガサス指摘契約の Sub-E 実装、MSG-S09 (a)
+    // 経路)。
+    #[test]
+    fn recovery_required_display_contains_recovery_path_required() {
+        let code: IpcErrorCode = migration_error_to_ipc(MigrationError::RecoveryRequired);
+        let s = format!("{code}");
+        assert!(
+            s.contains("recovery path required"),
+            "Display must contain 'recovery path required', got: {s}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // TC-E-U12: MigrationError 9 variant 全網羅マッピング
+    // -----------------------------------------------------------------
+    //
+    // 設計書 §14.4 TC-E-U12 / §14.5 表「MigrationError → IpcErrorCode マッピング」:
+    // (1) Crypto(WeakPassword) → Crypto(reason="weak-password")
+    // (2) Crypto(AeadTagMismatch) → Crypto(reason="aead-tag-mismatch")
+    // (3) Crypto(NonceLimitExceeded) → Crypto(reason="nonce-limit-exceeded")
+    // (4) Crypto(WrongPassword) → Crypto(reason="wrong-password")
+    // (5) Crypto(InvalidMnemonic) → Crypto(reason="invalid-mnemonic")
+    // (6) Crypto(KdfFailed) → Crypto(reason="kdf-failed")
+    // (7) Persistence(_) → Persistence (透過)
+    // (8) Domain(_) → Domain (透過)
+    // (9) AlreadyEncrypted / NotEncrypted / PlaintextNotUtf8 / RecoveryAlreadyConsumed
+    //     → Internal(reason)
+    // (10) AtomicWriteFailed { stage } → Persistence(reason="atomic-write-{stage}")
+    // (11) RecoveryRequired → RecoveryRequired
+    //
+    // ワイルドカード `_` 無しで Crypto 内部 6 variant + MigrationError 9 variant
+    // (内 5 が Internal 集約) を確認する。Persistence/Domain/AtomicWriteFailed
+    // は別 variant の依存型構築が必要なため variant 検証のみ実施。
+
+    use shikomi_core::crypto::WeakPasswordFeedback;
+
+    #[test]
+    fn weak_password_maps_to_crypto_weak_password() {
+        let feedback = WeakPasswordFeedback::new(None, vec![]);
+        let err = MigrationError::Crypto(CryptoError::WeakPassword(Box::new(feedback)));
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Crypto { reason } => assert_eq!(reason, "weak-password"),
+            other => panic!("expected Crypto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nonce_limit_exceeded_maps_to_crypto_nonce_limit_exceeded() {
+        let err = MigrationError::Crypto(CryptoError::NonceLimitExceeded { limit: 1u64 << 32 });
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Crypto { reason } => assert_eq!(reason, "nonce-limit-exceeded"),
+            other => panic!("expected Crypto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_mnemonic_maps_to_crypto_invalid_mnemonic() {
+        let err = MigrationError::Crypto(CryptoError::InvalidMnemonic);
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Crypto { reason } => assert_eq!(reason, "invalid-mnemonic"),
+            other => panic!("expected Crypto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kdf_failed_maps_to_crypto_kdf_failed() {
+        use shikomi_core::error::KdfErrorKind;
+        let err = MigrationError::Crypto(CryptoError::KdfFailed {
+            kind: KdfErrorKind::Argon2id,
+            source: "test failure".into(),
+        });
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Crypto { reason } => assert_eq!(reason, "kdf-failed"),
+            other => panic!("expected Crypto, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_encrypted_maps_to_internal() {
+        let err = MigrationError::NotEncrypted;
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Internal { reason } => assert_eq!(reason, "not-encrypted"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plaintext_not_utf8_maps_to_internal() {
+        let err = MigrationError::PlaintextNotUtf8;
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Internal { reason } => assert_eq!(reason, "plaintext-not-utf8"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recovery_already_consumed_maps_to_internal() {
+        let err = MigrationError::RecoveryAlreadyConsumed;
+        let code = migration_error_to_ipc(err);
+        match code {
+            IpcErrorCode::Internal { reason } => assert_eq!(reason, "recovery-already-consumed"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
 }

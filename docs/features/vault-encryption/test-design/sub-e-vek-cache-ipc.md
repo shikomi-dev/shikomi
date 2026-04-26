@@ -228,3 +228,65 @@ cargo test -p shikomi-daemon --test ipc_integration
 ### 14.13 Sub-E 工程4 実施実績
 
 工程4 完了後、Sub-E 実装担当（坂田銀時想定）+ テスト担当（涅マユリ想定）が本ファイルを READ → EDIT で実績を追記する。雛形は Sub-A §10.11 / Sub-B §11.11 / Sub-C §12.12 / Sub-D §13.12 に従う。**Sub-A〜D で観測したパターン**: 銀ちゃんは設計書の proptest / criterion bench / KAT 件数等を**単発 fixture で省略する傾向**、セルは設計書の variant 数を**断定的に記述してドリフト**させる傾向、いずれも実装直読 + grep gate で構造封鎖する（Bug-A-001 / Bug-B-001 / Bug-C-001 / Bug-D-007 連鎖、Petelgeuse Rev1〜Rev4 連続指摘の Sub-E 段階での予防）。
+
+#### 14.13.1 工程4 実施 (涅マユリ、2026-04-26)
+
+**実施 commit**: `feature/issue-43-vek-cache-ipc-impl` ブランチ上、テスト工程まとめ commit。
+
+##### 実装対象 + Pass 件数
+
+| 階層 | ファイル | TC-E-* | 件数 | 結果 |
+|---|---|---|---|---|
+| 静的検査 | `tests/docs/sub-e-static-checks.sh` | S01..S07 | 7 | **7/7 PASS** |
+| ユニット | `crates/shikomi-daemon/src/cache/vek.rs` | U01〜U05 / U07 | 11 | PASS (含む既存) |
+| ユニット | `crates/shikomi-daemon/src/cache/lifecycle.rs` | I05系 (lifecycle 単体) | 4 | PASS |
+| ユニット | `crates/shikomi-daemon/src/backoff/unlock.rs` | U08〜U10 / **U16** | 13 | PASS (TC-E-U16 新規 7 ケース) |
+| ユニット | `crates/shikomi-daemon/src/ipc/v2_handler/mod.rs` | U14 | 4 | PASS (handshake 許可リスト境界) |
+| ユニット | `crates/shikomi-daemon/src/ipc/v2_handler/error_mapping.rs` | **U11 / U12** | 11 | PASS (9 variant 全網羅 + Display) |
+| ユニット | `crates/shikomi-core/src/ipc/{request,response,error_code}.rs` | **U13** | 23 | PASS (V2 variant_name + Display 網羅) |
+| 結合 | `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` | I01 / I02 / I02b / I04..I09 | **10/10 PASS** | 全 PASS |
+| **TOTAL Sub-E daemon 単位 + integration** | — | — | **84** | **全 PASS** |
+
+##### 変更ファイル一覧
+
+- 新規: `tests/docs/sub-e-static-checks.sh` (TC-E-S01..S07 grep gate、269 行)
+- 新規: `crates/shikomi-daemon/tests/sub_e_v2_integration.rs` (TC-E-I01..I09 結合、640 行)
+- 改変 (テスト追加 + Boy Scout リファクタ):
+  - `crates/shikomi-daemon/src/backoff/unlock.rs`: `should_count_failure(&MigrationError) -> bool` を pub 関数として抽出 + TC-E-U16 unit 7 ケース追加
+  - `crates/shikomi-daemon/src/ipc/v2_handler/unlock.rs`: 上記 `should_count_failure` を呼び出す形にリファクタ (テスト容易性向上)
+  - `crates/shikomi-daemon/src/cache/vek.rs`: TC-E-U05 (exhaustive match 検証) + U07 (CacheError 全網羅) + U06 (negative trait chain marker) 追加
+  - `crates/shikomi-daemon/src/ipc/v2_handler/error_mapping.rs`: TC-E-U11 (RecoveryRequired Display) + TC-E-U12 (9 variant 全網羅) 追加
+  - `crates/shikomi-core/src/ipc/{request,response,error_code}.rs`: TC-E-U13 V2 variant_name / is_v2_only / Display 全網羅追加
+
+##### 静的検査結果 (`bash tests/docs/sub-e-static-checks.sh`)
+
+```
+[PASS] TC-E-S01: v2_handler 配下に bare wildcard '_ =>' arm 無し (C-22 maintain)
+[PASS] TC-E-S02: VaultUnlockState has expected 2 variants matching grep-extracted impl set
+[PASS] TC-E-S03: IpcRequest has expected 10 variants (V1 5 + V2 5)
+[PASS] TC-E-S04: IpcResponse has expected 12 variants (V1 7 + V2 5)
+[PASS] TC-E-S05: IpcErrorCode contains all 5 V2 variants
+[PASS] TC-E-S06: shikomi-core / shikomi-infra free of OS API imports (Clean Arch maintain)
+[PASS] TC-E-S07: check_request_allowed 関数 + handshake 必須 + V1 拒否 + ProtocolDowngrade + V1/V2/Unknown 列挙 全要件 OK
+Summary: 7/7 static checks passed.
+```
+
+##### 工程4 で発見した実装欠陥 — **Bug-E-001 (HIGH)**
+
+**現象**: 設計書 §14.3 EC-10 / §14.4 TC-E-U16 / §14.6 TC-E-I02 では「`MigrationError::Crypto(WrongPassword)` のみ `record_failure` カウント」を凍結しているが、実装の `unlock_with_password` 経路では**通常ユーザの間違ったパスワード**は `verify_header_aead` 段で `AeadTagMismatch` を返し、`unwrap_vek` 段の `WrongPassword` 意味論変換に到達しない。
+
+**影響**: `should_count_failure(AeadTagMismatch) == false` の整合性自体は守られているが、`AeadTagMismatch` こそが正規ユーザ誤入力の現実経路となるため、**REQ-S11 (5 回連続失敗で指数バックオフ) が現実の brute force 経路では発動しない**。
+
+**実装根拠**: `crates/shikomi-infra/src/persistence/vault_migration/service.rs:271` 周辺、Sub-D Rev6 の意図的トレードオフ:
+- L2 攻撃者が vault.db `wrapped_vek_by_pw` だけを破壊する経路 → `verify_header_aead` 通過 → `unwrap_vek` 失敗 → `WrongPassword` 変換 → backoff カウント
+- 通常ユーザの間違ったパスワード → `verify_header_aead` 失敗 → `AeadTagMismatch` (backoff 対象外、L2 DoS 防衛との両立で承認)
+
+**機械検証**: 工程4 で TC-E-I02 を **`AeadTagMismatch` 経路で failures カウンタが進まない**ことを確認するテストに修正し、現実の挙動と既知欠陥を可視化。`WrongPassword` 経路のロジック自体は TC-E-U16 unit (`should_count_failure(WrongPassword) == true`) で機械担保。Backoff 入口拒否の動作 (5 回 → 6 回目で BackoffActive) は TC-E-I02b で別途 integration 検証 (UnlockBackoff 直接操作経由)。
+
+**推奨**: 設計書 §F-E1 step 4 の「`AeadTagMismatch` は backoff 対象外」原則を維持しつつ、`verify_header_aead` 失敗を**ヘッダ KEK_pw 不一致 = WrongPassword** と意味論的に再分類する経路を Sub-E Rev2 で再検討するか、現状の妥協を test-design §EC-10 / 設計書 REQ-S11 に注記して期待値を狭める。
+
+##### 工程5 への引継ぎ
+
+- **TC-E-P01 property test**: shikomi-daemon に proptest dev-dep 追加が必要。OS シグナル経路の 1000 ケース不変条件検証は工程5 で補強候補（lifecycle.rs の単体テストで 1 ケース pass 済、現実の integration TC-E-I05 で 100ms 以内 lock 観測済）。
+- **TC-E-E01 田中ペルソナ E2E**: Sub-F (CLI) 完了後に `tokio::test` 経由 in-process 統合再現で実行。
+- **Bug-E-001**: リーダーへ完了報告で報告、工程5 で Sub-D Rev7 / Sub-E Rev2 検討。

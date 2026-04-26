@@ -13,7 +13,6 @@
 //! 4. `cache.unlock(vek).await` で `Unlocked` 遷移、`backoff.record_success()`
 //! 5. `IpcResponse::Unlocked` 応答 (VEK 自体は IPC に乗せない)
 
-use shikomi_core::error::CryptoError;
 use shikomi_core::ipc::secret_bytes::SerializableSecretBytes;
 use shikomi_core::ipc::{IpcErrorCode, IpcResponse};
 use shikomi_infra::persistence::vault_migration::MigrationError;
@@ -21,6 +20,7 @@ use shikomi_infra::persistence::VaultRepository;
 
 use super::error_mapping::migration_error_to_ipc;
 use super::V2Context;
+use crate::backoff::unlock::should_count_failure;
 
 /// `IpcRequest::Unlock` を処理する。
 pub async fn handle_unlock<R: VaultRepository + ?Sized>(
@@ -81,6 +81,7 @@ pub async fn handle_unlock<R: VaultRepository + ?Sized>(
         Err(err) => {
             // 失敗種別ごとの backoff カウント判定 (§F-E1 step 4)
             //
+            // 判定ロジックは `backoff::unlock::should_count_failure` に集約。
             // **`Crypto(WrongPassword)` のみ** カウント。他は backoff 対象外:
             // - `AeadTagMismatch`: vault.db 改竄経路、L2 DoS 防衛で除外
             // - `NonceLimitExceeded`: 内部状態起因、ユーザ入力起因でない
@@ -88,7 +89,10 @@ pub async fn handle_unlock<R: VaultRepository + ?Sized>(
             // - `InvalidMnemonic`: recovery 入力検証失敗 (MSG-S12)、独立経路
             // - `RecoveryRequired`: パスワード経路で `MasterPassword::new` 失敗等、
             //   `IpcErrorCode::RecoveryRequired` 透過 (§C-27)
-            if matches!(err, MigrationError::Crypto(CryptoError::WrongPassword)) {
+            //
+            // ロジック分離により TC-E-U16 ユニットテストが should_count_failure を
+            // 直接検証可能 (`MigrationError → bool` 純関数)。
+            if should_count_failure(&err) {
                 let mut backoff_guard = ctx.backoff.lock().await;
                 backoff_guard.record_failure();
             }

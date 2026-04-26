@@ -156,4 +156,77 @@ mod tests {
         let req = IpcRequest::RemoveRecord { id };
         assert_eq!(req.variant_name(), "remove_record");
     }
+
+    // -----------------------------------------------------------------
+    // TC-E-U13: V2 variant_name 全網羅 (Sub-E test-design §14.4)
+    // -----------------------------------------------------------------
+    //
+    // 設計書凍結文字列:
+    //   IpcRequest V2: "unlock" / "lock" / "change_password" /
+    //                  "rotate_recovery" / "rekey"
+    // `is_v2_only()` も同 5 variant 全てで true、V1 サブセット 5 variant では
+    // false であることを担保する。
+
+    use crate::ipc::secret_bytes::SerializableSecretBytes;
+    use crate::secret::SecretBytes;
+
+    fn empty_secret() -> SerializableSecretBytes {
+        SerializableSecretBytes::new(SecretBytes::from_vec(b"x".to_vec()))
+    }
+
+    #[test]
+    fn test_variant_name_v2_unlock() {
+        let req = IpcRequest::Unlock {
+            master_password: empty_secret(),
+            recovery: None,
+        };
+        assert_eq!(req.variant_name(), "unlock");
+        assert!(req.is_v2_only(), "Unlock must be V2-only");
+    }
+
+    #[test]
+    fn test_variant_name_v2_lock() {
+        let req = IpcRequest::Lock;
+        assert_eq!(req.variant_name(), "lock");
+        assert!(req.is_v2_only(), "Lock must be V2-only");
+    }
+
+    #[test]
+    fn test_variant_name_v2_change_password() {
+        let req = IpcRequest::ChangePassword {
+            old: empty_secret(),
+            new: empty_secret(),
+        };
+        assert_eq!(req.variant_name(), "change_password");
+        assert!(req.is_v2_only(), "ChangePassword must be V2-only");
+    }
+
+    #[test]
+    fn test_variant_name_v2_rotate_recovery() {
+        let req = IpcRequest::RotateRecovery {
+            master_password: empty_secret(),
+        };
+        assert_eq!(req.variant_name(), "rotate_recovery");
+        assert!(req.is_v2_only(), "RotateRecovery must be V2-only");
+    }
+
+    #[test]
+    fn test_variant_name_v2_rekey() {
+        let req = IpcRequest::Rekey {
+            master_password: empty_secret(),
+        };
+        assert_eq!(req.variant_name(), "rekey");
+        assert!(req.is_v2_only(), "Rekey must be V2-only");
+    }
+
+    #[test]
+    fn test_v1_variants_are_not_v2_only() {
+        assert!(!IpcRequest::ListRecords.is_v2_only());
+        assert!(!IpcRequest::Handshake {
+            client_version: IpcProtocolVersion::V2,
+        }
+        .is_v2_only());
+        let id = RecordId::try_from_str("01234567-0123-7000-8000-0123456789ab").unwrap();
+        assert!(!IpcRequest::RemoveRecord { id }.is_v2_only());
+    }
 }

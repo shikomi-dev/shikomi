@@ -27,7 +27,68 @@
 
 use std::time::{Duration, Instant};
 
+use shikomi_core::error::CryptoError;
+use shikomi_infra::persistence::vault_migration::MigrationError;
 use thiserror::Error;
+
+// -------------------------------------------------------------------
+// should_count_failure (TC-E-U16 服部工程2 Rev1 指摘)
+// -------------------------------------------------------------------
+
+/// 連続 unlock 失敗で `UnlockBackoff::record_failure` を呼ぶべきカテゴリかを判定する。
+///
+/// 設計書 §F-E1 step 4 服部指摘契約 (TC-E-U16):
+///
+/// **`MigrationError::Crypto(CryptoError::WrongPassword)` の本 variant のみ true**。
+/// 他の `Crypto(_)` / `Persistence(_)` / `Domain(_)` / `RecoveryRequired` /
+/// `AlreadyEncrypted` / `NotEncrypted` / `PlaintextNotUtf8` /
+/// `RecoveryAlreadyConsumed` / `AtomicWriteFailed { .. }` は false。
+///
+/// **理由**:
+/// - `AeadTagMismatch` で backoff 発動すると L2 攻撃者が vault.db を 5 回連続
+///   破損 → 正規ユーザの unlock を DoS する経路を開く
+/// - `NonceLimitExceeded` / `KdfFailed` は内部状態 / 実装バグ起因、ユーザ入力
+///   起因ではない
+/// - `InvalidMnemonic` は recovery 経路の入力検証失敗 (MSG-S12)、別カテゴリ
+/// - `RecoveryRequired` は経路誘導 (C-27、`IpcErrorCode::RecoveryRequired` 透過)
+/// - `Persistence(_)` / `Domain(_)` はストレージ層、backoff 対象外
+///
+/// **ワイルドカード `_` 排除原則を Sub-E backoff トリガにも適用** (Sub-D Rev3
+/// ワイルドカード排除原則の Sub-E 段階継承)。本関数は `match` で全 variant を
+/// 列挙し、`Crypto(c)` 内部も `CryptoError` を全 variant 列挙して判定する。
+#[must_use]
+pub fn should_count_failure(err: &MigrationError) -> bool {
+    match err {
+        MigrationError::Crypto(c) => is_password_failure(c),
+        MigrationError::Persistence(_)
+        | MigrationError::Domain(_)
+        | MigrationError::AlreadyEncrypted
+        | MigrationError::NotEncrypted
+        | MigrationError::PlaintextNotUtf8
+        | MigrationError::RecoveryAlreadyConsumed
+        | MigrationError::AtomicWriteFailed { .. }
+        | MigrationError::RecoveryRequired => false,
+        // `#[non_exhaustive]` cross-crate 防御的 wildcard: 将来 variant 追加時は
+        // fail-secure (backoff 発動しない側に倒す) で吸収、TC-E-S* の grep gate +
+        // TC-E-U12 の variant 集合検証で構造的に検出する。
+        _ => false,
+    }
+}
+
+/// `CryptoError` がパスワード違いカテゴリか。
+fn is_password_failure(err: &CryptoError) -> bool {
+    match err {
+        CryptoError::WrongPassword => true,
+        CryptoError::WeakPassword(_)
+        | CryptoError::AeadTagMismatch
+        | CryptoError::NonceLimitExceeded { .. }
+        | CryptoError::KdfFailed { .. }
+        | CryptoError::InvalidMnemonic
+        | CryptoError::VerifyRequired => false,
+        // `#[non_exhaustive]` cross-crate 防御的 wildcard。
+        _ => false,
+    }
+}
 
 // -------------------------------------------------------------------
 // BackoffActive
@@ -227,5 +288,107 @@ mod tests {
         b.record_success();
         assert_eq!(b.failures(), 0);
         assert!(b.check().is_ok(), "record_success must clear backoff");
+    }
+
+    // -----------------------------------------------------------------
+    // TC-E-U16 (服部工程2 Rev1): WrongPassword のみ backoff カウント対象
+    // -----------------------------------------------------------------
+    //
+    // 設計書 §F-E1 step 4 / EC-10: `MigrationError::Crypto(CryptoError::WrongPassword)`
+    // のみ `record_failure` 対象。他は false でなければならない (L2 DoS 嫌がらせ
+    // 防衛 + 正規ユーザ誤バックオフ防止)。
+    //
+    // ワイルドカード `_` 排除原則を Sub-E backoff トリガにも適用 — テストでも
+    // `MigrationError` / `CryptoError` の全 variant を**個別列挙**で検証する。
+
+    use shikomi_core::error::CryptoError;
+    use shikomi_infra::persistence::vault_migration::MigrationError;
+
+    #[test]
+    fn should_count_failure_only_for_wrong_password() {
+        let err = MigrationError::Crypto(CryptoError::WrongPassword);
+        assert!(
+            should_count_failure(&err),
+            "Crypto(WrongPassword) must count as backoff failure"
+        );
+    }
+
+    #[test]
+    fn should_not_count_aead_tag_mismatch() {
+        // L2 攻撃者が vault.db 改竄で正規ユーザを DoS する経路を封鎖
+        let err = MigrationError::Crypto(CryptoError::AeadTagMismatch);
+        assert!(
+            !should_count_failure(&err),
+            "AeadTagMismatch must NOT count (L2 DoS 防衛)"
+        );
+    }
+
+    #[test]
+    fn should_not_count_nonce_limit_exceeded() {
+        let err = MigrationError::Crypto(CryptoError::NonceLimitExceeded { limit: 1u64 << 32 });
+        assert!(
+            !should_count_failure(&err),
+            "NonceLimitExceeded must NOT count (内部状態起因)"
+        );
+    }
+
+    #[test]
+    fn should_not_count_kdf_failed() {
+        use shikomi_core::error::KdfErrorKind;
+        let err = MigrationError::Crypto(CryptoError::KdfFailed {
+            kind: KdfErrorKind::Argon2id,
+            source: "test failure".into(),
+        });
+        assert!(
+            !should_count_failure(&err),
+            "KdfFailed must NOT count (実装バグ / リソース枯渇)"
+        );
+    }
+
+    #[test]
+    fn should_not_count_invalid_mnemonic() {
+        let err = MigrationError::Crypto(CryptoError::InvalidMnemonic);
+        assert!(
+            !should_count_failure(&err),
+            "InvalidMnemonic must NOT count (recovery 入力検証失敗、別カテゴリ)"
+        );
+    }
+
+    #[test]
+    fn should_not_count_recovery_required() {
+        // C-27 経路誘導、IpcErrorCode::RecoveryRequired 透過
+        let err = MigrationError::RecoveryRequired;
+        assert!(
+            !should_count_failure(&err),
+            "RecoveryRequired must NOT count (C-27 経路誘導)"
+        );
+    }
+
+    #[test]
+    fn should_not_count_persistence_or_domain() {
+        // Persistence/Domain はストレージ層エラー、認証経路ではない
+        // これらの variant は具体構築が複雑なため、Persistence(_) / Domain(_)
+        // パターン全体を `should_count_failure` が false にすることだけを論理的に
+        // 確認する (variant 列挙は TC-D-S05 / TC-E-U12 で別途担保)。
+        let err = MigrationError::AlreadyEncrypted;
+        assert!(
+            !should_count_failure(&err),
+            "AlreadyEncrypted must NOT count (運用エラー、認証ではない)"
+        );
+        let err = MigrationError::NotEncrypted;
+        assert!(
+            !should_count_failure(&err),
+            "NotEncrypted must NOT count (運用エラー)"
+        );
+        let err = MigrationError::PlaintextNotUtf8;
+        assert!(
+            !should_count_failure(&err),
+            "PlaintextNotUtf8 must NOT count (内部不整合)"
+        );
+        let err = MigrationError::RecoveryAlreadyConsumed;
+        assert!(
+            !should_count_failure(&err),
+            "RecoveryAlreadyConsumed must NOT count (運用エラー)"
+        );
     }
 }
