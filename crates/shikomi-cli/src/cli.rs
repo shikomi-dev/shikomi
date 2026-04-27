@@ -400,4 +400,93 @@ mod tests {
         ]);
         assert!(result.is_err());
     }
+
+    // ---------------------------------------------------------------
+    // Issue #76 (#74-B): Sub-F ユニットテスト 13 件 工程3 実装
+    // 設計根拠: docs/features/vault-encryption/test-design/sub-f-cli-subcommands/
+    //          {index.md §15.5, issue-76-verification.md §15.17.1}
+    // ---------------------------------------------------------------
+
+    /// TC-F-U01 (REQ-S15): `VaultSubcommand` の **7 variant** が clap 派生型として
+    /// 構築可能であり、`vault --help` 出力に 7 サブコマンド全てが列挙され、廃止された
+    /// `recovery-show` が**含まれない**こと。
+    ///
+    /// 検証手段: `clap::CommandFactory::command()` 経由で `vault` サブコマンド木を
+    /// 取り出し、子 subcommand 名集合を抽出して期待集合と比較する。`cargo run` を
+    /// 起動せず compile-time に決定する pure 検証で flaky を防ぐ。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/cli.rs::tests` (issue-76-verification.md §15.17.1
+    /// 推奨配置と一致)。
+    #[test]
+    fn tc_f_u01_vault_subcommand_help_lists_seven_variants_recovery_show_absent() {
+        use clap::CommandFactory;
+
+        let cmd = CliArgs::command();
+        let vault = cmd
+            .find_subcommand("vault")
+            .expect("vault subcommand must exist");
+        let names: std::collections::BTreeSet<String> = vault
+            .get_subcommands()
+            .map(|s| s.get_name().to_owned())
+            .collect();
+
+        let expected: std::collections::BTreeSet<String> = [
+            "encrypt",
+            "decrypt",
+            "unlock",
+            "lock",
+            "change-password",
+            "rekey",
+            "rotate-recovery",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+
+        assert_eq!(
+            names, expected,
+            "vault subcommand set must be exactly the 7 variants (recovery-show 廃止), got {names:?}"
+        );
+        assert!(
+            !names.contains("recovery-show"),
+            "recovery-show は廃止済 (Rev1 ペガサス致命指摘①解消)"
+        );
+    }
+
+    /// TC-F-U11 (C-37 / EC-F9): clap 派生型に `--no-mode-banner` / `--hide-banner` が
+    /// **定義されていない**こと、かつ `presenter::mode_banner::display` の呼出経路が
+    /// `usecase::list::summaries_to_views` と `presenter::list::render_list` を介して
+    /// `ProtectionModeBanner` を必須引数として要求することの型レベル機械検証。
+    ///
+    /// 設計書 §15.5 #11: 隠蔽不能補強。`--no-mode-banner` を渡すと clap が `unknown
+    /// flag` で reject + grep gate (TC-F-S02) が補完するが、本 unit test は clap parse
+    /// 経路のみ検証する。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/cli.rs::tests` (issue-76-verification.md §15.17.1
+    /// 「`cli.rs::tests` + grep gate」推奨配置の cli 部分)。
+    #[test]
+    fn tc_f_u11_vault_list_rejects_no_mode_banner_flag_and_render_list_requires_protection_mode() {
+        // (a) clap 派生型に `--no-mode-banner` は定義されていない → unknown arg として reject。
+        let result = CliArgs::try_parse_from(["shikomi", "list", "--no-mode-banner"]);
+        assert!(
+            result.is_err(),
+            "--no-mode-banner は未定義であるべき (隠蔽フラグ非導入、C-37 構造防衛)"
+        );
+
+        // (b) `--hide-banner` も同様に未定義。
+        let result2 = CliArgs::try_parse_from(["shikomi", "list", "--hide-banner"]);
+        assert!(
+            result2.is_err(),
+            "--hide-banner は未定義であるべき (C-37 構造防衛)"
+        );
+
+        // (c) `presenter::list::render_list` シグネチャは `ProtectionModeBanner` を必須引数
+        // として持つ (Option/Default 不可)。コンパイル時に関数ポインタ経由で型一致を強制し、
+        // 「protection_mode を渡さない」コードパスをドリフトできない構造に閉じ込める。
+        use crate::presenter::Locale;
+        use crate::view::RecordView;
+        use shikomi_core::ipc::ProtectionModeBanner;
+        let _: fn(&[RecordView], ProtectionModeBanner, bool, Locale) -> String =
+            crate::presenter::list::render_list;
+    }
 }

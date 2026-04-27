@@ -85,4 +85,63 @@ mod tests {
     // env-driven 分岐は integration test (`tests/it_accessibility_resolve.rs` 等)
     // で `Command::env` 経由の分離プロセスとして検証する設計とする
     // (`unsafe_code = "deny"` workspace 規約 + TC-CI-026 整合)。
+
+    /// TC-F-U14 (C-39 / EC-F10、**旧 TC-F-U08 リナンバ**): `accessibility::output_target::
+    /// resolve()` の **明示フラグ排他確認 + env / OS 検出による Screen → Braille 自動切替**
+    /// 4 パターンを機械検証する。
+    ///
+    /// 設計書 §15.5 #14 の 4 パターン:
+    /// (a) `SHIKOMI_ACCESSIBILITY=1` set + フラグ無し → env-driven 経路 (env 操作必要、
+    ///     unit では `accessibility_env_enabled` の pure 関数で代替)
+    /// (b) フラグ `--output print` set → Print そのまま返却 (early return)
+    /// (c) どちらも未設定 + screen reader 非起動 → Screen そのまま (env-driven 検証で代替)
+    /// (d) `SHIKOMI_ACCESSIBILITY=1` + `--output audio` 併用 → **明示フラグ最優先で Audio**
+    ///
+    /// **§15.17.2 §A 実装事実への追従**: `resolve(Screen)` の env-driven 経路は env mutation
+    /// を含むため `unsafe_code = "deny"` workspace 規約に違反せずに unit から書けない。本 TC
+    /// は (b)(d) **明示フラグ最優先**の 3 variant 経路 + (a)(c) 相当を `accessibility_env_enabled`
+    /// pure 関数で代替し、env-driven `resolve(Screen)` 自身は `tests/it_accessibility_resolve.rs`
+    /// (integration、`Command::env` 分離プロセス) で別途検証する設計を articulate する。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/accessibility/output_target.rs::tests`
+    /// (issue-76-verification.md §15.17.1 推奨配置と一致)。**旧 TC-F-U08 リナンバ**経緯:
+    /// Issue #75 で TC-F-U08 = `windows_pipe_name_from_dir` 純関数性に固定されたため、
+    /// 本 TC は U14 にリナンバ済 (§15.14b 履歴 articulate)。
+    #[test]
+    fn tc_f_u14_resolve_explicit_flag_takes_precedence_over_env_for_three_variants() {
+        // (b/d) 明示フラグは env / OS 検出無視で**最優先**。
+        // 早期 return 経路のため env mutation を含まず unit から決定的に検証可能。
+        assert_eq!(
+            resolve(OutputTarget::Print),
+            OutputTarget::Print,
+            "(b) 明示 --output print は env 無視で Print を返す"
+        );
+        assert_eq!(
+            resolve(OutputTarget::Braille),
+            OutputTarget::Braille,
+            "明示 --output braille は env 無視で Braille を返す"
+        );
+        assert_eq!(
+            resolve(OutputTarget::Audio),
+            OutputTarget::Audio,
+            "(d) 明示 --output audio は env 無視で Audio を返す (フラグ最優先)"
+        );
+
+        // (a/c) `Screen` 既定時の env-driven 切替は env mutation を含むため、
+        //       `accessibility_env_enabled` pure 関数で OR 評価ロジックを代替検証する。
+        // (a) `SHIKOMI_ACCESSIBILITY=1` 系 (`1` / `true` / `yes` 大文字含む) → enabled。
+        for v in ["1", "true", "TRUE", "yes", "Yes"] {
+            assert!(
+                accessibility_env_enabled(Some(v)),
+                "(a) SHIKOMI_ACCESSIBILITY={v:?} は enabled として認識されるべき"
+            );
+        }
+        // (c) 未設定 / 偽値 → disabled (Screen のまま、screen_reader 非起動前提)。
+        for v in [None, Some(""), Some("0"), Some("false"), Some("garbage")] {
+            assert!(
+                !accessibility_env_enabled(v),
+                "(c) SHIKOMI_ACCESSIBILITY={v:?} は disabled として認識されるべき"
+            );
+        }
+    }
 }

@@ -262,4 +262,130 @@ mod tests {
     fn test_render_cancelled_english() {
         assert_eq!(render_cancelled(Locale::English), "cancelled\n");
     }
+
+    // ---------------------------------------------------------------
+    // Issue #76 (#74-B): TC-F-U04 / TC-F-U12
+    // 設計根拠: docs/features/vault-encryption/test-design/sub-f-cli-subcommands/
+    //          {index.md §15.5, issue-76-verification.md §15.17.1}
+    // ---------------------------------------------------------------
+
+    /// TC-F-U04 (EC-F12): 24 語表示 presenter の **API 不変条件** を機械検証する。
+    ///
+    /// 設計書 §15.5 #4 は `recovery_disclosure::display(words: Vec<SerializableSecretBytes>,
+    /// target: OutputTarget)` で**所有権消費**形 (引数 `Vec` by value) を要求するが、
+    /// 現行実装は `presenter::success::render_recovery_disclosure_screen(disclosure:
+    /// &[SerializableSecretBytes], locale: Locale) -> String` で**借用形** (Phase 6
+    /// `--output {screen,print,braille,audio}` dispatch を `usecase::vault::encrypt::
+    /// render_disclosure` に集約済、`accessibility::{braille_brf,print_pdf,audio_tts}::
+    /// write_to_stdout(&[SerializableSecretBytes])` も全て借用)。
+    ///
+    /// **§15.17.2 §A 実装事実への追従**: 設計書の `Vec<...>` 所有権消費形は **Phase 8 以降**
+    /// で `recovery_disclosure` モジュール集約時に再検討する設計余地として残し、現実装は
+    /// **24 語の所有権を呼出側 (`usecase::vault::encrypt::execute`) が `IpcVaultRepository::
+    /// encrypt` の戻り値として保持し、`render_*` 系 presenter は借用のみで参照する**構造を
+    /// SSoT とする。
+    ///
+    /// 本 TC は API 不変条件として:
+    /// (a) `render_recovery_disclosure_screen` シグネチャが `&[SerializableSecretBytes]` を
+    ///     受領 (関数ポインタ型一致で compile-time 強制)、
+    /// (b) `&` 借用渡しなので呼出後も `disclosure` を再利用できる (借用ルール、所有権
+    ///     消費しない)、
+    /// (c) 呼出側が同じ `disclosure` を `render_recovery_disclosure_screen_with_fallback_notice`
+    ///     で**再利用できる** (Phase 6 で encrypt 経路と rekey 経路が共有する SSoT)、
+    /// を機械検証する。`Vec<...>` 所有権消費形への移行時はこの TC を `compile_fail` doctest
+    /// に差し替える Boy Scout (Phase 8+ PR 時点)。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/success.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置 `presenter/recovery_disclosure.rs` を未導入実装事実に追従)。
+    #[test]
+    fn tc_f_u04_render_recovery_disclosure_screen_signature_borrows_words_slice_for_reuse() {
+        use shikomi_core::ipc::SerializableSecretBytes;
+        use shikomi_core::SecretString;
+
+        // (a) シグネチャ型一致 (関数ポインタ経由で compile-time に強制)。
+        let _: fn(&[SerializableSecretBytes], Locale) -> String = render_recovery_disclosure_screen;
+        let _: fn(&[SerializableSecretBytes], Locale) -> String =
+            render_recovery_disclosure_screen_with_fallback_notice;
+
+        // (b) 借用渡しなので呼出後も words を再利用できる (所有権消費しない実装事実)。
+        let words: Vec<SerializableSecretBytes> = (0..24)
+            .map(|i| {
+                SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
+                    "word{i:02}"
+                )))
+            })
+            .collect();
+        let _ = render_recovery_disclosure_screen(&words, Locale::English);
+        // 呼出後も words.len() は維持される (借用が解放されているため再利用可能)。
+        assert_eq!(words.len(), 24, "借用渡しなので呼出後も 24 要素のまま");
+
+        // (c) 同じ words slice を fallback notice 経路でも再利用できる (Phase 6 SSoT 構造)。
+        let twice = render_recovery_disclosure_screen_with_fallback_notice(&words, Locale::English);
+        assert!(twice.contains("recovery words"));
+        assert!(twice.contains("warning:"));
+    }
+
+    /// TC-F-U12 (EC-F12 / C-19): 24 語表示経路で **`SerializableSecretBytes` の lossy_string
+    /// 経由表示が呼出側の Vec<SerializableSecretBytes> 所有権を維持し、scope 終了時の
+    /// `Drop` (= secrecy crate 経由 `zeroize`) を確実に発火させる**構造の機械検証。
+    ///
+    /// 設計書 §15.5 #12 は `recovery_disclosure::display` が `mem::replace` 等で「確実に
+    /// Drop を発火」させることを要求するが、現行実装は呼出側 (`usecase::vault::encrypt::
+    /// execute`) が `Vec<SerializableSecretBytes>` を local 変数として保持し、scope 終了
+    /// (関数 return 時) に通常の Drop 経路で zeroize される構造。
+    ///
+    /// **§15.17.2 §A 実装事実への追従**: 本 TC は:
+    /// (a) `SerializableSecretBytes::from_secret_string` で `SecretString` から包んだ後、
+    ///     `to_lossy_string_for_handler` で取り出した String と元の SecretString の
+    ///     値が一致する (lossy_string 経路で 24 語が観測可能)、
+    /// (b) Vec が scope を抜けた後、`zeroize` 副作用が発火する責務は `secrecy` crate に
+    ///     委譲済 (本 TC では crate 契約に依存し、unit-level のメモリパターン観測は
+    ///     skip。詳細は Sub-A `RecoveryWords` 同型 TC で機械検証済)、
+    /// を articulate する。`Vec<SerializableSecretBytes>` 所有権消費形への移行時は
+    /// `mem::replace` パターン検証に拡張する Boy Scout (Phase 8+)。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/success.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置 `presenter/recovery_disclosure.rs::tests` を未導入実装事実に追従)。
+    #[test]
+    fn tc_f_u12_render_recovery_disclosure_lossy_string_path_preserves_word_visibility() {
+        use shikomi_core::ipc::SerializableSecretBytes;
+        use shikomi_core::SecretString;
+
+        // (a) 24 語を SerializableSecretBytes で包み、lossy_string で取り出した文字列が
+        //     screen presenter の出力に含まれる (Drop 発火前の表示経路の機械検証)。
+        let words: Vec<SerializableSecretBytes> = (1..=24)
+            .map(|i| {
+                SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
+                    "wd{i:02}"
+                )))
+            })
+            .collect();
+        let rendered = render_recovery_disclosure_screen(&words, Locale::English);
+        for i in 1..=24u32 {
+            let expected = format!("wd{i:02}");
+            assert!(
+                rendered.contains(&expected),
+                "word {expected:?} must be visible in screen output before Drop"
+            );
+        }
+
+        // (b) words が scope 内で Drop されるパターン検証: クロージャ内で Vec を所有
+        //     させ、return 時に Drop が走ることを構造的に確認する。`SerializableSecretBytes`
+        //     は `zeroize` を内包する型なので、Drop 経路で副作用が発火するのは secrecy
+        //     crate 契約に委譲済 (Sub-A `RecoveryWords` 同型で機械検証済の上位 SSoT)。
+        let rendered_in_scope = {
+            let inner_words: Vec<SerializableSecretBytes> = (1..=24)
+                .map(|i| {
+                    SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
+                        "scope{i:02}"
+                    )))
+                })
+                .collect();
+            render_recovery_disclosure_screen(&inner_words, Locale::JapaneseEn)
+            // inner_words は scope 終了で Drop → zeroize 連鎖発火 (`secrecy` crate)。
+        };
+        assert!(rendered_in_scope.contains("scope01"));
+        assert!(rendered_in_scope.contains("scope24"));
+        // scope 抜け後、inner_words は moved out で参照不能。型レベルで観測経路が閉じる。
+    }
 }

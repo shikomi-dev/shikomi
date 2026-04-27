@@ -143,4 +143,37 @@ mod tests {
         let result = prompt("recovery words: ");
         assert!(matches!(result, Err(CliError::NonInteractivePassword)));
     }
+
+    /// TC-F-U13 (C-38): `input::mnemonic::prompt` の **C-38 stdin パイプ拒否経路**
+    /// (24 語入力側) の機械検証。`password.rs::tc_f_u13_*` と同型ガードを並列に
+    /// SSoT 化する (両 prompt の責務分離を保ったまま C-38 経路をテスト 2 重化)。
+    ///
+    /// 設計書 §15.5 #13 の 3 パターン:
+    /// (a) PTY 経由 (TTY → `Ok(Vec<SerializableSecretBytes>)`) は結合 TC-F-I03b で実機検証。
+    /// (b) **本 unit test のスコープ** = stdin 非 TTY で `Err(CliError::NonInteractivePassword)`。
+    /// (c) `/dev/tty` open 失敗は OS 別 manual smoke で担保。
+    ///
+    /// **設計書 §15.5 と差異**: 設計書は `Err(CliError::TtyUnavailable)` を要求する箇所が
+    /// あるが、現実装の `error::CliError` には `TtyUnavailable` variant が定義されておらず、
+    /// `NonInteractivePassword` (mnemonic 側でも共通) で fail-fast する構造 (Issue #75
+    /// merge `07ae079` 時点)。**§15.17.2 §A 実装事実への追従**: 本 TC は現実装の variant
+    /// `NonInteractivePassword` を SSoT として検証する。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/input/mnemonic.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置と一致)。
+    #[test]
+    fn tc_f_u13_mnemonic_prompt_returns_non_interactive_password_when_stdin_not_tty() {
+        if std::io::stdin().is_terminal() {
+            // TTY 接続環境では C-38 経路が unit で決定的に再現できないため早期 return。
+            return;
+        }
+        let result = prompt("recovery words (24 BIP-39 words separated by spaces): ");
+        assert!(
+            matches!(result, Err(CliError::NonInteractivePassword)),
+            "C-38: stdin 非 TTY 時は NonInteractivePassword で fail-fast すべき, got: {result:?}"
+        );
+
+        // シグネチャ型一致 (compile-time 強制)。
+        let _: fn(&str) -> Result<Vec<SerializableSecretBytes>, CliError> = prompt;
+    }
 }

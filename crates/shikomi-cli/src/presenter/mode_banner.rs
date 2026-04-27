@@ -155,4 +155,129 @@ mod tests {
             }
         }
     }
+
+    // ---------------------------------------------------------------
+    // Issue #76 (#74-B): TC-F-U05 / TC-F-U07
+    // 設計根拠: docs/features/vault-encryption/test-design/sub-f-cli-subcommands/
+    //          {index.md §15.5, issue-76-verification.md §15.17.1}
+    // ---------------------------------------------------------------
+
+    /// TC-F-U05 (EC-F9): `mode_banner::display(ProtectionModeBanner)` が **4 variant
+    /// 全て**で正規 label 文字列を返し、`color_enabled = true` 時は ANSI カラー
+    /// シーケンス付き、`false` 時は剥離されたプレーン文字列を返す **NO_COLOR 切替**
+    /// の機械検証。
+    ///
+    /// 設計書 §15.5 #5 の (a) 4 variant × (b) NO_COLOR 切替を 1 関数で網羅検証する。
+    /// 既存の variant 単独検証 (`display_*_with_color_*`) と直交し、本 TC は variant
+    /// × color の **2 次元マトリクス**を一括 articulate する SSoT。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/mode_banner.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置と一致)。
+    #[test]
+    fn tc_f_u05_display_renders_four_variants_with_no_color_toggle() {
+        let cases = [
+            (
+                ProtectionModeBanner::Plaintext,
+                "[plaintext]",
+                ANSI_CYAN_DIM,
+            ),
+            (
+                ProtectionModeBanner::EncryptedLocked,
+                "[encrypted, locked]",
+                ANSI_YELLOW,
+            ),
+            (
+                ProtectionModeBanner::EncryptedUnlocked,
+                "[encrypted, unlocked]",
+                ANSI_GREEN,
+            ),
+            (ProtectionModeBanner::Unknown, "[unknown]", ANSI_RED),
+        ];
+
+        for (variant, expected_label, expected_color) in cases {
+            // (a) NO_COLOR 相当 (color_enabled = false): プレーン文字列のみ。
+            let plain = display(variant, false);
+            assert_eq!(
+                plain,
+                format!("{expected_label}\n"),
+                "{variant:?}: color_enabled = false で ANSI escape が含まれてはならない"
+            );
+            assert!(
+                !plain.contains("\x1b["),
+                "{variant:?}: NO_COLOR 経路で ANSI escape は除去されるべき"
+            );
+
+            // (b) color_enabled = true: ANSI カラー → label → reset の順。
+            let colored = display(variant, true);
+            assert!(
+                colored.starts_with(expected_color),
+                "{variant:?}: ANSI start sequence mismatch, got {colored:?}"
+            );
+            assert!(
+                colored.contains(expected_label),
+                "{variant:?}: label 文字列が含まれていない"
+            );
+            assert!(
+                colored.ends_with(&format!("{ANSI_RESET}\n")),
+                "{variant:?}: reset + 改行で終端すべき"
+            );
+        }
+    }
+
+    /// TC-F-U07 (C-37 / EC-F9): `match` 式が `ProtectionModeBanner` の 4 variant 全て
+    /// を網羅し、かつ **`#[non_exhaustive]` cross-crate 防御的 `_` arm を許容**して
+    /// fail-secure に倒すパターンの正当性を機械検証する (Sub-E TC-E-S01 同型、Rev1
+    /// ペテルギウス致命1 解消)。
+    ///
+    /// 設計書 §15.5 #7 の cross-crate match パターン:
+    /// `Plaintext => "p", EncryptedLocked => "el", EncryptedUnlocked => "eu",
+    /// Unknown => "u", _ => "fail-secure"` を本 enum に対して書き、4 variant 全てが
+    /// 期待 tag を返し、`_` arm が defensive fail-secure として正当に許容されること
+    /// (将来 variant 追加時にも fail-secure に倒れる) を確認する。
+    ///
+    /// `#[non_exhaustive]` 対応は本 enum 自体ではなく `shikomi_core::ipc::ProtectionModeBanner`
+    /// 側で凍結済 (cross-crate context)。本 unit test は CLI 側で `_` arm を書いた
+    /// match 式が `cargo check` 警告ゼロで通ること + 4 variant 全網羅マッピングを
+    /// 担保する。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/mode_banner.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置と一致)。
+    #[test]
+    fn tc_f_u07_protection_mode_banner_match_with_defensive_underscore_arm_compiles() {
+        fn tag_for(banner: ProtectionModeBanner) -> &'static str {
+            // Sub-E TC-E-S01 同型: 4 variant 明示 + `_` defensive fail-secure arm。
+            // `#[non_exhaustive]` cross-crate 防御 (将来追加 variant も "fail-secure" に倒す)。
+            match banner {
+                ProtectionModeBanner::Plaintext => "p",
+                ProtectionModeBanner::EncryptedLocked => "el",
+                ProtectionModeBanner::EncryptedUnlocked => "eu",
+                ProtectionModeBanner::Unknown => "u",
+                // 防御的 `_` arm: cross-crate `#[non_exhaustive]` の将来 variant 追加への
+                // 備え (clippy::wildcard_in_or_patterns 不適用)。
+                _ => "fail-secure",
+            }
+        }
+
+        // 4 variant 全網羅: 明示マッピングが正しく適用される。
+        assert_eq!(tag_for(ProtectionModeBanner::Plaintext), "p");
+        assert_eq!(tag_for(ProtectionModeBanner::EncryptedLocked), "el");
+        assert_eq!(tag_for(ProtectionModeBanner::EncryptedUnlocked), "eu");
+        assert_eq!(tag_for(ProtectionModeBanner::Unknown), "u");
+
+        // 4 tag が pairwise distinct であること (二重符号化の補助、`labels_are_pairwise_distinct_for_dual_encoding`
+        // と直交)。
+        let tags: std::collections::BTreeSet<&str> = [
+            tag_for(ProtectionModeBanner::Plaintext),
+            tag_for(ProtectionModeBanner::EncryptedLocked),
+            tag_for(ProtectionModeBanner::EncryptedUnlocked),
+            tag_for(ProtectionModeBanner::Unknown),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            tags.len(),
+            4,
+            "4 variant の tag は pairwise distinct であるべき"
+        );
+    }
 }

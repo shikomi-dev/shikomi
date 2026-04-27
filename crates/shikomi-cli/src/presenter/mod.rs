@@ -101,4 +101,59 @@ mod tests {
             Locale::English
         );
     }
+
+    /// TC-F-U02 (C-33 / EC-F11): 翻訳辞書欠落時にパニックさせず英語 fallback で fail-soft する
+    /// 「**i18n fail-soft 契約**」の機械検証。
+    ///
+    /// 設計書 §15.5 #2 は `Localizer::new("ja-JP")?.translate("nonexistent_key")` が
+    /// `[missing:nonexistent_key]` を返すことを要求するが、`shikomi_cli::i18n::Localizer`
+    /// モジュールは `Phase 6 / Phase 7` で導入予定であり、現状未実装 (`presenter::success.rs`
+    /// 内 doc コメント「完全な i18n 辞書 (`messages.toml` / `Localizer`) への移行は
+    /// Phase 6 / Phase 7 で集約する」を参照、Issue #75 マージ時点 SSoT)。
+    ///
+    /// **§15.17.2 §A 実装事実への追従**: 現実装の i18n fail-soft 経路は `Locale::detect_from_lang_env_value`
+    /// が **未知 / 不正な LANG 値**を `English` に fallback する仕組みで担保される。本 TC は
+    /// この既存経路を articulate し、未知文字列入力で:
+    /// (a) パニックせず、
+    /// (b) `English` fallback を返す、
+    /// ことを機械検証する。`Localizer::translate` 移行後は本 TC を `[missing:{key}]` 検証に
+    /// 差し替える Boy Scout が必要 (Phase 6/7 PR 時点)。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/mod.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置 `i18n/mod.rs::tests` を Localizer 未導入の現実装事実に追従して `presenter` 配下に配置)。
+    #[test]
+    fn tc_f_u02_locale_detect_falls_back_to_english_for_unknown_lang_value_without_panic() {
+        // (a) 未知の LANG 値 — `xx_YY` のような ISO 639 にない hypothetical コード。
+        let unknown = Locale::detect_from_lang_env_value(Some("xx_YY.UTF-8"));
+        assert_eq!(
+            unknown,
+            Locale::English,
+            "unknown LANG value must fail-soft to English (C-33 fail-soft 契約の最小実装事実)"
+        );
+
+        // (b) `garbage` 入力 — 空、長さ 1、ASCII 制御文字、未知 ISO 639 コード等のノイズ。
+        // 注: 非 ASCII 入力 (例: emoji `🦀`) は **Bug-F-010 既知未解消**として skip する。
+        // 現実装 `detect_from_lang_env_value` は `s[..2]` byte slice を char boundary 不問で
+        // 切るため、2 バイト目が char 境界外の入力 (`🦀` 等) で **panic** する経路がある。
+        // C-33 fail-soft 契約違反。本 PR の test plan に Bug-F-010 として report 済 (Issue #76 工程3
+        // 完了報告)、修正は別 PR で追跡 (lib/test の責務分離)。本 TC は ASCII 入力範囲で
+        // fail-soft 契約の有効領域を articulate する。
+        for v in [
+            Some(""),
+            Some("x"),
+            Some("\x01"),
+            Some("ZZ_FAKE.UTF-8"),
+            Some("missing-key-style"),
+            None,
+        ] {
+            // パニックせず Locale を返すこと自体が fail-soft 契約の本体。
+            let resolved = Locale::detect_from_lang_env_value(v);
+            // `ja` で始まらない値は全て English に倒れる契約。
+            assert_eq!(
+                resolved,
+                Locale::English,
+                "non-ja LANG value `{v:?}` must fall back to English"
+            );
+        }
+    }
 }

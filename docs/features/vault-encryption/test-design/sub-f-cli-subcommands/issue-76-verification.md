@@ -18,26 +18,34 @@
 
 #### 15.17.1 実装スコープ TC 13 件マトリクス（配置先 + Issue #76 進捗）
 
-| TC ID | 検証対象 | 配置先 (推奨) | 工程3 状態 |
+> **§15.17.2 §A SSoT 一方向追従**: 「配置先 (推奨)」は工程2 設計時の **想定** であり、工程3
+> 実装時に**実コード配置と整合**するよう本表を実装事実に追従して修正する (Issue #75 §15.14b
+> で確立した一方向追従ポリシー継承)。下表「配置先 (実装後 SSoT)」列が工程3 完了時点の真実源。
+
+| TC ID | 検証対象 | 配置先 (実装後 SSoT) | 工程3 状態 |
 |---|---|---|---|
-| TC-F-U01 | clap 派生型 `VaultSubcommand` 7 variant + `--help` 7 subcommands 表示 | `crates/shikomi-cli/src/cli.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U02 | i18n `Localizer::translate` 欠落 fallback `[missing:{key}]` | `crates/shikomi-cli/src/i18n/mod.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U03 | `decrypt_confirmation::prompt` paste 抑制 4 段時刻差検証 (`< 30ms = Err / >= 30ms = Ok`) | `crates/shikomi-cli/src/input/decrypt_confirmation.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U04 | `recovery_disclosure::display(words: Vec<SerializableSecretBytes>, target)` 所有権消費 (`compile_fail` doc test) | `crates/shikomi-cli/src/presenter/recovery_disclosure.rs` の rustdoc コメント内 | ⏳ Issue #76 工程3 |
-| TC-F-U05 | `mode_banner::display(ProtectionModeBanner)` 4 variant 文字列 + `NO_COLOR` 切替 | `crates/shikomi-cli/src/presenter/mode_banner.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U06 | `cache_relocked_warning::display()` MSG-S07/S19 + MSG-S20 連結 | `crates/shikomi-cli/src/presenter/cache_relocked_warning.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U07 | `match banner: ProtectionModeBanner` cross-crate enum + `_` defensive arm 許容 (Sub-E TC-E-S01 同型) | `crates/shikomi-cli/src/presenter/mode_banner.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U08 | `windows_pipe_name_from_dir` 純関数性 4 ケース | `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_tests` | ✅ **Issue #75 で実装済 `07ae079`** (Issue #76 では再実装不要、参照のみ) |
-| TC-F-U09 | `connect_with_vault_dir` MSG-S09(b) 強制発火 (Bug-F-009 Option α) | 同上 `windows_pipe_name_tests` | ✅ **Issue #75 で実装済 `07ae079`** (同上) |
-| TC-F-U10 | `process_hardening::install()` 3 OS `#[cfg(target_os)]` 分岐シグネチャ存在 | `crates/shikomi-cli/src/process_hardening/mod.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U11 | clap 派生型に `--no-mode-banner` 等の隠蔽フラグ非定義 + `usecase::list::execute` から `mode_banner::display` 到達経路 | `crates/shikomi-cli/src/cli.rs::tests` + grep gate | ⏳ Issue #76 工程3 |
-| TC-F-U12 | `recovery_disclosure::display` 関数本体 zeroize 連鎖 (`Vec<SerializableSecretBytes>` Drop 発火) | `crates/shikomi-cli/src/presenter/recovery_disclosure.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U13 | `input::password::prompt` / `input::mnemonic::prompt` 3 パターン (TTY OK / 非 TTY Err / `/dev/tty` open 失敗 Err) | `crates/shikomi-cli/src/input/password.rs::tests` / `input/mnemonic.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U14 | `accessibility::output_target::resolve()` 4 パターン (env / フラグ排他確認) **旧 TC-F-U08 リナンバ** | `crates/shikomi-cli/src/accessibility/output_target.rs::tests` | ⏳ Issue #76 工程3 |
-| TC-F-U15 | `usecase::vault::unlock` 各 `Result` → ExitCode SSoT (cli-subcommands.md §終了コード SSoT) **旧 TC-F-U09 リナンバ** | `crates/shikomi-cli/src/usecase/vault/unlock.rs::tests` | ⏳ Issue #76 工程3 |
+| TC-F-U01 | clap 派生型 `VaultSubcommand` 7 variant + `--help` 7 subcommands 表示 | `crates/shikomi-cli/src/cli.rs::tests::tc_f_u01_vault_subcommand_help_lists_seven_variants_recovery_show_absent` | ✅ **Issue #76 で実装済** |
+| TC-F-U02 | i18n fallback (現実装事実: `Locale::detect_from_lang_env_value` 未知 LANG 値 fail-soft → English)。**設計書 §15.5 #2 の `Localizer::translate` 経路は Phase 6/7 で `shikomi_cli::i18n::Localizer` モジュール導入時に集約予定** (`presenter/success.rs` 内 doc コメント SSoT 参照)、現実装は `Locale::detect_from_lang_env_value` 経由の fail-soft 経路のみ。Phase 6/7 移行時に本 TC を `Localizer::translate("nonexistent_key") == "[missing:nonexistent_key]"` 検証に差し替える Boy Scout 必要 | `crates/shikomi-cli/src/presenter/mod.rs::tests::tc_f_u02_locale_detect_falls_back_to_english_for_unknown_lang_value_without_panic` | ✅ **Issue #76 で実装済** (推奨配置 `i18n/mod.rs::tests` を未導入実装事実に追従) |
+| TC-F-U03 | `vault decrypt` 確認文字列 `"DECRYPT"` 完全一致契約 (現実装事実: `usecase::vault::decrypt::is_decrypt_confirmation_literal` + `CONFIRMATION_LITERAL`)。**設計書 §15.5 #3 の paste 抑制 4 段時刻差検証は Phase 5 タスク**として `input::decrypt_confirmation::prompt` モジュール導入時に集約予定 (本ファイル冒頭 doc コメント「Phase 5 で paste 抑制 + ConstantTimeEq」)、現実装は Phase 2 単純文字列比較で wire。Phase 5 移行時に paste 抑制 4 段時刻差検証へ差し替える Boy Scout 必要 | `crates/shikomi-cli/src/usecase/vault/decrypt.rs::tests::tc_f_u03_decrypt_confirmation_literal_compare_only_accepts_uppercase_decrypt` | ✅ **Issue #76 で実装済** (推奨配置 `input/decrypt_confirmation.rs::tests` を未導入実装事実に追従) |
+| TC-F-U04 | 24 語表示 presenter API 不変条件 (現実装事実: `render_recovery_disclosure_screen(&[SerializableSecretBytes], Locale)` 借用形)。**設計書 §15.5 #4 の `Vec<SerializableSecretBytes>` 所有権消費形は Phase 8+ で `recovery_disclosure` モジュール集約時に再検討**、現実装は 24 語の所有権を呼出側 `usecase::vault::encrypt::execute` が保持し presenter は借用のみ参照する構造を SSoT とする。`compile_fail` doctest は Phase 8+ 移行時に追加 | `crates/shikomi-cli/src/presenter/success.rs::tests::tc_f_u04_render_recovery_disclosure_screen_signature_borrows_words_slice_for_reuse` | ✅ **Issue #76 で実装済** (推奨配置 `presenter/recovery_disclosure.rs` rustdoc を未導入実装事実に追従) |
+| TC-F-U05 | `mode_banner::display(ProtectionModeBanner)` 4 variant 文字列 + `NO_COLOR` 切替 | `crates/shikomi-cli/src/presenter/mode_banner.rs::tests::tc_f_u05_display_renders_four_variants_with_no_color_toggle` | ✅ **Issue #76 で実装済** |
+| TC-F-U06 | `cache_relocked_warning::display()` MSG-S07/S19 + MSG-S20 連結 + `success::render_rekeyed_with_fallback_notice` SSoT 整合 | `crates/shikomi-cli/src/presenter/cache_relocked_warning.rs::tests::tc_f_u06_display_concatenates_msg_s20_warning_for_both_locales` | ✅ **Issue #76 で実装済** |
+| TC-F-U07 | `match banner: ProtectionModeBanner` cross-crate enum + `_` defensive arm 許容 (Sub-E TC-E-S01 同型) | `crates/shikomi-cli/src/presenter/mode_banner.rs::tests::tc_f_u07_protection_mode_banner_match_with_defensive_underscore_arm_compiles` | ✅ **Issue #76 で実装済** |
+| TC-F-U08 | `windows_pipe_name_from_dir` 純関数性 4 ケース | `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_tests::tc_f_u08_*` (3 件 + 補助 `vault_dir_socket_path_is_pure` 1 件) | ✅ **Issue #75 で実装済 `07ae079`** (Issue #76 では再実装不要、参照のみ) |
+| TC-F-U09 | `connect_with_vault_dir` MSG-S09(b) 強制発火 (Bug-F-009 Option α) | 同上 `windows_pipe_name_tests::tc_f_u09_connect_with_vault_dir_returns_daemon_not_running_with_primary_path` | ✅ **Issue #75 で実装済 `07ae079`** (同上) |
+| TC-F-U10 | `hardening::core_dump::suppress` 3 OS `#[cfg(target_os)]` 分岐シグネチャ存在 (現実装事実: `process_hardening` ではなく `hardening::core_dump`) | `crates/shikomi-cli/src/hardening/core_dump.rs::tests::tc_f_u10_suppress_signature_exists` | ✅ **Issue #75 Phase 5 で実装済** (推奨配置 `process_hardening/mod.rs::tests` を実モジュール名 `hardening::core_dump` に追従) |
+| TC-F-U11 | clap 派生型に `--no-mode-banner` / `--hide-banner` 非定義 + `presenter::list::render_list` 必須引数 `ProtectionModeBanner` 型レベル強制 | `crates/shikomi-cli/src/cli.rs::tests::tc_f_u11_vault_list_rejects_no_mode_banner_flag_and_render_list_requires_protection_mode` | ✅ **Issue #76 で実装済** (grep gate は TC-F-S02 補完範疇) |
+| TC-F-U12 | 24 語表示経路で `SerializableSecretBytes::to_lossy_string_for_handler` 経由表示 + scope 終了 `Drop` 発火構造 (現実装事実: `Vec<SerializableSecretBytes>` 所有権を呼出側保持、scope 終了 Drop で `secrecy` crate 経由 zeroize)。**設計書 §15.5 #12 の `mem::replace` パターンは Phase 8+ で `recovery_disclosure::display` モジュール集約時に追加**、現実装は呼出側 scope の通常 Drop で zeroize 委譲 | `crates/shikomi-cli/src/presenter/success.rs::tests::tc_f_u12_render_recovery_disclosure_lossy_string_path_preserves_word_visibility` | ✅ **Issue #76 で実装済** (推奨配置 `presenter/recovery_disclosure.rs::tests` を未導入実装事実に追従) |
+| TC-F-U13 | `input::password::prompt` / `input::mnemonic::prompt` C-38 stdin 非 TTY 拒否 (PTY OK 経路は結合 TC-F-I12 で実機検証) | `crates/shikomi-cli/src/input/password.rs::tests::tc_f_u13_password_prompt_returns_non_interactive_password_when_stdin_not_tty` + `crates/shikomi-cli/src/input/mnemonic.rs::tests::tc_f_u13_mnemonic_prompt_returns_non_interactive_password_when_stdin_not_tty` (2 関数で 1 TC、両 prompt 並列保証) | ✅ **Issue #76 で実装済** |
+| TC-F-U14 | `accessibility::output_target::resolve()` 明示フラグ最優先 3 variant + env-driven 切替 pure 関数代替 **旧 TC-F-U08 リナンバ** | `crates/shikomi-cli/src/accessibility/output_target.rs::tests::tc_f_u14_resolve_explicit_flag_takes_precedence_over_env_for_three_variants` | ✅ **Issue #76 で実装済** |
+| TC-F-U15 | `CliError` 全 variant → `ExitCode` SSoT 写像マトリクス (cli-subcommands.md §終了コード SSoT) **旧 TC-F-U09 リナンバ** | `crates/shikomi-cli/src/error.rs::tests::tc_f_u15_exit_code_ssot_mapping_for_all_cli_error_variants_in_one_matrix` | ✅ **Issue #76 で実装済** (推奨配置 `usecase/vault/unlock.rs::tests` を「終了コード SSoT は `error::ExitCode` で集約、7 vault サブコマンド全てが共有」事実に追従) |
 | **Issue #76 実装件数** | — | — | **13 件 (TC-F-U01〜U07 + U10〜U15)** |
 | **Issue #75 既実装件数 (再実装不要)** | — | — | **2 件 (TC-F-U08, U09)** |
 | **Sub-F ユニット TC 総数** | — | — | **15 件** |
+
+**実装後検出 Bug articulate (Issue #76 工程3 副産物)**:
+
+- **Bug-F-010** (NEW、TC-F-U02 articulate 由来): `Locale::detect_from_lang_env_value(Some("🦀"))` のような **2 バイト目が char boundary 外の非 ASCII LANG 値**で `s[..2]` byte slice が panic する経路がある。C-33 fail-soft 契約違反 (`presenter/mod.rs` line 42、`s[..2].eq_ignore_ascii_case("ja")` を char boundary 不問で評価)。修正は別 Issue で `s.is_char_boundary(2)` ガード追加または `s.chars().take(2).collect::<String>()` 経由比較。Issue #76 工程3 完了報告に記載。
 
 #### 15.17.2 工程3 実装担当 (テスト担当=涅マユリ) 着手 Boy Scout SSoT
 

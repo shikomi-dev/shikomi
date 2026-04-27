@@ -73,4 +73,43 @@ mod tests {
             "expected NonInteractivePassword but got: {result:?}"
         );
     }
+
+    /// TC-F-U13 (C-38): `input::password::prompt` の **C-38 stdin パイプ拒否経路** を
+    /// 機械検証する。設計書 §15.5 #13 の 3 パターン (a)/(b)/(c) のうち、unit テスト
+    /// で決定的に検証可能な (b) 非 TTY 経路に集中する。
+    ///
+    /// (a) PTY 経由 (TTY → `Ok(SecretString)`) は **`expectrl` PTY 設定が CI runner
+    ///     に依存**するため結合 TC-F-I12 で実機検証 (issue-76-verification.md §15.17.3.3
+    ///     自己批判: PTY 利用 TC は `#[ignore]` フォールバック articulate)。
+    /// (b) **本 unit test のスコープ** = stdin 非 TTY (CI runner デフォルト) で
+    ///     `Err(CliError::NonInteractivePassword)` を返す。
+    /// (c) `/dev/tty` open 失敗は OS 側の挙動依存で unit テストでは決定的に再現でき
+    ///     ない (b) で C-38 経路の入口は守れているため OS 別 manual smoke で担保。
+    ///
+    /// **mnemonic 側 TC-F-U13 (b)** は同 Issue で `input/mnemonic.rs::tests` 配下に
+    /// 同名関数 `tc_f_u13_mnemonic_prompt_returns_non_interactive_password_when_stdin_not_tty`
+    /// として配置 (両 prompt の C-38 ガードを並列に保証する SSoT)。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/input/password.rs::tests` (issue-76-verification.md
+    /// §15.17.1 推奨配置と一致)。
+    #[test]
+    fn tc_f_u13_password_prompt_returns_non_interactive_password_when_stdin_not_tty() {
+        // CI runner は通常 stdin 非 TTY。本 TC は (b) 非 TTY 経路の決定的検証。
+        // 万一 dev box 等で TTY が接続されている場合、本 TC は契約違反ではないので
+        // skip 相当でフォローする (`tests/e2e_*` で対応経路を別途検証)。
+        if std::io::stdin().is_terminal() {
+            // TTY 接続環境では C-38 経路が unit で決定的に再現できないため早期 return。
+            // CI runner では非 TTY が前提のため、ここに到達しない。
+            return;
+        }
+        let result = prompt("test password: ");
+        assert!(
+            matches!(result, Err(CliError::NonInteractivePassword)),
+            "C-38: stdin 非 TTY 時は NonInteractivePassword で fail-fast すべき, got: {result:?}"
+        );
+
+        // (a) シグネチャ型一致: `&str → Result<SecretString, CliError>` を compile-time に
+        //     固定。Phase 5 で C-38 経路を変更しても呼出側を壊さない構造を強制。
+        let _: fn(&str) -> Result<SecretString, CliError> = prompt;
+    }
 }

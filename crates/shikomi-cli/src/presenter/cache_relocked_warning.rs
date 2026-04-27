@@ -95,4 +95,66 @@ mod tests {
         assert!(buf.starts_with("prefix\n\n"));
         assert!(buf.contains("warning:"));
     }
+
+    /// TC-F-U06 (C-32 / C-36 / EC-F6): `cache_relocked: false` 経路で `vault rekey` /
+    /// `rotate-recovery` 完了後に追記される **MSG-S07 / MSG-S19 完了文言 + MSG-S20「次
+    /// の操作前に `shikomi vault unlock` を再度実行してください」連結**を機械検証
+    /// する。
+    ///
+    /// 設計書 §15.5 #6 の検証手段に合わせて:
+    /// (a) English locale で MSG-S20 英文の必須キーワード (`unlock cache could not
+    ///     be refreshed`、`shikomi vault unlock`) を含む、
+    /// (b) JapaneseEn locale で MSG-S20 英文 + 和文 2 段が連結される、
+    /// (c) `success::render_rekeyed_with_fallback_notice` が **MSG-S07** + 24 語表示 +
+    ///     MSG-S20 連結警告を生成する経路で、本モジュール `display` と同じ MSG-S20
+    ///     文言を保つ (DRY、SSoT 1 箇所、Issue #75 Bug-F-002 §経路復活整合)、
+    /// を articulate する。終了コード 0 を返す呼出側責務 (C-31 / C-36) は本 unit test
+    /// では検証せず、結合 TC-F-I07c で間接担保。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/presenter/cache_relocked_warning.rs::tests`
+    /// (issue-76-verification.md §15.17.1 推奨配置と一致)。
+    #[test]
+    fn tc_f_u06_display_concatenates_msg_s20_warning_for_both_locales() {
+        // (a) English: warning + unlock hint の必須キーワード。
+        let en = display(Locale::English);
+        assert!(
+            en.contains("warning:"),
+            "english warning marker missing: {en}"
+        );
+        assert!(
+            en.contains("unlock cache could not be refreshed"),
+            "MSG-S20 english body missing: {en}"
+        );
+        assert!(
+            en.contains("shikomi vault unlock"),
+            "english unlock hint missing: {en}"
+        );
+
+        // (b) JapaneseEn: 英 + 日 2 段の MSG-S20 連結。
+        let ja = display(Locale::JapaneseEn);
+        assert!(
+            ja.contains("warning:"),
+            "english marker missing in ja: {ja}"
+        );
+        assert!(ja.contains("警告:"), "japanese marker missing: {ja}");
+        assert!(
+            ja.contains("`shikomi vault unlock` を再度実行"),
+            "japanese unlock hint missing: {ja}"
+        );
+
+        // (c) `success::render_rekeyed_with_fallback_notice` 経由で SSoT 整合: MSG-S07 完了
+        // 文言 (`rekeyed N records`) + 24 語表示の後に **本モジュールの MSG-S20 文言が同じ
+        // 文言で連結**される (DRY、Issue #75 Bug-F-002 §経路復活整合)。空 24 語スライスで
+        // 構造のみ検証する (zeroize 連鎖は TC-F-U12 範疇)。
+        let rekeyed_with_fallback =
+            crate::presenter::success::render_rekeyed_with_fallback_notice(7, &[], Locale::English);
+        assert!(
+            rekeyed_with_fallback.contains("rekeyed 7 records"),
+            "MSG-S07 完了文言 (records_count) が連結されるべき: {rekeyed_with_fallback}"
+        );
+        assert!(
+            rekeyed_with_fallback.contains("unlock cache could not be refreshed"),
+            "MSG-S20 警告文言が `render_rekeyed_with_fallback_notice` 経由で連結されるべき (DRY、SSoT 1 箇所): {rekeyed_with_fallback}"
+        );
+    }
 }
