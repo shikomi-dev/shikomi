@@ -128,11 +128,29 @@ impl IpcVaultRepository {
             // primary パスを `DaemonNotRunning` に詰めることで「あなたが指定した DIR の
             // socket が見つからなかった」を articulate し、render_daemon_not_running 経由で
             // 正しい hint が発火する経路に流す。
+            //
+            // ペテルギウス工程5 致命指摘4 解消 — エラー握り潰し回避: fallback 失敗の原因
+            // (`io::Error` 等) を `tracing::warn!` で観測可能化し、`-v` debug ログを有効化した
+            // ユーザ / 開発者が原因 chain を追跡できる経路を保持する。`DaemonNotRunning(primary)`
+            // で MSG-S09(b) を発火させる UX 契約と、原因情報の保持を両立する。
             return match Self::default_socket_path() {
-                Ok(fallback) => {
-                    Self::connect(&fallback).or(Err(PersistenceError::DaemonNotRunning(primary)))
+                Ok(fallback) => Self::connect(&fallback).map_err(|fallback_err| {
+                    tracing::warn!(
+                        primary = %primary.display(),
+                        fallback = %fallback.display(),
+                        error = %fallback_err,
+                        "connect_with_vault_dir: primary and fallback both failed; surfacing MSG-S09(b)"
+                    );
+                    PersistenceError::DaemonNotRunning(primary)
+                }),
+                Err(resolve_err) => {
+                    tracing::warn!(
+                        primary = %primary.display(),
+                        error = %resolve_err,
+                        "connect_with_vault_dir: primary failed and fallback resolution failed; surfacing MSG-S09(b)"
+                    );
+                    Err(PersistenceError::DaemonNotRunning(primary))
                 }
-                Err(_) => Err(PersistenceError::DaemonNotRunning(primary)),
             };
         }
         // `vault_dir` 未指定経路: 既存挙動を維持 (path hint なしのため infra error をそのまま伝播)。
@@ -545,36 +563,44 @@ fn vault_dir_socket_path(dir: &Path) -> PathBuf {
     }
 }
 
-/// `<DIR>` 絶対パスから Windows pipe 名 `<H>` を導出する純関数（Issue #75 Bug-F-007 解消、
+/// `<DIR>` 絶対パスから Windows pipe 名 `<H>` を導出する**純関数**（Issue #75 Bug-F-007 解消、
 /// `cli-subcommands.md` §Bug-F-007 解消 §Windows pipe 名の `<H>` 契約）。
 ///
-/// アルゴリズム:
-/// 1. `<DIR>` を絶対パスに正規化（`Path::to_string_lossy()` 経由、NFC は ASCII / 一般的な
-///    OS パスでは恒等変換のため省略 — 非 ASCII path での衝突可能性は受容、別 PR で再評価可）
-/// 2. lowercase 化（Windows path の case-insensitive convention に整合、`to_lowercase()`）
-/// 3. SHA-256 でダイジェスト
-/// 4. 32 byte ダイジェスト → Base32（小文字 `a-z2-7`、パディング無し）→ 先頭 16 文字
+/// アルゴリズム（**全段階 IO アクセスなしの pure function**、ペテルギウス工程5 致命指摘1 解消）:
+/// 1. `<DIR>` の path 文字列化（`Path::to_string_lossy()` 経由、入力文字列を SSoT として固定
+///    → CLI / daemon が同一 `<DIR>` 文字列から同一 hash を導出することを保証）
+/// 2. **Unicode NFC 正規化** (`unicode-normalization::UnicodeNormalization::nfc`) — 設計書契約。
+///    異なるコードポイント表現（NFC / NFD で表現される濁点付き文字等）でも同一 hash になる
+/// 3. lowercase 化（Windows path の case-insensitive convention に整合、`to_lowercase()`）
+/// 4. SHA-256 でダイジェスト
+/// 5. 32 byte ダイジェスト → Base32（小文字 `a-z2-7`、パディング無し）→ 先頭 16 文字
+///
+/// **`canonicalize` は採用しない**: IO 操作（symlink 解決 / ファイル存在依存）を含むため
+/// 純関数性が崩壊する。CLI が canonicalize を呼んだ時と daemon が呼んだ時で symlink 状況が
+/// 異なれば異なる hash が出るため、契約「CLI / daemon が同一 `<DIR>` から同一 pipe 名」を
+/// 構造的に裏切る（ペテルギウス工程5 致命指摘1）。`<DIR>` 文字列そのものを SSoT に固定し、
+/// canonicalize 責務はユーザ / CLI 起動時の `--vault-dir` 引数評価に閉じる。
 ///
 /// 16 文字（5 bit × 16 = 80 bit）は 64 文字制限の Windows pipe 名内に収まり、誕生日攻撃で
-/// `2^40` の衝突空間（実用上不可能）を確保する SSoT 妥協値。CLI / daemon が同一 `<DIR>` から
-/// 同一 `<H>` を導出することで、どちらが先に socket bind したかに依らず接続できる。
+/// `2^40` の衝突空間（実用上不可能）を確保する SSoT 妥協値。
 ///
 /// # Examples
 /// 異なる DIR は異なる pipe 名を導出し、同一 DIR は決定的に同じ名を返す。
+/// NFC と NFD で表現された同一文字列も同じ hash になる（NFC 正規化により）。
 #[cfg(any(windows, test))]
 fn windows_pipe_name_from_dir(dir: &Path) -> String {
     use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
 
-    // (1) 絶対パスへ正規化（canonicalize は IO 失敗時に元のパスを返す best-effort）
-    let abs = dir
-        .to_path_buf()
-        .canonicalize()
-        .unwrap_or_else(|_| dir.to_path_buf());
-    // (2) lowercase 化（Windows convention）
-    let normalized = abs.to_string_lossy().to_lowercase();
-    // (3) SHA-256
+    // (1) path 文字列化（IO アクセスなし、入力 SSoT を保持）
+    let raw = dir.to_string_lossy();
+    // (2) Unicode NFC 正規化（設計書契約、異なるコードポイント表現を統一）
+    let nfc: String = raw.nfc().collect();
+    // (3) lowercase 化（Windows convention）
+    let normalized = nfc.to_lowercase();
+    // (4) SHA-256
     let digest = Sha256::digest(normalized.as_bytes());
-    // (4) Base32 (lowercase, no padding) → 先頭 16 文字
+    // (5) Base32 (lowercase, no padding) → 先頭 16 文字
     base32_lower_no_pad(digest.as_ref(), 16)
 }
 
@@ -689,18 +715,55 @@ mod windows_pipe_name_tests {
     ///
     /// `IpcVaultRepository` は `Debug` 非実装のため `result.unwrap_err()` 経由で error を
     /// 取り出して variant 判定する（`Ok(_)` 経路に到達した場合は別 panic ヘルパで articulate）。
+    ///
+    /// **決定性確保**（ペテルギウス工程5 致命指摘3、Bug-G-005 教訓踏襲）: CI 環境で偶然
+    /// daemon が動いていた場合に偶発 PASS / FAIL する罠を構造的に塞ぐため、test 内で
+    /// `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` を `remove_var` して fallback
+    /// 経路を確実に `CannotResolveVaultDir` で失敗させる。env 操作の競合は
+    /// `#[serial_test::serial]` で他テストと直列化する。
+    ///
+    /// `unsafe { std::env::remove_var(...) }` は Rust 2024 edition の env 操作 unsafe 化
+    /// 規約に従う（test スコープ内のみ、`serial_test` で他スレッドと直列化済）。
     #[test]
+    #[serial_test::serial(env_xdg_home)]
     fn tc_f_u09_connect_with_vault_dir_returns_daemon_not_running_with_primary_path() {
+        // 既存 env 値を保存（test 終了時に restore する責務、Drop guard で fail-safe）
+        let saved_xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+        let saved_home = std::env::var("HOME").ok();
+        let saved_vault_dir = std::env::var("SHIKOMI_VAULT_DIR").ok();
+
+        // ペテルギウス指摘3 解消: fallback 経路の決定的失敗化。
+        // `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` を全て unset することで
+        // `default_socket_path()` が `CannotResolveVaultDir` を返す経路を強制する。
+        // SAFETY: env 操作は本 test スコープに閉じ、`#[serial_test::serial]` で他 test との
+        // 競合を排除済 (Rust 2024 edition の unsafe env 規約遵守)。
+        // (clippy::all = deny だが Rust edition 互換層として許容、修正後 restore する)。
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var("HOME");
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+
         // socket が存在しない tempdir を vault_dir として指定。
-        // daemon は当然動いていないため primary connect は必ず失敗する。
-        // fallback (default_socket_path) も daemon 不在で connect 失敗する想定 (CI 環境)。
+        // 上記 env unset により fallback も決定的に失敗する。
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let result = super::IpcVaultRepository::connect_with_vault_dir(Some(tmp.path()));
+
+        // 検証前に env を restore (assert 失敗時にも restore したいため Drop guard 風に
+        // 早めに実行)。restore 後に検証 → 検証失敗時の panic でも env は元に戻る。
+        if let Some(v) = saved_xdg {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        }
+        if let Some(v) = saved_home {
+            std::env::set_var("HOME", v);
+        }
+        if let Some(v) = saved_vault_dir {
+            std::env::set_var("SHIKOMI_VAULT_DIR", v);
+        }
+
         // Debug 非実装の Ok 変種は出さず、is_ok 判定で先に panic させる。
         assert!(
             result.is_err(),
-            "Bug-F-009: --vault-dir を未存在 tempdir に向けたら connect は err を返すべき \
-             (CI 環境で daemon が偶然走っていた場合は本テストの想定外)"
+            "Bug-F-009: --vault-dir を未存在 tempdir に向けて env 全 unset 状態で \
+             connect_with_vault_dir は err を返すべき (fallback 解決自体が失敗する経路)"
         );
         let err = result.err().expect("err checked above");
         match err {
@@ -713,8 +776,8 @@ mod windows_pipe_name_tests {
                 );
             }
             other => panic!(
-                "Bug-F-009: expected DaemonNotRunning(primary) when --vault-dir is set and no \
-                 daemon is reachable, got {other:?}"
+                "Bug-F-009: expected DaemonNotRunning(primary) when --vault-dir is set and \
+                 fallback is forced to fail (env all unset), got {other:?}"
             ),
         }
     }
