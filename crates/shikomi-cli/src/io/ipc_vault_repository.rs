@@ -95,16 +95,47 @@ impl IpcVaultRepository {
     /// daemon socket として用いる（Phase 2 規定: CLI は IPC 経由のみ、vault.db 直接操作禁止、
     /// `cli-subcommands.md` §Bug-F-007 解消 §`--vault-dir` の意味論 SSoT）。
     ///
+    /// ## Bug-F-009 (Option α) 反映 — エラー文言の MSG-S09(b) 強制
+    ///
+    /// `vault_dir` が `Some(<DIR>)` の場合、ユーザは明示的に「この vault dir の daemon に
+    /// 接続したい」と意思表示している。ここで fallback 経路（`XDG_RUNTIME_DIR` / `HOME`）が
+    /// 解決失敗 (`CannotResolveVaultDir`) すると古い infra MSG が前面に出てしまい、設計書
+    /// SSoT (`cli-subcommands.md` §Bug-F-007 §エラー文言 SSoT) で約束した
+    /// **MSG-S09(b) `--vault-dir <DIR>` 案内**が発火しない。
+    ///
+    /// 本関数は `vault_dir` 指定時の全経路失敗を `PersistenceError::DaemonNotRunning(primary)`
+    /// に変換し、`presenter::error::render_daemon_not_running` の MSG-S09(b) hint
+    /// （`pass --vault-dir <DIR>` 案内）を必ず発火させる。`primary` パスをそのまま付ける
+    /// ことでユーザに「あなたが指定した DIR の socket が見つからなかった」を articulate する。
+    ///
     /// # Errors
-    /// `<DIR>/shikomi.sock` も fallback 経路もすべて失敗時に `PersistenceError::DaemonNotRunning`。
+    /// - `vault_dir.is_some()` かつ全経路失敗: `PersistenceError::DaemonNotRunning(primary)`
+    ///   （MSG-S09(b) 経路、Bug-F-009 Option α）
+    /// - `vault_dir.is_none()` かつ fallback 解決失敗: `PersistenceError::CannotResolveVaultDir`
+    ///   （ユーザが path hint を出していないため、infra error の素の伝播が UX 的に妥当）
+    /// - `vault_dir.is_none()` かつ fallback connect 失敗: `PersistenceError::DaemonNotRunning(fallback)`
     pub fn connect_with_vault_dir(vault_dir: Option<&Path>) -> Result<Self, PersistenceError> {
         if let Some(dir) = vault_dir {
             let primary = vault_dir_socket_path(dir);
-            // 第 1 候補で接続成功すれば即返却。失敗時は default 経路に fallback する。
+            // 第 1 候補で接続成功すれば即返却。
             if let Ok(repo) = Self::connect(&primary) {
                 return Ok(repo);
             }
+            // 第 1 候補が daemon 不在で失敗 → fallback 経路を試す。
+            // Bug-F-009 (Option α): fallback 解決自体が失敗 (`XDG_RUNTIME_DIR` / `HOME` 未設定 等)
+            // または fallback connect が失敗した場合、`vault_dir` 指定経路としてユーザに
+            // MSG-S09(b) `pass --vault-dir <DIR>` 案内を返す責務を持つ。
+            // primary パスを `DaemonNotRunning` に詰めることで「あなたが指定した DIR の
+            // socket が見つからなかった」を articulate し、render_daemon_not_running 経由で
+            // 正しい hint が発火する経路に流す。
+            return match Self::default_socket_path() {
+                Ok(fallback) => {
+                    Self::connect(&fallback).or(Err(PersistenceError::DaemonNotRunning(primary)))
+                }
+                Err(_) => Err(PersistenceError::DaemonNotRunning(primary)),
+            };
         }
+        // `vault_dir` 未指定経路: 既存挙動を維持 (path hint なしのため infra error をそのまま伝播)。
         let fallback = Self::default_socket_path()?;
         Self::connect(&fallback)
     }
@@ -645,5 +676,46 @@ mod windows_pipe_name_tests {
             p1.ends_with("shikomi.sock"),
             "Unix socket path ends with shikomi.sock, got {p1:?}"
         );
+    }
+
+    /// TC-F-U09 (Bug-F-009): `--vault-dir <DIR>` 指定で primary が daemon 不在
+    /// → fallback も失敗の経路で、エラーが `DaemonNotRunning(primary)` に変換される
+    /// ことを機械検証（Option α、`presenter::error::render_daemon_not_running` 経由で
+    /// MSG-S09(b) `pass --vault-dir <DIR>` 案内を発火させる SSoT 経路）。
+    ///
+    /// 旧実装では fallback が `CannotResolveVaultDir` を返した場合に古い infra MSG
+    /// (`set SHIKOMI_VAULT_DIR or ensure a home directory is available`) が前面に出て
+    /// 設計書 §Bug-F-007 §エラー文言 SSoT に違反していた（マユリ Bug-F-009 上申で発覚）。
+    ///
+    /// `IpcVaultRepository` は `Debug` 非実装のため `result.unwrap_err()` 経由で error を
+    /// 取り出して variant 判定する（`Ok(_)` 経路に到達した場合は別 panic ヘルパで articulate）。
+    #[test]
+    fn tc_f_u09_connect_with_vault_dir_returns_daemon_not_running_with_primary_path() {
+        // socket が存在しない tempdir を vault_dir として指定。
+        // daemon は当然動いていないため primary connect は必ず失敗する。
+        // fallback (default_socket_path) も daemon 不在で connect 失敗する想定 (CI 環境)。
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let result = super::IpcVaultRepository::connect_with_vault_dir(Some(tmp.path()));
+        // Debug 非実装の Ok 変種は出さず、is_ok 判定で先に panic させる。
+        assert!(
+            result.is_err(),
+            "Bug-F-009: --vault-dir を未存在 tempdir に向けたら connect は err を返すべき \
+             (CI 環境で daemon が偶然走っていた場合は本テストの想定外)"
+        );
+        let err = result.err().expect("err checked above");
+        match err {
+            PersistenceError::DaemonNotRunning(p) => {
+                let expected = vault_dir_socket_path(tmp.path());
+                assert_eq!(
+                    p, expected,
+                    "DaemonNotRunning は primary (--vault-dir 由来) パスを保持して \
+                     MSG-S09(b) で「指定された DIR の socket が見つからなかった」を articulate すべき"
+                );
+            }
+            other => panic!(
+                "Bug-F-009: expected DaemonNotRunning(primary) when --vault-dir is set and no \
+                 daemon is reachable, got {other:?}"
+            ),
+        }
     }
 }
