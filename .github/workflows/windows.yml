@@ -26,6 +26,52 @@ jobs:
       - name: install just
         run: cargo install --locked just
 
+      # Bug-G-002 (Option B 採用): Win CI ランナーの Defender / Search Indexer が
+      # `vault.db` ハンドルを `~1.5 秒+` 連続スキャンロックする事象 (CI run 24972766065 観測)
+      # により、`vault-persistence` の指数バックオフ retry budget (~1675ms、
+      # `docs/features/vault-persistence/basic-design/security.md` §jitter SSoT) ですら
+      # `AtomicWriteFailed { code: 5 PermissionDenied }` が発生し `vault_migration_integration`
+      # 5 件 + TC-I29 主 + TC-I29-B が CI 連続 fail する。
+      #
+      # 対策: テスト作業領域 (`RUNNER_TEMP` = `tempfile::TempDir` の親) と
+      # `target/` (compile artifact) を Defender ExclusionPath に、vault DB の拡張子
+      # (`db` / `db-wal` / `db-shm` / `db-journal` / `db.new`) を ExclusionExtension に
+      # 登録し、スキャン経路を構造的に塞ぐ。
+      #
+      # 適用範囲: **CI 環境のみのワークアラウンド**。本番ユーザー環境 (Defender 配下) では
+      # 実装側の指数バックオフ retry が典型 race を吸収する設計を SSoT としている
+      # (典型 Defender 介入 ~250ms+ は retry 3 回目 (~350ms) で吸収、Bug-G-001 反映済)。
+      # `Add-MpPreference` 失敗時 (Defender 無効環境等) は `Write-Warning` のみで継続し、
+      # ジョブ全体は fail させない (Fail Secure の degrade 動作)。
+      - name: Add Windows Defender exclusions for vault-persistence test workspace
+        run: |
+          $paths = @($env:RUNNER_TEMP, "$env:GITHUB_WORKSPACE\target")
+          $exts = @("db", "db-wal", "db-shm", "db-journal", "db.new")
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "[OK] Defender ExclusionPath added: $p"
+            } catch {
+              Write-Warning "Failed to add Defender ExclusionPath '$p': $_"
+            }
+          }
+          foreach ($e in $exts) {
+            try {
+              Add-MpPreference -ExclusionExtension $e -ErrorAction Stop
+              Write-Host "[OK] Defender ExclusionExtension added: $e"
+            } catch {
+              Write-Warning "Failed to add Defender ExclusionExtension '$e': $_"
+            }
+          }
+          try {
+            Write-Host "--- current Defender ExclusionPath ---"
+            (Get-MpPreference).ExclusionPath | ForEach-Object { Write-Host "  $_" }
+            Write-Host "--- current Defender ExclusionExtension ---"
+            (Get-MpPreference).ExclusionExtension | ForEach-Object { Write-Host "  $_" }
+          } catch {
+            Write-Warning "Failed to enumerate Defender exclusions: $_"
+          }
+
       - name: just test-infra
         run: just test-infra
 
