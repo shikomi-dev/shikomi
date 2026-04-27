@@ -424,4 +424,146 @@ mod tests {
         }
         assert_eq!(ExitCode::from(&cli_err) as u8, 1);
     }
+
+    /// TC-F-U15 (REQ-S15 / cli-subcommands.md §終了コード SSoT、**旧 TC-F-U09 リナンバ**):
+    /// `usecase::vault::*` 戻り値型 `Result<ExitCode, CliError>` 経由で `CliError` 各
+    /// variant が **cli-subcommands.md §終了コード SSoT 表通り**に `ExitCode` へ写像
+    /// されることの **網羅マトリクス機械検証** (Rev1 ペガサス致命指摘②解消)。
+    ///
+    /// 設計書 §15.5 #15 の SSoT 表:
+    ///   成功 = **0** / 一般エラー = **1** / `WrongPassword`,`BackoffActive` = **2** /
+    ///   `VaultLocked`,`ProtectionModeUnknown`,`EncryptionUnsupported` = **3** /
+    ///   `ProtocolDowngrade` = **4** / `RecoveryRequired` = **5** /
+    ///   `IncompatibleAuthFlags` = **64 (`EX_USAGE`)** / `EX_CONFIG` = 78 (現状未使用)。
+    ///
+    /// 既存個別 TC (`test_exit_code_*`) と直交し、本 TC は **マトリクスを 1 関数で
+    /// 一括 articulate** することで、将来 `CliError` 新 variant 追加時に SSoT ドリフト
+    /// を即座に検出する SSoT 1 ファイル化を担保する (Bug-G-005 同型再演防止、
+    /// issue-76-verification.md §15.17.3.3 `Err パスも明示的にカバー`)。
+    ///
+    /// 配置先: `crates/shikomi-cli/src/error.rs::tests` (issue-76-verification.md §15.17.1
+    /// 推奨配置 `usecase/vault/unlock.rs::tests` を **cli-subcommands.md §終了コード SSoT
+    /// が `error::ExitCode` で SSoT 化**されている実装事実に追従。`unlock` だけでなく
+    /// 7 vault サブコマンド全てが共通 SSoT を共有するため、変換マトリクス本体は
+    /// `error.rs` で 1 箇所に集約)。
+    #[test]
+    fn tc_f_u15_exit_code_ssot_mapping_for_all_cli_error_variants_in_one_matrix() {
+        use shikomi_core::error::InvalidRecordLabelReason;
+
+        // SSoT 表に従う網羅マトリクス。新 variant 追加時はここに 1 行追加して SSoT
+        // の機械検証を更新する (Open/Closed)。
+        // `DomainError` は `Clone` 非実装のため、必要箇所で都度構築する。
+        let make_label_err = || DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty);
+        let id =
+            RecordId::new(uuid::Uuid::now_v7()).expect("uuid v7 must satisfy RecordId invariant");
+
+        // (exit 1) UserError 経路の SSoT 一括検証。
+        let user_error_cases: Vec<(&str, CliError)> = vec![
+            ("UsageError", CliError::UsageError("x".to_owned())),
+            ("InvalidLabel", CliError::InvalidLabel(make_label_err())),
+            ("InvalidId", CliError::InvalidId(make_label_err())),
+            ("RecordNotFound", CliError::RecordNotFound(id.clone())),
+            (
+                "VaultNotInitialized",
+                CliError::VaultNotInitialized(std::path::PathBuf::from("/tmp/vault")),
+            ),
+            ("NonInteractiveRemove", CliError::NonInteractiveRemove),
+            ("NonInteractivePassword", CliError::NonInteractivePassword),
+            (
+                "DaemonNotRunning",
+                CliError::DaemonNotRunning(std::path::PathBuf::from("/tmp/sock")),
+            ),
+            (
+                "ProtocolVersionMismatch",
+                CliError::ProtocolVersionMismatch {
+                    server: IpcProtocolVersion::V2,
+                    client: IpcProtocolVersion::V1,
+                },
+            ),
+            (
+                "Crypto(other)",
+                CliError::Crypto {
+                    reason: "aead-tag-mismatch".to_owned(),
+                },
+            ),
+        ];
+        for (name, err) in user_error_cases {
+            assert_eq!(
+                ExitCode::from(&err) as u8,
+                1,
+                "SSoT exit 1 (UserError) expected for {name}, but mapping drifted"
+            );
+        }
+
+        // (exit 2) SystemError 経路 (パスワード違い / Backoff / I/O 等)。
+        let system_error_cases: Vec<(&str, CliError)> = vec![
+            (
+                "Persistence",
+                CliError::Persistence(shikomi_infra::persistence::PersistenceError::Internal {
+                    reason: "x".into(),
+                }),
+            ),
+            ("Domain", CliError::Domain(make_label_err())),
+            ("WrongPassword", CliError::WrongPassword),
+            (
+                "BackoffActive(30s)",
+                CliError::BackoffActive { wait_secs: 30 },
+            ),
+            (
+                "UnexpectedIpcResponse",
+                CliError::UnexpectedIpcResponse {
+                    request_kind: "ListRecords",
+                },
+            ),
+        ];
+        for (name, err) in system_error_cases {
+            assert_eq!(
+                ExitCode::from(&err) as u8,
+                2,
+                "SSoT exit 2 (SystemError) expected for {name}, but mapping drifted"
+            );
+        }
+
+        // (exit 3) EncryptionUnsupported / VaultLocked / ProtectionModeUnknown SSoT。
+        for (name, err) in [
+            ("EncryptionUnsupported", CliError::EncryptionUnsupported),
+            ("VaultLocked", CliError::VaultLocked),
+            ("ProtectionModeUnknown", CliError::ProtectionModeUnknown),
+        ] {
+            assert_eq!(
+                ExitCode::from(&err) as u8,
+                3,
+                "SSoT exit 3 expected for {name}, but mapping drifted"
+            );
+        }
+
+        // (exit 4) ProtocolDowngrade SSoT (handshake 段 fail-fast)。
+        assert_eq!(
+            ExitCode::from(&CliError::ProtocolDowngrade) as u8,
+            4,
+            "SSoT exit 4 expected for ProtocolDowngrade"
+        );
+
+        // (exit 5) RecoveryRequired SSoT。
+        assert_eq!(
+            ExitCode::from(&CliError::RecoveryRequired) as u8,
+            5,
+            "SSoT exit 5 expected for RecoveryRequired"
+        );
+
+        // (exit 64) IncompatibleAuthFlags SSoT (`EX_USAGE`、Issue #75 Bug-F-001
+        // §排他違反検知 (defensive))。
+        assert_eq!(
+            ExitCode::from(&CliError::IncompatibleAuthFlags {
+                hint: "password and --recovery cannot be combined",
+            }) as u8,
+            64,
+            "SSoT exit 64 (EX_USAGE) expected for IncompatibleAuthFlags"
+        );
+
+        // 成功経路 (`Ok`) は ExitCode::Success = 0。`usecase::vault::*` の戻り値型
+        // `Result<(), CliError>` で `Ok` 時に `lib::run` が `ExitCode::Success` を返す
+        // 経路 (本 TC は `ExitCode::Success as u8 == 0` の SSoT 1 行を担保)。
+        assert_eq!(ExitCode::Success as u8, 0, "SSoT exit 0 (Success)");
+    }
 }
