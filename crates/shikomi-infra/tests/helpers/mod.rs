@@ -70,7 +70,7 @@ pub fn make_plaintext_vault(n: usize) -> Vault {
 //   Win CI ランナー (windows-latest) で `vault.db` ハンドルに対する
 //   原因不明の遅延 (~1570ms 一定、Bug-G-002〜004 で 3 ラウンド articulate) により、
 //   実装側の指数バックオフ retry budget (`security.md` §jitter SSoT 最悪 ~1675ms) 内側でも
-//   `vault_migration_integration` 5 件 + TC-I29 主 / TC-I29-B が `outcome="exhausted"` で
+//   `vault_migration_integration` 5 件 + TC-I29 主 / TC-I29-B が `outcome=exhausted` で
 //   flaky に fail する事象を、**テスト側の retry でのみ** 吸収する (Option K)。
 //
 // 設計原則:

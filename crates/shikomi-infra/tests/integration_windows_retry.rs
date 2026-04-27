@@ -109,7 +109,7 @@ fn spawn_exclusive_holder(
 ///    `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail
 /// 2. 経過時間が上限契約 (指数バックオフ最悪 ~1675ms) + ランナー余裕に収まる
 /// 3. `repo.load()` で復元した vault が新内容と一致 (rename 成功の振る舞い側証跡)
-/// 4. 監査ログに `outcome="pending"` が記録される (retry 試行直前 emit)
+/// 4. 監査ログに `outcome=pending` が記録される (retry 試行直前 emit)
 ///
 /// 設計書: docs/features/vault-persistence/test-design/integration.md §TC-I29
 /// AC-19 (Issue #65 retry 補強) 対応。
@@ -117,7 +117,7 @@ fn spawn_exclusive_holder(
 #[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.5, \
             run with --ignored locally. \
             Bug-G-002〜004 で Defender exclusion / Stop-Service WSearch+SysMain を試行したが \
-            すべて再現性 ±35ms で `outcome=\"exhausted\"` が継続 (rusqlite handle / MDE / AMSI / \
+            すべて再現性 ±35ms で `outcome=exhausted` が継続 (rusqlite handle / MDE / AMSI / \
             未知 filter driver いずれかの合成介入と推定)。AC-19 は TC-I29-A (DoS exhausted) + \
             TC-I29-D-1〜D-4 (TOCTOU reverify) + 監査ログ 3 経路で CI 上 部分担保。\
             ローカル `cargo test -p shikomi-infra --test integration_windows_retry -- --ignored` で \
@@ -178,24 +178,24 @@ fn tc_i29_aux_thread_short_hold_save_succeeds_within_deadline() {
     // exhausted は出ていないことを sanity check する。
     if logs_contain("persistence: rename retry event") {
         assert!(
-            logs_contain(r#"outcome="pending""#),
-            "retry イベントは出ているが outcome=\"pending\" が見当たらない"
+            logs_contain("outcome=pending"),
+            "retry イベントは出ているが outcome=pending が見当たらない"
         );
         assert!(
-            logs_contain(r#"outcome="succeeded""#),
-            "retry イベントは出ているが outcome=\"succeeded\" が見当たらない (= retry が race を吸収していない)"
+            logs_contain("outcome=succeeded"),
+            "retry イベントは出ているが outcome=succeeded が見当たらない (= retry が race を吸収していない)"
         );
     }
     // 本 TC は retry 成功経路なので exhausted は絶対に出てはいけない
     assert!(
-        !logs_contain(r#"outcome="exhausted""#),
-        "outcome=\"exhausted\" が記録されている (本 TC は retry 成功経路のはず)"
+        !logs_contain("outcome=exhausted"),
+        "outcome=exhausted が記録されている (本 TC は retry 成功経路のはず)"
     );
 }
 
 // ---------------------------------------------------------------------------
 // TC-I29-A: retry が 5 回全敗で `AtomicWriteFailed { stage: Rename }` を返し、
-//           `outcome="exhausted"` が error レベルで監査ログに発火する
+//           `outcome=exhausted` が error レベルで監査ログに発火する
 // ---------------------------------------------------------------------------
 
 /// TC-I29-A — 補助スレッドが `vault.db` を 800ms 間 share_mode(0) で保持し、
@@ -203,7 +203,7 @@ fn tc_i29_aux_thread_short_hold_save_succeeds_within_deadline() {
 ///
 /// 検証する観点:
 /// 1. `repo.save()` が `Err(AtomicWriteFailed { stage: Rename })` を返す
-/// 2. 監査ログに `outcome="exhausted"` が **error レベル** で発火している
+/// 2. 監査ログに `outcome=exhausted` が **error レベル** で発火している
 ///    — daemon 側 subscriber の DoS 兆候上位通報 (OWASP A09) の起点
 /// 3. `"rename retry exhausted"` メッセージが含まれている
 ///    — Audit::retry_event の error 分岐 が機能している
@@ -253,7 +253,7 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
     // 検証 2: 監査ログに exhausted 経路が error レベルで発火している
     // 失敗時は `logs_assert` で全ログを stderr に dump して原因究明可能化する
     let exhausted_present = logs_contain("rename retry exhausted");
-    let outcome_exhausted_present = logs_contain(r#"outcome="exhausted""#);
+    let outcome_exhausted_present = logs_contain("outcome=exhausted");
     if !exhausted_present || !outcome_exhausted_present {
         // logs_assert は traced_test が inject するこの test の local closure。
         // 失敗時に全捕捉ログを stderr に出力して CI ログから原因究明できるようにする。
@@ -275,23 +275,23 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
 
     // 検証 3: 全敗経路でも pending は最低 5 回出ている (attempt=1〜5 全て emit される)
     assert!(
-        logs_contain(r#"outcome="pending""#),
-        "outcome=\"pending\" が見当たらない (retry 試行直前の監査が発火していない)"
+        logs_contain("outcome=pending"),
+        "outcome=pending が見当たらない (retry 試行直前の監査が発火していない)"
     );
     // 全敗経路では succeeded は出てはいけない
     assert!(
-        !logs_contain(r#"outcome="succeeded""#),
-        "outcome=\"succeeded\" が記録されている (本 TC は retry 全敗経路のはず)"
+        !logs_contain("outcome=succeeded"),
+        "outcome=succeeded が記録されている (本 TC は retry 全敗経路のはず)"
     );
 }
 
 // ---------------------------------------------------------------------------
-// TC-I29-B: 補助スレッド不在 (race 無し) では `outcome="exhausted"` は出ない
+// TC-I29-B: 補助スレッド不在 (race 無し) では `outcome=exhausted` は出ない
 //           (CI 環境では Defender 等で偶発的 retry が発生し得るため、
 //            「pending/succeeded は許容、exhausted のみ NG」 で sanity check)
 // ---------------------------------------------------------------------------
 
-/// TC-I29-B — race の無い通常 save では `outcome="exhausted"` が emit されない
+/// TC-I29-B — race の無い通常 save では `outcome=exhausted` が emit されない
 /// (Bug-G-001 反映済、指数バックオフ retry budget 拡張により CI Defender 介入を構造的に吸収)。
 ///
 /// CI ランナー (windows-latest) では Defender / Indexer の介入で通常 save でも
@@ -308,7 +308,7 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
 #[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.5, \
             run with --ignored locally. \
             Bug-G-002〜004 で Defender exclusion / Stop-Service WSearch+SysMain を試行したが \
-            すべて再現性 ±35ms で `outcome=\"exhausted\"` が継続 (race 無し通常 save でも \
+            すべて再現性 ±35ms で `outcome=exhausted` が継続 (race 無し通常 save でも \
             CI ランナー固有のハンドル遅延が指数バックオフ ~1675ms を超える)。\
             AC-19 は TC-I29-A + TC-I29-D-1〜D-4 + 監査ログ 3 経路で CI 上 部分担保。\
             ローカル `cargo test -p shikomi-infra --test integration_windows_retry -- --ignored` で \
@@ -349,7 +349,7 @@ fn tc_i29_b_no_race_save_does_not_exhaust_retry() {
         );
     }
     assert!(
-        !logs_contain(r#"outcome="exhausted""#),
-        "race 無しなのに outcome=\"exhausted\" が emit された"
+        !logs_contain("outcome=exhausted"),
+        "race 無しなのに outcome=exhausted が emit された"
     );
 }
