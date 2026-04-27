@@ -72,6 +72,14 @@ fn seed_plaintext_vault(repo: &shikomi_infra::persistence::SqliteVaultRepository
 
 /// TC-D-I01: encrypt_vault → unlock_with_password で同 plaintext records 復元.
 #[test]
+#[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
+            test-design v8.4, run with --ignored locally. \
+            5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
+            Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
+            5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
+            VM レベルのファイルロック介入で実装側 / テスト側の retry budget をいくら拡張しても \
+            吸収不能と articulate 完了。AC-18 はローカル `cargo test -p shikomi-infra --test \
+            vault_migration_integration -- --ignored` で手動担保 (TC-I29 主 / B と統一方針)"]
 fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -110,6 +118,14 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
 /// 引数として渡す。decrypt_vault は内部で `unlock_internal_with_password` →
 /// 全 records `decrypt_one_record` → 平文 vault 構築 → atomic write を実行。
 #[test]
+#[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
+            test-design v8.4, run with --ignored locally. \
+            5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
+            Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
+            5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
+            VM レベルのファイルロック介入で実装側 / テスト側の retry budget をいくら拡張しても \
+            吸収不能と articulate 完了。AC-18 はローカル `cargo test -p shikomi-infra --test \
+            vault_migration_integration -- --ignored` で手動担保 (TC-I29 主 / B と統一方針)"]
 fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -162,6 +178,14 @@ fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
 /// - (b) **rekey 後 unlock_with_password が成功して vault load + records 復号できるか**
 ///   が Bug-D-002 の中核観察ポイント
 #[test]
+#[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
+            test-design v8.4, run with --ignored locally. \
+            5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
+            Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
+            5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
+            VM レベルのファイルロック介入で実装側 / テスト側の retry budget をいくら拡張しても \
+            吸収不能と articulate 完了。AC-18 はローカル `cargo test -p shikomi-infra --test \
+            vault_migration_integration -- --ignored` で手動担保 (TC-I29 主 / B と統一方針)"]
 fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -214,6 +238,14 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
 /// 新 VEK で再暗号化。同パスワードで decrypt_vault が**全 records 復号成功**
 /// するなら新 VEK 経路が完全に通っていることを意味する。
 #[test]
+#[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
+            test-design v8.4, run with --ignored locally. \
+            5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
+            Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
+            5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
+            VM レベルのファイルロック介入で実装側 / テスト側の retry budget をいくら拡張しても \
+            吸収不能と articulate 完了。AC-18 はローカル `cargo test -p shikomi-infra --test \
+            vault_migration_integration -- --ignored` で手動担保 (TC-I29 主 / B と統一方針)"]
 fn tc_d_i04_rekey_then_decrypt_vault_all_records_succeed() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());
@@ -269,6 +301,14 @@ fn tc_d_i04_rekey_then_decrypt_vault_all_records_succeed() {
 /// （v999 拒否）に置換済。本 TC は Sub-D の `VaultMigration::unlock_with_password`
 /// 経由で v1 暗号化 vault が正しく load されることを補助確認する。
 #[test]
+#[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
+            test-design v8.4, run with --ignored locally. \
+            5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
+            Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
+            5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
+            VM レベルのファイルロック介入で実装側 / テスト側の retry budget をいくら拡張しても \
+            吸収不能と articulate 完了。AC-18 はローカル `cargo test -p shikomi-infra --test \
+            vault_migration_integration -- --ignored` で手動担保 (TC-I29 主 / B と統一方針)"]
 fn tc_d_i05_req_p11_v1_accepted_via_vault_migration() {
     let dir = TempDir::new().unwrap();
     let repo = make_repo(dir.path());

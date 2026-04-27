@@ -586,3 +586,36 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 *- **本ヘルパは新規テストでも積極流用可** — vault.db を save する全 integration テストに横展開予定。ローカル開発では retry 経路が発火しないため通常のテスト時間影響なし*
 
 *Boy Scout: 退行防止のため `helpers/mod.rs` のドキュメント冒頭に Bug-G-005 経緯を 22 行で永続化、reviewer が「なぜテスト側 retry があるか」を 1 ファイルで把握可能*
+
+*改訂 v8.4: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-006 反映（Option K も無効、Option L-改 採用）。Option K のテスト側 retry (5 attempts × 線形バックオフ 500ms × attempt = 累積 ~13 秒待機) ですら CI で `vault_migration_integration` 5 件全敗 (CI run 24975346761、helper retry log で encrypt_vault attempt 1〜4 全敗 → panic at helpers/mod.rs:163 を確認)。これにより**真犯人は CI runner の VM レベルで発生する持続的ファイルロック介入** (Defender / WSearch / SysMain / rusqlite handle / MDE / AMSI 等の単一ではなく合成 / プロセスライフタイム規模で持続) と確定。コード / サービス設定 / テスト側 retry のいずれでも吸収不可能であり、これ以上の対症療法は執着の領域に入る。*
+
+*5 ラウンド実験統合表 (`vault_migration_integration` 5 件 / TC-I29 主 / TC-I29-B):*
+
+*| Run | 投入対策 | vault_migration 結果 | TC-I29 主 / B 結果 |*
+*|-----|---------|---------------------|-------------------|*
+*| Bug-G-002 | (なし、指数バックオフ retry budget 拡張のみ) | ✅ 偶発 PASS (3 ラウンド連続で誤認) | ❌ 1575ms / 1532ms exhausted |*
+*| Bug-G-003 | + `Add-MpPreference` Defender exclusion (`RUNNER_TEMP` / `target` / 拡張子 5 種) | ✅ 偶発 PASS | ❌ 1604ms / 1537ms exhausted |*
+*| Bug-G-004 | + `Stop-Service WSearch, SysMain -Force` | ✅ 偶発 PASS | ❌ 1570ms / 1583ms exhausted |*
+*| Bug-G-005 | + TC-I29 主 / B `#[ignore]`、vault_migration は素のまま | ❌ **5 件全 FAIL (flaky 確定、過去の PASS は偶発)** | 🔧 IGNORED |*
+*| Bug-G-006 | + Option K テスト側 retry (5 attempts × 500ms × attempt = ~13 秒) | ❌ **5 件全 FAIL (累積 ~13 秒待機ですら exhausted)** | 🔧 IGNORED |*
+
+*採用方針 (キャプテン決定 Option L-改): vault_migration 5 件にも `#[ignore]` 追加し TC-I29 系と統一処理。`continue-on-error` は不採用 (失敗を隠すのではなく 5 ラウンドの実験根拠を全て articulate)。*
+
+*本対応:*
+
+*- **5 件すべての `#[test]` 直下に `#[ignore = "..."]` 追加** — reason 文字列に「CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in test-design v8.4, run with --ignored locally」+ 5 ラウンド対策列挙 + AC-18 ローカル担保パス を必ず含める*
+*- **AC-18 トレーサビリティ** — CI green 上での担保は撤回し、「ローカル `cargo test -p shikomi-infra --test vault_migration_integration -- --ignored` で手動担保」へ degrade と articulate。AC-18 は本来「Win CI で 5 件 PASS」を意図していたが、CI runner の VM レベル制約により本意図は達成不能と確定*
+*- **テスト側 retry ヘルパは保持** — `helpers/mod.rs` の `save_with_test_rename_retry` / `migration_op_with_test_rename_retry` は `--ignored` 手動実行時に有効に機能する (CI 環境を回避すれば 1 attempt 内に成功する見込み)。将来の解除条件成立時に restore 容易化*
+
+***`#[ignore]` 解除条件 (TC-I29 主 / B / vault_migration 5 件 共通)**:*
+
+*- **(a)** GitHub Actions `windows-latest` runner image または GitHub-hosted runner 全体の更新で VM レベルファイルロック介入が解消されたことを実験的に確認できた場合*
+*- **(b)** 真犯人 (rusqlite handle 遅延 / MDE / AMSI / 未知 filter driver / その他) が別 PR で根治された場合*
+*- **(c)** `cargo test --ignored` 専用 CI ジョブ (例: self-hosted Win runner、または別 OS image) を整備し、そこで `vault_migration_integration` + TC-I29 系を担保するワークフローを別 PR で追加した場合*
+*- 上記 (a)〜(c) いずれにも該当しない盲目的解除は `error.md` §禁止事項 §`#[cfg(windows)] #[ignore]` 回避禁止 の意図 (根拠なき盲目的回避禁止) に反する。本 v8.4 + reason 文字列が「根拠ある articulate 済 ignore」であることを reviewer が即判定可能*
+
+*Boy Scout / 教訓:*
+
+*- 5 ラウンドの実験は「コード問題か / 環境問題か」を articulate するために必要だった (3 ラウンド時点で「CI 環境」と決定するには根拠不足)。本 v8.4 統合表は将来の同種問題 (CI 環境 vs 実装環境の境界判定) に対する判定パターンとして有効*
+*- 「偶発 PASS を対策効果と誤認した v8.0〜v8.2 の予測」は素直に履歴に残し、将来の reviewer が同じ罠を踏まないための negative pattern として保存する (Bug-F-003 再演防止と同方針)*
+*- `continue-on-error: true` で失敗を隠す Option Q は不採用。**設計書 articulate で「ignored」を可視化** + **解除条件を明文化** することで、CI スコープ錯覚 (Bug-F-003) の再演を構造的に防ぐ*
