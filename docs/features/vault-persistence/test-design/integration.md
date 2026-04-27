@@ -571,3 +571,18 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 *- ローカル手動実行: `cargo test -p shikomi-infra --test integration_windows_retry -- --ignored` (Win Defender exclusion 環境を強く推奨)*
 
 *Boy Scout: PR #71 の SSoT 整合化（`#[cfg(windows)] #[ignore]` 回避禁止条項）に新たに articulated な ignore 例外を加える形になるが、3 ラウンド実験データを `error.md` 直下ではなく test-design 改訂履歴に保存することで「設計禁止事項」を緩めずに「実験で articulate された compromise」を分離保管する。将来の reviewer は本 v8.2 履歴を参照することで「この ignore は根拠不足ではない」と即判定可能*
+
+*改訂 v8.3: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-005 反映（テスト側 retry での AC-18 担保、Option K 採用）。Bug-G-005 のマユリ追加観測で `vault_migration_integration` 5 件が CI で flaky fail することが判明（`Bug-G-002` 〜`G-004` で「PASS」と観測されたのは偶発的成功で、 v8.0 〜v8.2 の「指数バックオフで vault_migration 緑化見込み」予測は不適切）。原因は TC-I29 主 / TC-I29-B と同じ Win CI 固有のハンドル遅延 (~1570ms 一定)。本対応:*
+
+*- **実装側 SSoT は据置** — `security.md` §jitter 「最悪 ~1675ms / 平均 ~1550ms」は本番ユーザー契約のまま一切変更しない*
+*- **テスト側 retry を追加** — `crates/shikomi-infra/tests/helpers/mod.rs` に `save_with_test_rename_retry` / `migration_op_with_test_rename_retry` の 2 ヘルパを新設（`AtomicWriteStage::Rename` のみ対象、500ms × attempt 線形バックオフ × 5 attempts、その他エラーは即 panic で本来の test 失敗を露出）*
+*- **適用範囲** — `vault_migration_integration` 5 件（`tc_d_i01`〜`i05`）の `seed_plaintext_vault` 内 `repo.save` + 各 `migration.encrypt_vault` / `rekey_vault` / `decrypt_vault` 呼出をヘルパでラップ*
+*- **AC-18 トレーサビリティ** — 「テスト側 retry 込みで担保」と articulate（純粋な「実装単独で AC 担保」より弱い保証だが、CI 環境特性に対する compromise として AC-19 と同方針で運用）*
+
+*運用ルール:*
+
+*- **ヘルパ撤去条件** = (a) 真犯人 (rusqlite handle 遅延 / MDE / AMSI 等) が別 PR で根治、または (b) `cargo test --ignored` 専用 CI ジョブで遅延を許容できる場合（v8.2 の TC-I29 主 / B 解除条件と同方針）*
+*- **本ヘルパは「実装側 retry が機能していない」ことを意味しない** — 実装側 retry は本番ユーザーの典型 race (~250ms+) を吸収する設計のまま機能。CI 異常遅延 (~1570ms) は性質が異なる別事象（v8.2 articulate）で、本来 CI 環境固有の問題*
+*- **本ヘルパは新規テストでも積極流用可** — vault.db を save する全 integration テストに横展開予定。ローカル開発では retry 経路が発火しないため通常のテスト時間影響なし*
+
+*Boy Scout: 退行防止のため `helpers/mod.rs` のドキュメント冒頭に Bug-G-005 経緯を 22 行で永続化、reviewer が「なぜテスト側 retry があるか」を 1 ファイルで把握可能*
