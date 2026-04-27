@@ -146,7 +146,7 @@ fn tc_i29_aux_thread_holds_150ms_save_succeeds_within_375ms_window() {
     // 検証 3: rename が成立して .new が vault.db に反映されている (振る舞い検証)
     let loaded = repo.load().expect("save 後の load 失敗");
     assert_eq!(
-        loaded.records().count(),
+        loaded.records().len(),
         2,
         "rename が成立しておらず .new が反映されていない"
     );
