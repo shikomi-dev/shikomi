@@ -10,8 +10,19 @@ permissions:
 
 jobs:
   test-daemon:
+    # Issue #75 Bug-F-003 解消: cli-vault-commands/test-design/ci.md §7.2.2 SSoT 通り
+    # 3-OS マトリクスで `cargo test -p shikomi-daemon -p shikomi-cli` を必須化。
+    # IPC socket 競合は justfile レシピ側で `--no-fail-fast` + `serial_test` 直列化により
+    # 局所吸収する設計。
     name: test-daemon
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

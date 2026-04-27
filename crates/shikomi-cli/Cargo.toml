@@ -34,6 +34,18 @@ tracing       = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror     = { workspace = true }
 dirs          = { workspace = true }
+# Issue #75 / Bug-F-007: `windows_pipe_name_from_dir` で `<DIR>` 絶対パスを SHA-256
+# Base32 先頭 16 文字の純関数化（`docs/features/vault-encryption/detailed-design/cli-subcommands.md`
+# §Bug-F-007 解消の Windows pipe 名 `<H>` 契約）。CLI / daemon が同 hash を導出する
+# 共有実装の起点。Base32 自体は本 crate 内部で 5-bit alphabet `a-z2-7` を直接実装する
+# (新規依存追加を最小化、Boy Scout: pure function かつ 20 行未満)。
+sha2          = { workspace = true }
+# Issue #75 / Bug-F-007 + ペテルギウス工程5 致命指摘1 解消:
+# `windows_pipe_name_from_dir` の **NFC 正規化必須**契約 (cli-subcommands.md §Bug-F-007 §Windows pipe
+# 名の `<H>` 契約) を遵守するため Unicode NFC 正規化を提供する。同一 `<DIR>` を
+# 異なるエンコード形式 (NFC / NFD) で渡しても同一 hash を導出する純関数性を保証。
+unicode-normalization = "0.1"
+
 # IPC 経路（daemon-ipc feature）
 tokio         = { workspace = true }
 tokio-util    = { workspace = true }

@@ -70,6 +70,19 @@ fn render_daemon_not_running(path: &std::path::Path, locale: Locale) -> String {
             "hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'\n",
         );
     }
+    // Issue #75 Bug-F-007 解消: MSG-S09(b) 拡張文言として `--vault-dir <DIR>` 案内を追加
+    // (`cli-subcommands.md` §Bug-F-007 解消 §エラー文言 SSoT、ユーザ認知モデル
+    // 「`<DIR>` = vault.db の所在ディレクトリ」と一致)。`SHIKOMI_VAULT_DIR` env 直接案内は
+    // `--vault-dir` フラグ経路の方が明示的なため出さない (Phase 2 規定 = CLI は IPC 経由のみ、
+    // vault.db 直接操作禁止 と整合)。
+    out.push_str(
+        "hint: or pass --vault-dir <DIR> to point at the vault.db directory whose shikomi.sock you want to use\n",
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "hint: または --vault-dir <DIR> で vault.db の所在ディレクトリを指定してください（同ディレクトリの shikomi.sock が daemon socket として使われます）\n",
+        );
+    }
     out
 }
 
@@ -237,6 +250,15 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "vault の保護モードが不明です",
             "the vault header may be corrupted; restore from backup or contact support",
             "vault ヘッダが破損している可能性があります。バックアップから復元するか、サポートに連絡してください",
+        ),
+        // Issue #75 Bug-F-001 §排他違反検知 (defensive): MSG-S21 文言固定、exit 64 (`EX_USAGE`)。
+        // i18n 辞書 (`messages.toml`) 移行は Phase 7 で `Localizer` に集約予定。本 PR では
+        // 既存の他 MSG-S* と同パターンで `lit()` 経由インライン化する。
+        CliError::IncompatibleAuthFlags { hint } => lit(
+            &format!("conflicting authentication flags ({hint})"),
+            &format!("複数の認証経路が同時に指定されています（{hint}）"),
+            "`--recovery` and password input cannot be combined; choose one",
+            "`--recovery` と password 入力は併用できません。どちらか一方を指定してください",
         ),
     }
 }

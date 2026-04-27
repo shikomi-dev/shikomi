@@ -34,6 +34,7 @@ pub mod view;
 pub use error::{CliError, ExitCode};
 
 use std::io::Write;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use shikomi_infra::persistence::SqliteVaultRepository;
@@ -186,7 +187,10 @@ pub fn run() -> ExitCode {
     // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
     // dispatch を分岐させる。`--ipc` フラグ未指定でも vault 経路は IPC 強制。
     if let Subcommand::Vault(vault) = &args.subcommand {
-        let result = run_vault(vault, locale, quiet);
+        // Issue #75 Bug-F-007: `--vault-dir <DIR>` を daemon socket 解決の最優先 hint
+        // として渡す（`<DIR>/shikomi.sock` 最優先 + 失敗時 default fallback、
+        // `cli-subcommands.md` §Bug-F-007 SSoT）。
+        let result = run_vault(vault, args.vault_dir.as_deref(), locale, quiet);
         return match result {
             Ok(()) => ExitCode::Success,
             Err(err) => emit_error_and_exit(&err, locale),
@@ -219,11 +223,20 @@ pub fn run() -> ExitCode {
 
 /// vault サブコマンド経路（IPC 強制）の dispatch。
 ///
-/// daemon socket 解決 → `IpcVaultRepository::connect` → handshake (V2) →
+/// daemon socket 解決 → `IpcVaultRepository::connect_with_vault_dir` → handshake (V2) →
 /// 7 サブコマンドの usecase 呼出。`--ipc` フラグの有無によらず IPC 経路で動作する
 /// （vault 管理は daemon の責務、Phase 2 規定）。
-fn run_vault(vault: &VaultSubcommand, locale: Locale, quiet: bool) -> Result<(), CliError> {
-    let repo = connect_vault_ipc(locale, quiet)?;
+///
+/// Issue #75 Bug-F-007: `vault_dir` が `Some(<DIR>)` の場合、`<DIR>/shikomi.sock`（Unix）
+/// または `\\.\pipe\shikomi-{H}`（Windows）を socket 解決の最優先候補に渡す
+/// （`cli-subcommands.md` §Bug-F-007 解消 §`--vault-dir` の意味論 SSoT）。
+fn run_vault(
+    vault: &VaultSubcommand,
+    vault_dir: Option<&Path>,
+    locale: Locale,
+    quiet: bool,
+) -> Result<(), CliError> {
+    let repo = connect_vault_ipc(vault_dir, locale, quiet)?;
     match vault {
         VaultSubcommand::Encrypt(a) => usecase::vault::encrypt::execute(&repo, a, locale, quiet),
         VaultSubcommand::Decrypt => usecase::vault::decrypt::execute(&repo, locale, quiet),
@@ -243,9 +256,17 @@ fn run_vault(vault: &VaultSubcommand, locale: Locale, quiet: bool) -> Result<(),
 ///
 /// vault 管理は IPC 専用の責務領域であり、`build_handle` が出力する
 /// `MSG-CLI-051` (opt-in 警告) は文脈不一致のため省略する。
-fn connect_vault_ipc(_locale: Locale, _quiet: bool) -> Result<IpcVaultRepository, CliError> {
-    let socket_path = IpcVaultRepository::default_socket_path()?;
-    let repo = IpcVaultRepository::connect(&socket_path)?;
+///
+/// Issue #75 Bug-F-007: `vault_dir` を `IpcVaultRepository::connect_with_vault_dir` に渡し、
+/// `<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-{H}`（Windows、`<H>` 純関数）を
+/// 最優先で試行する。失敗時は default 経路（`SHIKOMI_VAULT_DIR` env / `XDG_RUNTIME_DIR` /
+/// `dirs::cache_dir()` / `dirs::runtime_dir()` / Windows user-SID）にフォールバック。
+fn connect_vault_ipc(
+    vault_dir: Option<&Path>,
+    _locale: Locale,
+    _quiet: bool,
+) -> Result<IpcVaultRepository, CliError> {
+    let repo = IpcVaultRepository::connect_with_vault_dir(vault_dir)?;
     Ok(repo)
 }
 

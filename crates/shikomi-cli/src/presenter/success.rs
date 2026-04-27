@@ -130,9 +130,22 @@ pub fn render_recovery_disclosure_screen(
     out
 }
 
-// Phase 6/7 で braille / audio / print PDF が `accessibility` モジュールに本実装され、
-// fallback notice 経路は完全に廃止された。`render_recovery_disclosure_screen_with_fallback_notice`
-// (旧 Phase 2 stub) は工程4 Bug-F-002 で削除済 (デッドコード排除、Phase 5 文言残存解消)。
+/// `vault encrypt` (24 語表示経路) + `cache_relocked == false` 連結警告 (MSG-S20)。
+///
+/// Issue #75 Bug-F-002 §経路復活: `cli-subcommands.md` §Bug-F-002 解消の SSoT に従い、
+/// 「**経路復活**（削除ではなく `cache_relocked == false` 経路に正式接続）」契約を満たす。
+/// 旧 Phase 5 stub の「is not yet wired」文言は完全除去し、`cache_relocked_warning::render_to`
+/// に**委譲**することで MSG-S20 文言の SSoT を 1 箇所に保つ (DRY、Tell-Don't-Ask: 値自身が
+/// fallback 文言を知る presenter 層責務 C-31/C-36)。
+#[must_use]
+pub fn render_recovery_disclosure_screen_with_fallback_notice(
+    disclosure: &[SerializableSecretBytes],
+    locale: Locale,
+) -> String {
+    let mut out = render_recovery_disclosure_screen(disclosure, locale);
+    super::cache_relocked_warning::render_to(&mut out, locale);
+    out
+}
 
 /// `vault rekey` 成功文言（MSG-S07 + 24 語表示）。
 ///
@@ -158,8 +171,22 @@ pub fn render_rekeyed(
     out
 }
 
-// `render_rekeyed_with_fallback_notice` も Bug-F-002 で削除済 (Phase 6/7 で
-// rekey の braille / audio / print 経路が `accessibility` 経由本実装になった)。
+/// `vault rekey` 成功文言 + `cache_relocked == false` 連結警告 (MSG-S07 + MSG-S20)。
+///
+/// Issue #75 Bug-F-002 §経路復活: `cli-subcommands.md` §Bug-F-002 解消の SSoT 通り、
+/// `usecase::vault::rekey` から `IpcResponse::Rekeyed { cache_relocked: false }` を受領した
+/// 際の正式 presenter 経路。`render_rekeyed` + `cache_relocked_warning::render_to` への
+/// 委譲構造で C-32 整合 + 単一 SSoT を両立 (DRY、警告文言は `cache_relocked_warning` のみ保有)。
+#[must_use]
+pub fn render_rekeyed_with_fallback_notice(
+    records_count: usize,
+    words: &[SerializableSecretBytes],
+    locale: Locale,
+) -> String {
+    let mut out = render_rekeyed(records_count, words, locale);
+    super::cache_relocked_warning::render_to(&mut out, locale);
+    out
+}
 
 /// `vault rotate-recovery` 成功文言（MSG-S19 + 24 語表示）。
 ///
@@ -179,7 +206,22 @@ pub fn render_recovery_rotated(words: &[SerializableSecretBytes], locale: Locale
     out
 }
 
-// `render_recovery_rotated_with_fallback_notice` も Bug-F-002 で削除済 (同上)。
+/// `vault rotate-recovery` 成功文言 + `cache_relocked == false` 連結警告
+/// (MSG-S19 + MSG-S20)。
+///
+/// Issue #75 Bug-F-002 §経路復活: `cli-subcommands.md` §Bug-F-002 解消の SSoT 通り、
+/// `IpcResponse::RecoveryRotated { cache_relocked: false }` 受領時の正式 presenter 経路。
+/// `render_recovery_rotated` + `cache_relocked_warning::render_to` への委譲で
+/// 単一 SSoT を維持。
+#[must_use]
+pub fn render_recovery_rotated_with_fallback_notice(
+    words: &[SerializableSecretBytes],
+    locale: Locale,
+) -> String {
+    let mut out = render_recovery_rotated(words, locale);
+    super::cache_relocked_warning::render_to(&mut out, locale);
+    out
+}
 
 /// 24 語を 1 語 1 行で push する（番号 1〜n、UTF-8 lossy が secret_bytes 側 helper で適用済）。
 fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
@@ -189,7 +231,9 @@ fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
     }
 }
 
-// `fallback_notice` private fn も Bug-F-002 で削除済 (Phase 5 文言残存解消)。
+// `fallback_notice` private fn は Issue #75 Bug-F-002 §経路復活で `cache_relocked_warning::render_to`
+// への委譲構造に統合済（同モジュール 1 箇所が MSG-S20 文言の SSoT、DRY を維持しつつ
+// `*_with_fallback_notice` 公開 API を C-31/C-36 articulate に整合）。
 
 #[cfg(test)]
 mod tests {

@@ -81,11 +81,99 @@ impl IpcVaultRepository {
         })
     }
 
-    /// OS デフォルトのソケットパスを解決する。
+    /// `--vault-dir <DIR>` 経路を最優先で daemon に接続する（Issue #75 / Bug-F-007 解消、
+    /// `cli-subcommands.md` §Bug-F-007 SSoT）。
     ///
-    /// - **Linux**: `$XDG_RUNTIME_DIR/shikomi/daemon.sock`、未設定時は `dirs::runtime_dir()`
-    /// - **macOS**: `dirs::cache_dir()/shikomi/daemon.sock`
-    /// - **Windows**: `\\.\pipe\shikomi-daemon-{user-sid}`
+    /// `vault_dir` が `Some(<DIR>)` の場合、socket 解決順序の **第 1 候補** として
+    /// `<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-{H}`（Windows、`<H>` は
+    /// `windows_pipe_name_from_dir(<DIR>)` の純関数出力）を試行する。失敗時は
+    /// `default_socket_path()` の順序（`SHIKOMI_VAULT_DIR` env / `XDG_RUNTIME_DIR` /
+    /// `$HOME/.shikomi` / Windows user-SID 由来）に fallback する。
+    ///
+    /// 意味論契約: `<DIR>` は **vault.db の所在ディレクトリ**を指す（ユーザ認知モデル）。
+    /// CLI は `<DIR>/vault.db` を直接 open せず、**同じディレクトリの `shikomi.sock`** のみを
+    /// daemon socket として用いる（Phase 2 規定: CLI は IPC 経由のみ、vault.db 直接操作禁止、
+    /// `cli-subcommands.md` §Bug-F-007 解消 §`--vault-dir` の意味論 SSoT）。
+    ///
+    /// ## Bug-F-009 (Option α) 反映 — エラー文言の MSG-S09(b) 強制
+    ///
+    /// `vault_dir` が `Some(<DIR>)` の場合、ユーザは明示的に「この vault dir の daemon に
+    /// 接続したい」と意思表示している。ここで fallback 経路（`XDG_RUNTIME_DIR` / `HOME`）が
+    /// 解決失敗 (`CannotResolveVaultDir`) すると古い infra MSG が前面に出てしまい、設計書
+    /// SSoT (`cli-subcommands.md` §Bug-F-007 §エラー文言 SSoT) で約束した
+    /// **MSG-S09(b) `--vault-dir <DIR>` 案内**が発火しない。
+    ///
+    /// 本関数は `vault_dir` 指定時の全経路失敗を `PersistenceError::DaemonNotRunning(primary)`
+    /// に変換し、`presenter::error::render_daemon_not_running` の MSG-S09(b) hint
+    /// （`pass --vault-dir <DIR>` 案内）を必ず発火させる。`primary` パスをそのまま付ける
+    /// ことでユーザに「あなたが指定した DIR の socket が見つからなかった」を articulate する。
+    ///
+    /// # Errors
+    /// - `vault_dir.is_some()` かつ全経路失敗: `PersistenceError::DaemonNotRunning(primary)`
+    ///   （MSG-S09(b) 経路、Bug-F-009 Option α）
+    /// - `vault_dir.is_none()` かつ fallback 解決失敗: `PersistenceError::CannotResolveVaultDir`
+    ///   （ユーザが path hint を出していないため、infra error の素の伝播が UX 的に妥当）
+    /// - `vault_dir.is_none()` かつ fallback connect 失敗: `PersistenceError::DaemonNotRunning(fallback)`
+    pub fn connect_with_vault_dir(vault_dir: Option<&Path>) -> Result<Self, PersistenceError> {
+        if let Some(dir) = vault_dir {
+            let primary = vault_dir_socket_path(dir);
+            // 第 1 候補で接続成功すれば即返却。
+            if let Ok(repo) = Self::connect(&primary) {
+                return Ok(repo);
+            }
+            // 第 1 候補が daemon 不在で失敗 → fallback 経路を試す。
+            // Bug-F-009 (Option α): fallback 解決自体が失敗 (`XDG_RUNTIME_DIR` / `HOME` 未設定 等)
+            // または fallback connect が失敗した場合、`vault_dir` 指定経路としてユーザに
+            // MSG-S09(b) `pass --vault-dir <DIR>` 案内を返す責務を持つ。
+            // primary パスを `DaemonNotRunning` に詰めることで「あなたが指定した DIR の
+            // socket が見つからなかった」を articulate し、render_daemon_not_running 経由で
+            // 正しい hint が発火する経路に流す。
+            //
+            // ペテルギウス工程5 致命指摘4 解消 — エラー握り潰し回避: fallback 失敗の原因
+            // (`io::Error` 等) を `tracing::warn!` で観測可能化し、`-v` debug ログを有効化した
+            // ユーザ / 開発者が原因 chain を追跡できる経路を保持する。`DaemonNotRunning(primary)`
+            // で MSG-S09(b) を発火させる UX 契約と、原因情報の保持を両立する。
+            return match Self::default_socket_path() {
+                Ok(fallback) => Self::connect(&fallback).map_err(|fallback_err| {
+                    tracing::warn!(
+                        primary = %primary.display(),
+                        fallback = %fallback.display(),
+                        error = %fallback_err,
+                        "connect_with_vault_dir: primary and fallback both failed; surfacing MSG-S09(b)"
+                    );
+                    PersistenceError::DaemonNotRunning(primary)
+                }),
+                Err(resolve_err) => {
+                    tracing::warn!(
+                        primary = %primary.display(),
+                        error = %resolve_err,
+                        "connect_with_vault_dir: primary failed and fallback resolution failed; surfacing MSG-S09(b)"
+                    );
+                    Err(PersistenceError::DaemonNotRunning(primary))
+                }
+            };
+        }
+        // `vault_dir` 未指定経路: 既存挙動を維持 (path hint なしのため infra error をそのまま伝播)。
+        let fallback = Self::default_socket_path()?;
+        Self::connect(&fallback)
+    }
+
+    /// OS デフォルトのソケットパスを解決する（Issue #75 Bug-F-007 解消の SSoT 順序、
+    /// `cli-subcommands.md` §Bug-F-007 解消 §標準解決順序）:
+    ///
+    /// 1. `--vault-dir <DIR>` 引数（指定時、最優先）→ `<DIR>/shikomi.sock`（Unix）/
+    ///    `\\.\pipe\shikomi-{H}`（Windows）。本関数の対象外（`connect_with_vault_dir` で先行処理）
+    /// 2. **Linux**: `$XDG_RUNTIME_DIR/shikomi/daemon.sock`、未設定時は `dirs::runtime_dir()`
+    /// 3. **macOS**: `dirs::cache_dir()/shikomi/daemon.sock`、未設定時は `$HOME/.shikomi/daemon.sock`
+    /// 4. **Windows**: `\\.\pipe\shikomi-daemon-{user-sid}`（`windows_sid::resolve_self_user_sid`）
+    ///
+    /// **`SHIKOMI_VAULT_DIR` env 経由派生は Phase B 持ち越し**: 設計 SSoT は env を
+    /// `<DIR>` 同等扱いと articulate しているが、実装には daemon 側の socket bind パス
+    /// 変更（`daemon.sock` → `shikomi.sock` 一括 rename + `<DIR>` 派生）が伴うため、
+    /// 既存 daemon e2e テスト群との互換維持を優先し本 PR では未着手とする
+    /// （`cli-subcommands.md` §Bug-F-007 §「`shikomi-daemon` 側起動時の socket bind 仕様で
+    /// 対称に固定」を別 PR で連携実装、設計書側 articulate 次イテレーションで `XDG_RUNTIME_DIR`
+    /// `dirs::cache_dir` 経路と統一）。
     ///
     /// # Errors
     /// 解決元が利用不能な場合 `PersistenceError::CannotResolveVaultDir`。
@@ -452,6 +540,101 @@ fn unix_default_socket_path() -> Result<PathBuf, PersistenceError> {
 }
 
 // -------------------------------------------------------------------
+// Issue #75 Bug-F-007: `--vault-dir <DIR>` socket path 派生関数
+// -------------------------------------------------------------------
+
+/// `<DIR>` から daemon socket path を導出する純関数（Issue #75 Bug-F-007 解消、
+/// `cli-subcommands.md` §`--vault-dir` の意味論 SSoT）。
+///
+/// - **Unix**: `<DIR>/shikomi.sock`
+/// - **Windows**: `\\.\pipe\shikomi-{H}`（`<H>` = `windows_pipe_name_from_dir(<DIR>)`）
+///
+/// CLI / daemon が同一 `<DIR>` から同一 socket path を導出することを保証する純関数。
+/// `connect_with_vault_dir` と `default_socket_path` の `SHIKOMI_VAULT_DIR` 経由経路で共用。
+fn vault_dir_socket_path(dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        dir.join("shikomi.sock")
+    }
+    #[cfg(windows)]
+    {
+        let h = windows_pipe_name_from_dir(dir);
+        PathBuf::from(format!(r"\\.\pipe\shikomi-{h}"))
+    }
+}
+
+/// `<DIR>` 絶対パスから Windows pipe 名 `<H>` を導出する**純関数**（Issue #75 Bug-F-007 解消、
+/// `cli-subcommands.md` §Bug-F-007 解消 §Windows pipe 名の `<H>` 契約）。
+///
+/// アルゴリズム（**全段階 IO アクセスなしの pure function**、ペテルギウス工程5 致命指摘1 解消）:
+/// 1. `<DIR>` の path 文字列化（`Path::to_string_lossy()` 経由、入力文字列を SSoT として固定
+///    → CLI / daemon が同一 `<DIR>` 文字列から同一 hash を導出することを保証）
+/// 2. **Unicode NFC 正規化** (`unicode-normalization::UnicodeNormalization::nfc`) — 設計書契約。
+///    異なるコードポイント表現（NFC / NFD で表現される濁点付き文字等）でも同一 hash になる
+/// 3. lowercase 化（Windows path の case-insensitive convention に整合、`to_lowercase()`）
+/// 4. SHA-256 でダイジェスト
+/// 5. 32 byte ダイジェスト → Base32（小文字 `a-z2-7`、パディング無し）→ 先頭 16 文字
+///
+/// **`canonicalize` は採用しない**: IO 操作（symlink 解決 / ファイル存在依存）を含むため
+/// 純関数性が崩壊する。CLI が canonicalize を呼んだ時と daemon が呼んだ時で symlink 状況が
+/// 異なれば異なる hash が出るため、契約「CLI / daemon が同一 `<DIR>` から同一 pipe 名」を
+/// 構造的に裏切る（ペテルギウス工程5 致命指摘1）。`<DIR>` 文字列そのものを SSoT に固定し、
+/// canonicalize 責務はユーザ / CLI 起動時の `--vault-dir` 引数評価に閉じる。
+///
+/// 16 文字（5 bit × 16 = 80 bit）は 64 文字制限の Windows pipe 名内に収まり、誕生日攻撃で
+/// `2^40` の衝突空間（実用上不可能）を確保する SSoT 妥協値。
+///
+/// # Examples
+/// 異なる DIR は異なる pipe 名を導出し、同一 DIR は決定的に同じ名を返す。
+/// NFC と NFD で表現された同一文字列も同じ hash になる（NFC 正規化により）。
+#[cfg(any(windows, test))]
+fn windows_pipe_name_from_dir(dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+
+    // (1) path 文字列化（IO アクセスなし、入力 SSoT を保持）
+    let raw = dir.to_string_lossy();
+    // (2) Unicode NFC 正規化（設計書契約、異なるコードポイント表現を統一）
+    let nfc: String = raw.nfc().collect();
+    // (3) lowercase 化（Windows convention）
+    let normalized = nfc.to_lowercase();
+    // (4) SHA-256
+    let digest = Sha256::digest(normalized.as_bytes());
+    // (5) Base32 (lowercase, no padding) → 先頭 16 文字
+    base32_lower_no_pad(digest.as_ref(), 16)
+}
+
+/// Base32 lowercase no-pad encoder (RFC 4648 alphabet `a-z2-7`)。
+///
+/// `take` 文字数で切り詰めて返す（`windows_pipe_name_from_dir` 用に 16 文字固定運用）。
+/// 32 byte 入力に対し最大 52 文字を生成可能だが、本関数は `take` で truncate する。
+/// 純関数で外部 crate 依存を避けるため自前実装（20 行未満、Boy Scout）。
+#[cfg(any(windows, test))]
+fn base32_lower_no_pad(bytes: &[u8], take: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity(take);
+    let mut buf: u64 = 0;
+    let mut bits: u32 = 0;
+    for &b in bytes {
+        buf = (buf << 8) | u64::from(b);
+        bits += 8;
+        while bits >= 5 && out.len() < take {
+            bits -= 5;
+            let idx = ((buf >> bits) & 0x1f) as usize;
+            out.push(ALPHABET[idx] as char);
+        }
+        if out.len() >= take {
+            break;
+        }
+    }
+    if out.len() < take && bits > 0 {
+        let idx = ((buf << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[idx] as char);
+    }
+    out
+}
+
+// -------------------------------------------------------------------
 // 不正応答時の固定文言ヘルパ
 // -------------------------------------------------------------------
 
@@ -470,5 +653,132 @@ fn unexpected_response(request_kind: &'static str) -> PersistenceError {
             // 万一新規呼出側がここに到達しても固定文言を返す（fail safe）。
             _ => "unexpected ipc response".to_owned(),
         },
+    }
+}
+
+#[cfg(test)]
+mod windows_pipe_name_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_is_deterministic_for_same_dir() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-dir-tc_f_u08");
+        let h1 = windows_pipe_name_from_dir(&dir);
+        let h2 = windows_pipe_name_from_dir(&dir);
+        assert_eq!(h1, h2, "same DIR must derive same pipe name (purity)");
+    }
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_is_16_chars_lowercase_alphanum() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-dir-tc_f_u08-len");
+        let h = windows_pipe_name_from_dir(&dir);
+        assert_eq!(h.len(), 16, "pipe name must be exactly 16 chars (80 bit)");
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)),
+            "pipe name must be Base32 lowercase no-pad (a-z2-7), got {h}"
+        );
+    }
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_differs_across_dirs() {
+        let h1 = windows_pipe_name_from_dir(Path::new("/tmp/shikomi-vault-A"));
+        let h2 = windows_pipe_name_from_dir(Path::new("/tmp/shikomi-vault-B"));
+        assert_ne!(
+            h1, h2,
+            "different DIRs must derive different pipe names (collision resistance)"
+        );
+    }
+
+    #[test]
+    fn vault_dir_socket_path_is_pure() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-pure");
+        let p1 = vault_dir_socket_path(&dir);
+        let p2 = vault_dir_socket_path(&dir);
+        assert_eq!(p1, p2, "vault_dir_socket_path must be pure");
+        #[cfg(unix)]
+        assert!(
+            p1.ends_with("shikomi.sock"),
+            "Unix socket path ends with shikomi.sock, got {p1:?}"
+        );
+    }
+
+    /// TC-F-U09 (Bug-F-009): `--vault-dir <DIR>` 指定で primary が daemon 不在
+    /// → fallback も失敗の経路で、エラーが `DaemonNotRunning(primary)` に変換される
+    /// ことを機械検証（Option α、`presenter::error::render_daemon_not_running` 経由で
+    /// MSG-S09(b) `pass --vault-dir <DIR>` 案内を発火させる SSoT 経路）。
+    ///
+    /// 旧実装では fallback が `CannotResolveVaultDir` を返した場合に古い infra MSG
+    /// (`set SHIKOMI_VAULT_DIR or ensure a home directory is available`) が前面に出て
+    /// 設計書 §Bug-F-007 §エラー文言 SSoT に違反していた（マユリ Bug-F-009 上申で発覚）。
+    ///
+    /// `IpcVaultRepository` は `Debug` 非実装のため `result.unwrap_err()` 経由で error を
+    /// 取り出して variant 判定する（`Ok(_)` 経路に到達した場合は別 panic ヘルパで articulate）。
+    ///
+    /// **決定性確保**（ペテルギウス工程5 致命指摘3、Bug-G-005 教訓踏襲）: CI 環境で偶然
+    /// daemon が動いていた場合に偶発 PASS / FAIL する罠を構造的に塞ぐため、test 内で
+    /// `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` を `remove_var` して fallback
+    /// 経路を確実に `CannotResolveVaultDir` で失敗させる。env 操作の競合は
+    /// `#[serial_test::serial]` で他テストと直列化する。
+    ///
+    /// `unsafe { std::env::remove_var(...) }` は Rust 2024 edition の env 操作 unsafe 化
+    /// 規約に従う（test スコープ内のみ、`serial_test` で他スレッドと直列化済）。
+    #[test]
+    #[serial_test::serial(env_xdg_home)]
+    fn tc_f_u09_connect_with_vault_dir_returns_daemon_not_running_with_primary_path() {
+        // 既存 env 値を保存（test 終了時に restore する責務、Drop guard で fail-safe）
+        let saved_xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+        let saved_home = std::env::var("HOME").ok();
+        let saved_vault_dir = std::env::var("SHIKOMI_VAULT_DIR").ok();
+
+        // ペテルギウス指摘3 解消: fallback 経路の決定的失敗化。
+        // `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` を全て unset することで
+        // `default_socket_path()` が `CannotResolveVaultDir` を返す経路を強制する。
+        // SAFETY: env 操作は本 test スコープに閉じ、`#[serial_test::serial]` で他 test との
+        // 競合を排除済 (Rust 2024 edition の unsafe env 規約遵守)。
+        // (clippy::all = deny だが Rust edition 互換層として許容、修正後 restore する)。
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        std::env::remove_var("HOME");
+        std::env::remove_var("SHIKOMI_VAULT_DIR");
+
+        // socket が存在しない tempdir を vault_dir として指定。
+        // 上記 env unset により fallback も決定的に失敗する。
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let result = super::IpcVaultRepository::connect_with_vault_dir(Some(tmp.path()));
+
+        // 検証前に env を restore (assert 失敗時にも restore したいため Drop guard 風に
+        // 早めに実行)。restore 後に検証 → 検証失敗時の panic でも env は元に戻る。
+        if let Some(v) = saved_xdg {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        }
+        if let Some(v) = saved_home {
+            std::env::set_var("HOME", v);
+        }
+        if let Some(v) = saved_vault_dir {
+            std::env::set_var("SHIKOMI_VAULT_DIR", v);
+        }
+
+        // Debug 非実装の Ok 変種は出さず、is_ok 判定で先に panic させる。
+        assert!(
+            result.is_err(),
+            "Bug-F-009: --vault-dir を未存在 tempdir に向けて env 全 unset 状態で \
+             connect_with_vault_dir は err を返すべき (fallback 解決自体が失敗する経路)"
+        );
+        let err = result.err().expect("err checked above");
+        match err {
+            PersistenceError::DaemonNotRunning(p) => {
+                let expected = vault_dir_socket_path(tmp.path());
+                assert_eq!(
+                    p, expected,
+                    "DaemonNotRunning は primary (--vault-dir 由来) パスを保持して \
+                     MSG-S09(b) で「指定された DIR の socket が見つからなかった」を articulate すべき"
+                );
+            }
+            other => panic!(
+                "Bug-F-009: expected DaemonNotRunning(primary) when --vault-dir is set and \
+                 fallback is forced to fail (env all unset), got {other:?}"
+            ),
+        }
     }
 }
