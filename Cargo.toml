@@ -58,7 +58,11 @@ nix             = { version = "0.29", default-features = false, features = ["soc
 windows-sys     = { version = "0.59", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Foundation", "Win32_System_Diagnostics_Debug"] }
 # テスト用
 tempfile        = "3"
-tracing-test    = "0.2"
+# Issue #65 工程4: integration test では別 crate 扱いとなり既定の env filter
+# (`RUST_LOG=<test_crate>=trace`) で `shikomi-infra` 側ログが全弾される
+# (tracing-test 0.2 公式注記)。`no-env-filter` で全 crate のログを捕捉し、
+# 必要に応じて `logs_assert` 側で文字列フィルタする責務に切替える。
+tracing-test    = { version = "0.2", features = ["no-env-filter"] }
 serial_test     = "3"
 assert_cmd      = "2"
 predicates      = "3"
