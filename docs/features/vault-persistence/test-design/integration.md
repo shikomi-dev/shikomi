@@ -445,7 +445,7 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する受入基準ID | AC-18（Issue #65 受入、新規） |
 | 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::write_new` クローズ順序契約 / `fsync_and_rename` Win 限定 retry、`../detailed-design/flows.md` §`save` step 6.10〜6.13 / step 7.3 / `../detailed-design/classes.md` §設計判断 §3.1） |
 | 種別 | 異常系の green 化（修正前は Windows で `AtomicWriteFailed { stage: Rename, source: code:5 PermissionDenied }`、修正後は PASS） |
-| 前提条件 | `feature/issue-65-windows-atomic-rename` ブランチ。`AtomicWriter::write_new` に `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()` 明示呼出が実装されている。`AtomicWriter::fsync_and_rename` に `cfg(windows)` 限定の rename retry（50ms × 5 回）が実装されている。raw fixture `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` がベースライン保存されている |
+| 前提条件 | `feature/issue-65-windows-atomic-rename` ブランチ。`AtomicWriter::write_new` に `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()` 明示呼出が実装されている。`AtomicWriter::fsync_and_rename` に `cfg(windows)` 限定の指数バックオフ rename retry（`50ms × 2^(n-1)` ± `25ms` jitter × 5、最悪 ~1675ms、Bug-G-001 反映後）が実装されている。raw fixture `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` がベースライン保存されている |
 | 操作 | Windows CI ランナー上で `cargo test -p shikomi-infra --test vault_migration_integration` を実行（テスト関数: `tc_d_i01_encrypt_then_unlock_password_roundtrip` / `tc_d_i02_encrypt_then_decrypt_roundtrip` / `tc_d_i03_rekey_then_unlock_with_same_password_observation` / `tc_d_i04_rekey_then_decrypt_vault_all_records_succeed` / `tc_d_i05_req_p11_v1_accepted_via_vault_migration` の 5 件） |
 | 期待結果 | 5 件全て PASS（exit code == 0、`test result: ok. 5 passed; 0 failed`）。Linux / macOS でも引き続き PASS。raw fixture（PR #64 失敗ログ）と CI ログ diff を比較し「`AtomicWriteFailed { stage: Rename, code: 5 }` パターンが消えた」ことを証跡として記録する。**`#[cfg(windows)] #[ignore]` で 5 件を回避する PR は問答無用で却下**（防衛線、本ファイル冒頭注記参照） |
 
@@ -462,14 +462,14 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::fsync_and_rename` step 7.3 Windows 分岐、`../detailed-design/flows.md`） |
 | 種別 | 異常系（race 状態下での正常完了検証） |
 | 前提条件 | `#[cfg(windows)]` ガード付き。`tempfile::TempDir` を使用。初期 `vault.db` を save 済（記録済レコード 1 件）。`std::thread::spawn` で補助スレッドを起動できる |
-| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、**150ms 保持**（1〜2 回目 retry で吸収される設計、jitter 込み最悪 375ms の内側）してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
-| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜3 回目で rename が成功する）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: **約 375ms 超過なら fail**（jitter 込みの retry 上限契約違反、`../basic-design/security.md` §atomic write の二次防衛線 §jitter — 50ms × 5 + jitter ±25ms × 5 = 最悪 375ms / 平均 ~250ms）|
+| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、**短時間保持**（指数バックオフ込み最悪 ~1675ms の内側、典型 200ms で retry 3 回目（累積 ~350ms）までに吸収される設計）してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
+| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜4 回目で rename が成功する。CI Defender 介入時は 4〜5 回目で吸収）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: **約 1675ms 超過なら fail**（指数バックオフの retry 上限契約違反、`../basic-design/security.md` §atomic write の二次防衛線 §jitter — `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 最悪 ~1675ms / 平均 ~1550ms、Bug-G-001 反映後）|
 
 **実装上の注意（Win API 直叩き、unsafe）**:
 - `std::fs::OpenOptions` は標準では `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` を立てるため race 再現にならない。`std::os::windows::fs::OpenOptionsExt::share_mode(0)` で **share_mode = 0**（排他 open）を指定する必要がある
-- 補助スレッドの保持時間は **30ms** に固定する（v7.1 で 150ms から短縮）。CI ランナー (windows-latest) で `drop(File)` の close 遅延 + Defender/Indexer の追加 lock により、150ms hold だと 5 回 retry でも吸収しきれず exhaust する事象が観測されたため。30ms hold は **1〜2 回目 retry（経過 ~50〜100ms）で確実に吸収される**。SSoT 上限値（`../basic-design/security.md` §jitter — 最悪 ~375ms）の SLA 評価指標は変えず、テスト側の決定性確保のための短縮措置
-- 経過時間 deadline は **1500ms**（v7.1 で 750ms から拡張）。CI ランナーの sleep 精度揺らぎ + write_new + thread spawn / channel 同期の余裕を考慮
-- 並行スレッドが jitter 込み最悪 375ms を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）。これを直接検証するのが TC-I29-A
+- 補助スレッドの保持時間は **典型 200ms 程度**（指数バックオフ後の SSoT に追従、Bug-G-001 反映後）。retry 3 回目（累積中央値 ~350ms）までに吸収される設計。CI ランナー (windows-latest) で `drop(File)` の close 遅延 + Defender/Indexer の追加 lock を考慮しても retry 4 回目（累積 ~750ms）までには確実に吸収される
+- 経過時間 deadline は **3000ms 程度**（指数バックオフ最悪 ~1675ms × 1.8 buffer + write_new + thread spawn / channel 同期の余裕を考慮）。これを超えるなら指数バックオフ SSoT 上限契約違反
+- 並行スレッドが指数バックオフ込み最悪 ~1675ms を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）。これを直接検証するのが TC-I29-A
 - 3 ケース（TC-I29 / TC-I29-A / TC-I29-B）は `#[serial_test::serial(windows_atomic_rename_retry)]` で直列化。並列実行時に補助スレッドの share_mode(0) ロックが他テスト (別 TempDir) の Defender scan 経路を経由して干渉する可能性を排除
 - `tracing_test` は **integration テスト crate では既定で対象 crate のログを env filter で弾く**ため、workspace `Cargo.toml` で `features = ["no-env-filter"]` を有効化する。これがないと `Audit::retry_event` の emit が `logs_contain` で観測できない（公式注記）
 
@@ -477,7 +477,7 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 
 ## TC-I29-A: retry 5 回全敗で `outcome="exhausted"` が **error レベル**で発火する（Windows、Issue #65 DoS 兆候）
 
-> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **600ms 保持**し、retry の上限契約 `~375ms` を超過させることで 5 回 retry を全敗に追い込む。`Audit::retry_event` の `outcome="exhausted"` 経路 (error レベル) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
+> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**保持し、retry を 5 回全敗に追い込む。`Audit::retry_event` の `outcome="exhausted"` 経路 (error レベル) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
 
 | 項目 | 内容 |
 |------|------|
@@ -486,12 +486,12 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する工程 | 基本設計（`../basic-design/security.md` §atomic write の二次防衛線 §retry 監査ログ §rename retry 全敗 / 詳細設計 `../detailed-design/flows.md` §`save` step 7.3） |
 | 種別 | 異常系（fail fast の意図確認 + 監査ログ error 経路の発火確認） |
 | 前提条件 | `#[cfg(windows)]` ガード。`tempfile::TempDir`。初期 `vault.db` を save 済。`tracing_test::traced_test` でログ収集 |
-| 操作 | 1. 初期 vault を save 完了 2. 補助スレッドが `share_mode(0)` で `vault.db` を **800ms 保持**（v7.1 で 600ms から拡張、`>375ms` で retry を 5 回全敗させる） 3. 補助スレッド ready 直後に `repo.save(&new_vault)` 4. save 戻り値とトレーシングログを検証 |
+| 操作 | 1. 初期 vault を save 完了 2. 補助スレッドが `share_mode(0)` で `vault.db` を **2500ms 保持**（v8 で 800ms から拡張、`>1675ms` で retry を 5 回全敗させる、Bug-G-001 反映後の指数バックオフ拡張に追従） 3. 補助スレッド ready 直後に `repo.save(&new_vault)` 4. save 戻り値とトレーシングログを検証 |
 | 期待結果 | `repo.save()` が `Err(AtomicWriteFailed { stage: Rename, source: code:5/32/33 })` を返す。監査ログに `"rename retry exhausted"`（error レベル）+ `outcome="exhausted"` が emit される。`outcome="pending"` も併発するが `outcome="succeeded"` は emit されない（fail 経路）|
 
 **実装上の注意**:
 - `tracing_test::traced_test` は **DEBUG 以上**の events を捕捉する。`Audit::retry_event` の error 分岐は `tracing::error!` を発行するため `logs_contain("rename retry exhausted")` で観測可能
-- 補助スレッドの 600ms は `>375ms` であれば足りるが、CI ランナーの sleep 精度揺らぎ (±20ms) を吸収する余裕値として固定。500ms でも仕様上は十分
+- 補助スレッドの 2500ms は指数バックオフ最悪 `~1675ms` に対して `+50%` 余裕（Bug-G-001 反映後）。CI ランナーの sleep 精度揺らぎ (±50ms) と Defender 介入による追加待機を吸収する
 
 ---
 
@@ -543,3 +543,5 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 *改訂 v7.1: 涅マユリ（テスト担当）/ 2026-04-27 — Win CI (test-infra-windows, run 24971458004) 実測 fail 3 件への対応。① **tracing_test の env filter 既定**で integration テスト crate からは `shikomi-infra` 側ログが全弾される問題を発見、workspace `Cargo.toml` で `features = ["no-env-filter"]` を有効化（公式注記、TC-I29-A の `exhausted` 不発の根源）② TC-I29 主の補助スレッド hold を **150ms → 30ms** に短縮（CI ランナーで `drop(File)` の close 遅延 + Defender/Indexer 追加 lock により 5 回 retry でも吸収しきれない事象を観測）③ 経過時間 deadline を 750ms → 1500ms に拡張（CI ランナー余裕）④ TC-I29-A の hold を 600ms → 800ms に拡張（CI ランナーの sleep 揺らぎ吸収）⑤ TC-I29-B のアサーションを「retry 経路自体を NG」から「exhausted のみ NG」に緩和（CI ランナーの Defender 介入で通常 save にも偶発 retry が発生する CI 実測現実を反映）⑥ 3 ケースを `#[serial_test::serial(windows_atomic_rename_retry)]` で直列化（並列実行干渉の構造的排除）⑦ TC-I29-A / TC-I29-B 失敗時に `logs_assert` で全捕捉ログを stderr dump する診断機能を追加。SSoT 上限値（`security.md §jitter` — 最悪 ~375ms）は変更せず、**テスト側の決定性確保のための CI 環境調整**である*
 
 *改訂 v7.2: 涅マユリ（テスト担当）/ 2026-04-27 — Win CI 第3走 (run 24971924773) の追加観測。TC-I29-A は通ったが TC-I29 主と TC-I29-B が **30ms hold ですら / 200ms 待機後 race 無し再試行でも** `code:5 PermissionDenied` で fail することを観測。**`drop(aux_File)` 後も Win CI ランナーの Defender / Search Indexer が `vault.db` ハンドルを 250ms+ 保持し続ける**ため、Issue #65 の現行 retry budget (50ms × 5 = 最悪 375ms) では吸収不可能。**Bug-G-001 として実装側に retry budget 拡張を上申**（要件: CI Defender 環境で 1 秒以上の race を吸収可能な budget、または `vault.db` の Defender exclusion 設定）。当面 TC-I29 主と TC-I29-B を `#[ignore]` で skip し、CI green 達成と工程4 完了を優先する。AC-19 のカバレッジは TC-I29-A (exhausted error 経路) と TC-I29-D-1〜D-4 (TOCTOU reverify 4 経路) で部分担保。**TC-I29 主と TC-I29-B は手動実行 (`--ignored`) または Defender exclusion 環境で動作を確認可能**であり、テストコード自体は将来 retry budget 拡張時に再有効化できる形で保存する*
+
+*改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映で retry budget を **指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 最悪 ~1675ms / 平均 ~1550ms** に拡張（`security.md` §jitter SSoT 連動更新）。① TC-I29 主の補助スレッド hold を 30ms → **200ms 程度**へ拡大可能化、deadline を 1500ms → **3000ms** へ拡張（指数バックオフ最悪 1675ms × 1.8 buffer）② TC-I29-A の補助スレッド hold を 800ms → **2500ms** へ拡張（>1675ms で retry 5 回全敗を確実に再現）③ TC-I29-B の期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（CI 実測現実の素直反映）④ TC-I29 主 / TC-I29-B の `#[ignore]` を撤回し CI で再有効化 ⑤ TC-I28 (Sub-D 5 件 vault_migration_integration) も指数バックオフで Defender 250ms+ ハンドル保持を吸収して Win CI green 化見込み。Bug-G-001 §7 の Option B（exponential backoff）採用、設計 SSoT 4 ファイル + test-design 2 ファイル同期*

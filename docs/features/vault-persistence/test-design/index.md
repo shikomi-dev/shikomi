@@ -44,7 +44,7 @@
 | AC-16 | `SHIKOMI_VAULT_DIR` に `/etc/` / `..` 含むパス / シンボリックリンクを指定するとそれぞれ `PersistenceError::InvalidVaultDir` で拒否される（REQ-P15 `VaultPaths::new` 7段階バリデーション） | 結合（Unix） |
 | AC-17 | `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（REQ-P13 advisory lock 競合検知） | 結合 |
 | AC-18 | Sub-D 由来 integration test `vault_migration_integration.rs` の 5 件（`tc_d_i01`〜`i05`）が **Windows ランナーで PASS** する（`AtomicWriter` のクローズ順序契約 + WAL/journal サイドカー解放 + Win 限定 rename retry の合成効果による既存テスト緑化、Issue #65） | 結合（Win） |
-| AC-19 | 並行スレッドが `vault.db` を `share_mode = 0` で 150ms 保持中に `save()` を発火しても、`cfg(windows)` 限定 rename retry（**上限 約 375ms（50ms × 5 + jitter ±25ms × 5）/ 平均 ~250ms**、`../basic-design/security.md` §atomic write の二次防衛線 §jitter）が一過性ロックを吸収して `Ok(())` を返す（Issue #65 補強の機能検証） | 結合（Win） |
+| AC-19 | 並行スレッドが `vault.db` を `share_mode = 0` で短時間保持中に `save()` を発火しても、`cfg(windows)` 限定 rename retry（**指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms**、`../basic-design/security.md` §atomic write の二次防衛線 §jitter、Bug-G-001 で線形 375ms から拡張）が一過性ロックを吸収して `Ok(())` を返す（Issue #65 補強の機能検証） | 結合（Win） |
 
 > **リスク観点**（合格判定軸外）: **R-01**: save 中クラッシュ（SIGKILL 相当）耐性 — 非決定的で CI 不適。論理等価な決定的テストは **AC-06 / TC-I06** で保証済み。手動探索テストとしてのみ残置。
 
@@ -94,9 +94,9 @@
 | TC-U15 | AC-16 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
 | TC-U16 | AC-16 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
 | TC-I28 | AC-18 | REQ-P04 | Win CI で `cargo test -p shikomi-infra --test vault_migration_integration` を実行 → 5 件全 PASS（修正前の `AtomicWriteFailed { stage: Rename, code:5 PermissionDenied }` パターンが消滅、PR #64 失敗ログとの diff を証跡） | 結合（Win） | 異常系の green 化 |
-| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で 150ms 保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が **jitter 込み最悪 375ms 以内**に完了（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）+ 監査ログに `outcome="pending"` / `outcome="succeeded"` が emit される | 結合（Win） | 異常系（race 状態下での正常完了検証） |
-| TC-I29-A | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で **600ms** 保持中に `save()` 発火 → retry 5 回全敗で `Err(AtomicWriteFailed { stage: Rename })`、監査ログに `"rename retry exhausted"` (**error レベル**) + `outcome="exhausted"` が emit される（DoS 兆候の OWASP A09 上位通報起点） | 結合（Win） | 異常系（fail fast + 監査 error 経路） |
-| TC-I29-B | AC-19 | REQ-P04 | race 不在の通常 `save()` 2 回 → 両 `Ok(())`、監査ログに `"persistence: rename retry event"` / `"rename retry exhausted"` / `outcome="pending"` / `outcome="succeeded"` / `outcome="exhausted"` のいずれも **emit されない**（偽 emit バグ回帰防止） | 結合（Win） | 正常系（sanity check） |
+| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で短時間（≤ 200ms）保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が **指数バックオフ込み最悪 ~1675ms 以内**に完了（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）+ 監査ログに `outcome="pending"` / `outcome="succeeded"` が emit される | 結合（Win） | 異常系（race 状態下での正常完了検証） |
+| TC-I29-A | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**（≥ 2500ms）保持中に `save()` 発火 → retry 5 回全敗で `Err(AtomicWriteFailed { stage: Rename })`、監査ログに `"rename retry exhausted"` (**error レベル**) + `outcome="exhausted"` が emit される（DoS 兆候の OWASP A09 上位通報起点） | 結合（Win） | 異常系（fail fast + 監査 error 経路） |
+| TC-I29-B | AC-19 | REQ-P04 | race 不在の通常 `save()` 2 回 → 両 `Ok(())`、監査ログに `outcome="exhausted"` が emit されない（DoS 兆候誤発火回帰防止）。`pending` / `succeeded` の retry 経路は CI Defender 介入で偶発し得るため許容する | 結合（Win） | 正常系（sanity check） |
 | TC-I29-D-1 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に通常ファイル → `Ok` | ユニット（Win） | 正常系 |
 | TC-I29-D-2 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に未存在パス → `Ok`（初回 save の `final_path` 経路） | ユニット（Win） | 正常系 |
 | TC-I29-D-3 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に `mklink /J` で作った junction → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })`（reparse point ビット検出経路） | ユニット（Win） | 異常系 |
@@ -215,4 +215,6 @@ echo "=== 全テスト PASS ==="
 *改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映。`security.md` §atomic write の二次防衛線 §jitter（±25ms 一様乱数追加、最悪 375ms / 平均 ~250ms）の同期漏れを修正。① AC-19 のretry 上限記述を「上限 約 375ms（50ms × 5 + jitter ±25ms × 5）/ 平均 ~250ms」に更新、`security.md` §jitter への参照追加 ② TC-I29 行のタイムアウト閾値を「jitter 込み最悪 375ms 以内」に更新 ③ `integration.md` 側 TC-I29 期待結果と実装上の注意を「150ms 保持は 1〜2 回目 retry で吸収される設計」と明確化（security.md ↔ flows.md ↔ test-design/* 三位一体の SSoT 整合確保）*
 
 *改訂 v7.0: 涅マユリ（テスト担当）/ 2026-04-27 — Issue #65 工程4（テスト実装）対応で AC-19 のテストカバレッジを 6 ケースに拡張。① TC-I29-A（DoS 兆候 / `outcome="exhausted"` error レベル発火）追加、補助スレッド 600ms 保持で retry 5 回全敗を決定的に再現 ② TC-I29-B（race 不在の通常 save で retry 監査ログが一切 emit されない sanity check、偽 emit バグ回帰防止）追加 ③ TC-I29-D-1〜D-4（`reverify_no_reparse_point` 4 経路ユニット検証、TOCTOU 二次防衛線）追加。詳細は `integration.md` §TC-I29-A / §TC-I29-B / §TC-I29-D 参照*
+
+*改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映。Win CI ランナーの Defender / Search Indexer が `vault.db` ハンドルを `~250ms+` 保持し続けるため、当初の線形 `50ms × 5 = 最悪 ~375ms` budget では `vault_migration_integration` 5 件 + TC-I29 主 + TC-I29-B が継続 fail する事象を解消。① AC-19 を「指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms」に SSoT 拡張 ② TC-I29 / TC-I29-A / TC-I29-B 行のタイムアウト閾値・補助スレッド保持時間を新 SSoT に同期 ③ TC-I29-B 期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（`integration.md` v7.1 で既に test 側に反映済の SSoT 同期）。`security.md` §jitter ↔ `error.md` ↔ `flows.md` ↔ `test-design/*` の四角形を新数値で同期*
 *対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード） / #65 fix(persistence): Windows AtomicWrite rename 失敗*

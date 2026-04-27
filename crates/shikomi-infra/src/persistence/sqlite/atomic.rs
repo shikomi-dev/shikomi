@@ -7,9 +7,15 @@
 //! 物理消去を契約として固定する。残存サイドカーには owner-only DACL を best-effort で
 //! 適用する。`fsync_and_rename` の rename 段は Windows のみ一過性エラー
 //! （`ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION` / `ERROR_LOCK_VIOLATION`）に対し
-//! 50ms ± jitter × 最大 5 回 retry を行い、retry 直前に symlink / reparse point を
+//! **指数バックオフ retry（`50ms × 2^(n-1)` ± `25ms` jitter × 最大 5 回、
+//! 最悪 ~1675ms / 平均 ~1550ms）** を行い、retry 直前に symlink / reparse point を
 //! 再検証して TOCTOU 差替えを fail fast する。詳細は `docs/features/vault-persistence/`
 //! の各設計書を参照。
+//!
+//! Bug-G-001 反映（2026-04-27）: 当初 `50ms × 5 = 最悪 ~375ms` の線形 retry だったが、
+//! Win CI ランナー (windows-latest) で Defender / Search Indexer が `vault.db` ハンドルを
+//! `drop` 後も `~250ms+` 保持し続け、`AtomicWriteFailed { code: 5 }` が継続発生したため、
+//! retry budget を指数バックオフへ拡張した（`security.md §jitter` SSoT も連動更新）。
 
 use std::path::Path;
 
@@ -40,16 +46,29 @@ const SQLITE_SIDECAR_SUFFIXES: &[&str] = &["-journal", "-wal", "-shm"];
 
 /// `cfg(windows)` 限定 rename retry の上限回数。
 ///
-/// 5 回 × (50ms ± 25ms jitter) = 最悪 ~375ms / 平均 ~250ms。SSoT 上限値は
+/// 5 回。指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter:
+///
+/// | n | 中央値 | range | 累積中央値 |
+/// |---|------|-------|----------|
+/// | 1 | 50ms | 25–75ms | 50ms |
+/// | 2 | 100ms | 75–125ms | 150ms |
+/// | 3 | 200ms | 175–225ms | 350ms |
+/// | 4 | 400ms | 375–425ms | 750ms |
+/// | 5 | 800ms | 775–825ms | 1550ms |
+///
+/// = 最悪 ~1675ms / 平均 ~1550ms。SSoT 上限値は
 /// `docs/features/vault-persistence/basic-design/security.md` §jitter（同期参照先 4 ファイル列挙）。
 #[cfg(windows)]
 const RENAME_MAX_RETRIES: u32 = 5;
 
-/// retry 間隔の中央値（ミリ秒）。
+/// 1 回目 retry 間隔の中央値（ミリ秒）。各 retry n では `BASE × 2^(n-1)` を中央値として使用。
 #[cfg(windows)]
 const RENAME_BASE_DELAY_MS: u64 = 50;
 
 /// retry 間隔の jitter 半幅（±N ミリ秒、timing oracle 防止）。
+///
+/// 指数バックオフでも jitter 半幅は固定（中央値の比率ではなく絶対 ms）で十分。
+/// 大きい retry 間隔（800ms）に対する ±25ms は約 3% で外部観測者からの分布推定を狭めない。
 #[cfg(windows)]
 const RENAME_JITTER_HALF_RANGE_MS: u64 = 25;
 
@@ -373,16 +392,19 @@ impl AtomicWriter {
         matches!(e.raw_os_error(), Some(5 | 32 | 33))
     }
 
-    /// `cfg(windows)` 限定の rename retry ループ（Issue #65）。
+    /// `cfg(windows)` 限定の rename retry ループ（Issue #65、Bug-G-001 反映済）。
     ///
-    /// 各試行の前に jitter sleep（`50ms ± 25ms` 一様乱数、timing oracle 防止）を挟み、
-    /// rename 直前に `.new` / `vault.db` 双方の symlink / NTFS reparse point を再検証する
+    /// 各試行の前に **指数バックオフ jitter sleep**（`50ms × 2^(n-1)` ± `25ms` 一様乱数、
+    /// timing oracle 防止）を挟み、rename 直前に `.new` / `vault.db` 双方の symlink /
+    /// NTFS reparse point を再検証する
     /// （`docs/features/vault-persistence/basic-design/security.md`
     ///  §atomic write の二次防衛線 §Win retry 中 TOCTOU）。
     /// 各試行の発火・成功・全敗を `Audit::retry_event` で監査ログに記録し、
     /// daemon 側 subscriber が DoS 兆候として上位通報する経路を有効化する。
     ///
-    /// 上限は jitter 込み最悪 ~375ms（`50+25` × 5）/ 平均 ~250ms（同 §jitter）。
+    /// 上限は jitter 込み最悪 ~1675ms / 平均 ~1550ms（同 §jitter）。Win CI ランナーで
+    /// Defender / Search Indexer が `vault.db` を 250ms+ 保持する CI 実測 (Bug-G-001) を
+    /// 確実に吸収する budget。
     #[cfg(windows)]
     fn windows_rename_retry(
         new_path: &Path,
@@ -403,7 +425,7 @@ impl AtomicWriter {
                 "pending",
             );
 
-            std::thread::sleep(Self::jittered_retry_delay());
+            std::thread::sleep(Self::jittered_retry_delay(attempt));
 
             // TOCTOU 再検証 — retry 窓中の symlink / junction 差替えを fail fast する
             Self::reverify_no_reparse_point(new_path)?;
@@ -453,17 +475,37 @@ impl AtomicWriter {
 
     /// retry 間隔の jitter 込み Duration を `OsRng` 由来の 1 byte で生成する。
     ///
-    /// `50ms ± 25ms` 一様乱数（`[25, 75]` ms）。`OsRng.fill_bytes` は対象 OS では
-    /// 事実上失敗しない（`crypto::rng` と同じ CSPRNG 経路）。`% 51` の僅かな mod bias は
+    /// 指数バックオフ: `BASE × 2^(attempt-1) ± HALF_RANGE` ms 一様乱数。
+    /// `attempt` は 1-indexed（1〜`RENAME_MAX_RETRIES`）。
+    ///
+    /// | `attempt` | 中央値 | range |
+    /// |-----------|------|-------|
+    /// | 1 | 50ms | 25–75ms |
+    /// | 2 | 100ms | 75–125ms |
+    /// | 3 | 200ms | 175–225ms |
+    /// | 4 | 400ms | 375–425ms |
+    /// | 5 | 800ms | 775–825ms |
+    ///
+    /// `OsRng.fill_bytes` は対象 OS では事実上失敗しない
+    /// （`crypto::rng` と同じ CSPRNG 経路）。`% 51` の僅かな mod bias は
     /// timing jitter 用途では無視可能（KISS）。
+    ///
+    /// Bug-G-001 反映: 当初 `BASE` 固定の線形 retry だったが、Win CI ランナーで
+    /// Defender / Search Indexer による 250ms+ ハンドル保持を吸収しきれず
+    /// `code:5 PermissionDenied` が継続発生したため、指数バックオフへ拡張した。
     #[cfg(windows)]
-    fn jittered_retry_delay() -> std::time::Duration {
+    fn jittered_retry_delay(attempt: u32) -> std::time::Duration {
         use rand_core::{OsRng, RngCore};
 
         let mut buf = [0u8; 1];
         OsRng.fill_bytes(&mut buf);
         let jitter_pos = u64::from(buf[0] % RENAME_JITTER_RANGE); // 0..=50
-        let delay_ms = RENAME_BASE_DELAY_MS + jitter_pos - RENAME_JITTER_HALF_RANGE_MS;
+
+        // 指数バックオフ: attempt 1→×1, 2→×2, 3→×4, 4→×8, 5→×16
+        // attempt は 1..=RENAME_MAX_RETRIES (≤5) なので shift overflow は起こらない。
+        let multiplier: u64 = 1u64 << (attempt.saturating_sub(1));
+        let center_ms = RENAME_BASE_DELAY_MS.saturating_mul(multiplier);
+        let delay_ms = center_ms + jitter_pos - RENAME_JITTER_HALF_RANGE_MS;
         std::time::Duration::from_millis(delay_ms)
     }
 

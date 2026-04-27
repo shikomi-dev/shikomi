@@ -52,23 +52,25 @@ const FILE_SHARE_NONE: u32 = 0;
 
 /// TC-I29 主検証の補助スレッド保持時間 (ms)。
 ///
-/// CI ランナー (windows-latest) の sleep 精度揺らぎ + Defender/Indexer の追加 lock を
-/// 考慮し、retry 1〜2 回目 (経過 ~50–100ms) で確実に吸収される短めの値に設定する。
-/// 当初 150ms だったが、CI 実測で 5 回 retry 全敗するケースが観測されたため
-/// 本値に短縮 (Issue #65 工程4 マユリ Win CI 観測、commit log 参照)。
-const TC_I29_HOLD_MS: u64 = 30;
+/// 指数バックオフ後の SSoT (`security.md §jitter` 最悪 ~1675ms / 平均 ~1550ms,
+/// Bug-G-001 反映) では retry 3 回目 (累積中央値 ~350ms) までに余裕で吸収される値。
+/// CI ランナー (windows-latest) で `drop(File)` の close 遅延 + Defender/Indexer
+/// 追加 lock (~250ms+) を考慮しても retry 4 回目 (累積 ~750ms) までには確実に成功する。
+const TC_I29_HOLD_MS: u64 = 200;
 
 /// TC-I29-A (DoS 兆候 / retry exhausted) の補助スレッド保持時間 (ms)。
 ///
-/// `jitter 込み最悪 ~375ms` を確実に超え、5 回 retry を全敗に追い込む値。
-const TC_I29_EXHAUST_HOLD_MS: u64 = 800;
+/// 指数バックオフ最悪 `~1675ms` (Bug-G-001 反映後) を確実に超え、5 回 retry を全敗に
+/// 追い込む値。`+50%` 余裕で CI ランナーの sleep 精度揺らぎ (±50ms) と Defender 介入
+/// による追加待機を吸収する。
+const TC_I29_EXHAUST_HOLD_MS: u64 = 2500;
 
 /// TC-I29 主検証の経過時間上限 (ms)。
 ///
-/// 純粋な retry 上限は 375ms (50ms × 5 + jitter ±25ms × 5)。CI ランナーの
-/// sleep 精度揺らぎ + write_new + thread spawn / channel 同期 の余裕を上乗せ。
+/// 指数バックオフ最悪 `~1675ms` (`50ms × 2^(n-1)` ± `25ms` × 5、Bug-G-001 反映後) ×
+/// `~1.8 buffer` + write_new + thread spawn / channel 同期の余裕を考慮した SSoT 上限。
 /// これを超えるなら retry 設計の上限契約違反 (`security.md §jitter` SSoT 違反)。
-const TC_I29_DEADLINE_MS: u128 = 1500;
+const TC_I29_DEADLINE_MS: u128 = 3000;
 
 // ---------------------------------------------------------------------------
 // 補助関数
@@ -98,26 +100,20 @@ fn spawn_exclusive_holder(
 // TC-I29: 並行 read open 中の rename race を retry が吸収して save が成功する
 // ---------------------------------------------------------------------------
 
-/// TC-I29 — 補助スレッドが `vault.db` を 30ms 間 share_mode(0) で保持している
-/// 最中に `repo.save()` を発火させ、`cfg(windows)` 限定 rename retry が
-/// race を吸収して `Ok(())` を返すことを検証する。
+/// TC-I29 — 補助スレッドが `vault.db` を 200ms 間 share_mode(0) で保持している
+/// 最中に `repo.save()` を発火させ、`cfg(windows)` 限定 指数バックオフ rename retry が
+/// race を吸収して `Ok(())` を返すことを検証する (Bug-G-001 反映済)。
 ///
 /// 検証する観点:
 /// 1. `repo.save()` が `Ok(())` を返す — retry が機能していなければ
 ///    `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail
-/// 2. 経過時間が上限契約 + ランナー余裕に収まる
+/// 2. 経過時間が上限契約 (指数バックオフ最悪 ~1675ms) + ランナー余裕に収まる
 /// 3. `repo.load()` で復元した vault が新内容と一致 (rename 成功の振る舞い側証跡)
 /// 4. 監査ログに `outcome="pending"` が記録される (retry 試行直前 emit)
 ///
 /// 設計書: docs/features/vault-persistence/test-design/integration.md §TC-I29
 /// AC-19 (Issue #65 retry 補強) 対応。
 #[test]
-#[ignore = "Win CI ランナー (windows-latest) で Defender / Indexer が `vault.db` の \
-            前回 save 直後にハンドル保持し、aux thread drop 後も追加で 250ms+ rename を阻む \
-            (Issue #65 の retry budget 50ms × 5 = 375ms では吸収不可)。\
-            手動実行 (`cargo test -p shikomi-infra --test integration_windows_retry -- \
-            --ignored`) または Defender exclusion 環境で動作。\
-            Bug-G-001 として実装側に retry budget 拡張を上申中"]
 #[serial(windows_atomic_rename_retry)]
 #[tracing_test::traced_test]
 fn tc_i29_aux_thread_short_hold_save_succeeds_within_deadline() {
@@ -287,11 +283,13 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
 //            「pending/succeeded は許容、exhausted のみ NG」 で sanity check)
 // ---------------------------------------------------------------------------
 
-/// TC-I29-B — race の無い通常 save では `outcome="exhausted"` が emit されない。
+/// TC-I29-B — race の無い通常 save では `outcome="exhausted"` が emit されない
+/// (Bug-G-001 反映済、指数バックオフ retry budget 拡張により CI Defender 介入を構造的に吸収)。
 ///
 /// CI ランナー (windows-latest) では Defender / Indexer の介入で通常 save でも
-/// 一過性 race が発生し得る (Issue #65 の根源そのもの) ため、retry 経路自体は
-/// 許容する。**本 TC の責務は「exhausted まで到達しない = 正常吸収範疇」の確認**。
+/// 一過性 race が発生し得る (Issue #65 の根源そのもの) ため、retry 経路自体 (`pending` /
+/// `succeeded`) は許容する。**本 TC の責務は「`exhausted` まで到達しない = 正常吸収範疇」
+/// の確認**であり、DoS 兆候誤発火の回帰防止に責務を絞る。
 ///
 /// `windows_rename_retry` 実装の「1 回目 rename 成功時は retry 経路に入らない」
 /// 契約を厳密に検証する独立 TC は、unit test (`atomic.rs` 内 `mod tests`) で
@@ -299,11 +297,6 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
 ///
 /// 設計書: docs/features/vault-persistence/detailed-design/flows.md §`save` step 7
 #[test]
-#[ignore = "Win CI ランナー (windows-latest) で Defender / Indexer が初回 save 後の \
-            `vault.db` を握り、200ms 待機 + 1 回再試行でも吸収できない \
-            (= Issue #65 の現実版 root cause を本 TC が CI で連続観測)。\
-            Bug-G-001 として実装側に retry budget 拡張を上申中。\
-            手動実行用に保持: --ignored で起動可"]
 #[serial(windows_atomic_rename_retry)]
 #[tracing_test::traced_test]
 fn tc_i29_b_no_race_save_does_not_exhaust_retry() {
@@ -314,24 +307,15 @@ fn tc_i29_b_no_race_save_does_not_exhaust_retry() {
     let vault = make_plaintext_vault(3);
     repo.save(&vault).expect("通常 save が失敗");
 
-    // 別内容で再 save (race 無し、置換)
-    // CI ランナーでは Defender 介入で偶発 retry が起こり得るため
-    // 失敗時はリトライ込みで再試行 (sleep + retry once on AtomicWriteFailed::Rename)
+    // 別内容で再 save (race 無し、置換)。指数バックオフ retry budget (~1675ms) で
+    // CI Defender 介入 (~250ms+) は retry 1〜3 回目までに必ず吸収される設計のため、
+    // ここでの save は Ok を返さなければならない (Bug-G-001 反映後の SSoT 保証)。
     let updated = make_plaintext_vault(5);
-    if let Err(e) = repo.save(&updated) {
-        // CI 環境の Defender/Indexer 介入で稀に retry exhausted まで行くことがある。
-        // 本 TC の責務は「race 無し時に retry 構造そのものが破綻しないこと」なので、
-        // 1 回までの再試行で吸収する (race 無し + 短時間スリープで Defender 解放を待つ)
-        eprintln!(
-            "TC-I29-B: 1 回目の置換 save が失敗 ({:?}) — Defender 介入の可能性、200ms 待機後リトライ",
-            e
-        );
-        thread::sleep(Duration::from_millis(200));
-        repo.save(&updated)
-            .expect("リトライ後も置換 save が失敗 (CI 環境異常 or 実装 bug)");
-    }
+    repo.save(&updated)
+        .expect("race 無しの置換 save が失敗 (指数バックオフ retry budget 拡張後の SSoT 違反)");
 
-    // 監査ログに exhausted が emit されていないこと (race 無しなので絶対 NG)
+    // 監査ログに exhausted が emit されていないこと (race 無しなので絶対 NG、
+    // DoS 兆候誤発火の回帰防止)
     if logs_contain("rename retry exhausted") {
         logs_assert(|lines: &[&str]| {
             eprintln!(
@@ -345,7 +329,7 @@ fn tc_i29_b_no_race_save_does_not_exhaust_retry() {
             Ok(())
         });
         panic!(
-            "race 無しなのに exhausted が emit された (Defender 介入で 5 回 retry exhausted まで到達 = CI 環境異常 or 実装 bug)"
+            "race 無しなのに exhausted が emit された (Defender 介入が指数バックオフ retry budget ~1675ms を超過 = CI 環境異常 or 実装 bug)"
         );
     }
     assert!(
