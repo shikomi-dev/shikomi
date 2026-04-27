@@ -248,7 +248,10 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
         // logs_assert は traced_test が inject するこの test の local closure。
         // 失敗時に全捕捉ログを stderr に出力して CI ログから原因究明できるようにする。
         logs_assert(|lines: &[&str]| {
-            eprintln!("=== TC-I29-A 失敗時 tracing 診断 ({} lines) ===", lines.len());
+            eprintln!(
+                "=== TC-I29-A 失敗時 tracing 診断 ({} lines) ===",
+                lines.len()
+            );
             for (i, line) in lines.iter().enumerate() {
                 eprintln!("  [{i:03}] {line}");
             }
@@ -320,7 +323,10 @@ fn tc_i29_b_no_race_save_does_not_exhaust_retry() {
     // 監査ログに exhausted が emit されていないこと (race 無しなので絶対 NG)
     if logs_contain("rename retry exhausted") {
         logs_assert(|lines: &[&str]| {
-            eprintln!("=== TC-I29-B 失敗時 tracing 診断 ({} lines) ===", lines.len());
+            eprintln!(
+                "=== TC-I29-B 失敗時 tracing 診断 ({} lines) ===",
+                lines.len()
+            );
             for (i, line) in lines.iter().enumerate() {
                 eprintln!("  [{i:03}] {line}");
             }
