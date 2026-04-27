@@ -53,13 +53,14 @@ fn read_confirmation_literal(_locale: Locale) -> Result<String, CliError> {
 
 /// 確認文字列が `CONFIRMATION_LITERAL` (= `"DECRYPT"`) と完全一致するか判定する pure 関数。
 ///
-/// `execute` 本体の判定経路と同じ等値比較を**単独に切り出した**テスト容易性向上ヘルパ。
+/// 工程5 ペテルギウス致命指摘解消: 可視性は **`fn` (private)** に最小化する。`#[cfg(test)]
+/// mod tests` は同モジュール内なので private のまま呼出可能で、`pub(crate)` にする理由は
+/// ゼロ ("テストのため公開関数を増やす" 怠惰の前例化を構造的に回避)。
+///
 /// `subtle::ConstantTimeEq` への移行は C-34 paste 抑制と同じ Phase 5 タスクで行う計画
-/// (`cli-subcommands.md` §パスワード入力 §C-34)。本 helper は判定ロジックそのものを
-/// 単独関数として SSoT 化し、Phase 5 移行時に呼出側を変えずに内部だけ ConstantTimeEq
-/// に差し替えられる構造を作る (Open/Closed)。
+/// (`cli-subcommands.md` §パスワード入力 §C-34)。
 #[must_use]
-pub(crate) fn is_decrypt_confirmation_literal(input: &str) -> bool {
+fn is_decrypt_confirmation_literal(input: &str) -> bool {
     input == CONFIRMATION_LITERAL
 }
 
