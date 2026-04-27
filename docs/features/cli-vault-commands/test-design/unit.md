@@ -218,4 +218,49 @@ TC-UT-022, 023 は env 操作が必要。`resolve_vault_dir_from(flag_or_env: Op
 
 ---
 
-*この文書は `index.md` の分割成果。結合テストは `integration.md`、E2E は `e2e.md`、CI は `ci.md` を参照*
+## 5. Sub-F (`vault-encryption`) TC との 1:1 整合 / 棲み分け
+
+本書は `cli-vault-commands` feature（record CRUD: `add` / `get` / `list` / `edit` / `remove` / vault パス解決 / i18n / Locale 検出 / 終了コード等）のユニットテストを `TC-UT-***` 系列で SSoT 化する。Sub-F (`vault-encryption/test-design/sub-f-cli-subcommands/index.md`) は vault 暗号化系サブコマンド（`vault encrypt` / `decrypt` / `unlock` / `lock` / `change-password` / `rekey` / `rotate-recovery`）のユニットテストを `TC-F-U**` 系列で SSoT 化する。**両者は異なる TC-ID 系列で衝突せず、対象責務が明確に分離されている**。
+
+### 5.1 TC-ID 系列の棲み分け方針
+
+| TC-ID 系列 | feature | カバー範囲 | SSoT 配置 |
+|---|---|---|---|
+| `TC-UT-***`（3 桁数字）| `cli-vault-commands` | record CRUD / vault パス解決 / i18n Locale / 終了コード `CliError → ExitCode` / `text_preview` / `ConfirmedRemoveInput` 等の **共通 CLI ロジック層** | 本書 (`cli-vault-commands/test-design/unit.md`) §2 |
+| `TC-F-U**`（2 桁数字、`F` プレフィックス）| `vault-encryption` Sub-F | vault 暗号化サブコマンド clap parse / mode banner / recovery_disclosure / cache_relocked_warning / accessibility resolve / `windows_pipe_name_from_dir` 純関数性 / `connect_with_vault_dir` MSG-S09(b) 強制発火 / process_hardening 等の **暗号化機能専用層** | `vault-encryption/test-design/sub-f-cli-subcommands/index.md` §15.4 / §15.5 |
+
+両者の TC は**配置先の Rust モジュールも分離**されている:
+
+- **`TC-UT-***`**: `crates/shikomi-cli/src/{cli,error,view,presenter,io,input}.rs::tests` 等（既存共通ロジック）
+- **`TC-F-U**`**: `crates/shikomi-cli/src/{usecase/vault,presenter/{recovery_disclosure,mode_banner,cache_relocked_warning},input/{password,mnemonic,decrypt_confirmation},accessibility,i18n,process_hardening,io/ipc_vault_repository}.rs::tests` 等（暗号化機能専用モジュール）
+
+### 5.2 Sub-F TC との重複なし確認（Issue #76 (#74-B) 工程2 整合作業）
+
+Issue #76 の DoD「`cli-vault-commands/test-design/unit.md` を Sub-F TC との 1:1 整合に更新」に対する整合確認:
+
+| 観点 | 結果 |
+|---|---|
+| **TC-ID 重複** | 重複なし。`TC-UT-***` と `TC-F-U**` は文字列レベルで衝突しない |
+| **検証対象モジュール重複** | 重複なし。両者の対象モジュールはディレクトリレベルで分離（`src/usecase/vault/` 配下は Sub-F 専有、`src/{view,presenter::{success,error,list,warning},error,input/confirmed_remove}` 等は `cli-vault-commands` 専有）|
+| **`io::paths::resolve_vault_dir` (TC-UT-020〜023) と Sub-F TC-F-U08/U09 (`windows_pipe_name_from_dir` / `connect_with_vault_dir`) の責務境界** | `resolve_vault_dir` は **`<DIR>` パス文字列の解決責務**（clap arg + OS デフォルト fallback）に閉じ、Sub-F TC-F-U08/U09 は **`<DIR>` から `shikomi.sock` / Windows pipe 名を派生する責務** に閉じる。両者は呼出責務階層で接続するが、テストレベルでは独立 |
+| **`error::ExitCode::from(&CliError)` (TC-UT-001〜009) と Sub-F TC-F-U15 (`usecase::vault::*` 終了コード) の責務境界** | `TC-UT-001〜009` は `CliError` 9 バリアント × `ExitCode` の **マッピング責務**を検証、Sub-F TC-F-U15 は `usecase::vault::*` が **`Result<ExitCode, CliError>` 経由で `MigrationError` 系統を SSoT 通りに変換する責務**を検証。マッピングそのもの（バリアント定義）は本書、変換経路（usecase 層）は Sub-F |
+| **`Locale` / `i18n` (TC-UT-080〜085) と Sub-F TC-F-U02 (`Localizer::translate` fallback) の責務境界** | `TC-UT-080〜085` は `Locale::detect_from_lang_env_value` の **検出責務**を検証、Sub-F TC-F-U02 は `Localizer::translate(key)` の **欠落キー fallback `[missing:{key}]`** 責務 (C-33) を検証。検出と翻訳は別関数で重複なし |
+
+### 5.3 Issue #75 (#74-A) で実装済の TC-F-U08/U09 への言及
+
+Issue #75 工程3 で `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_tests` モジュールに以下が機械検証として既コミット（merge `07ae079`）:
+
+- **TC-F-U08**: `windows_pipe_name_from_dir` の純関数性 4 ケース（決定性 / 16 文字固定長 / Base32 lowercase no-pad alphabet / 衝突耐性）— Bug-F-007 解消
+- **TC-F-U09**: `connect_with_vault_dir(Some(<未存在 tempdir>))` が `Err(PersistenceError::DaemonNotRunning(primary))` を返却し MSG-S09(b) 強制発火経路を保証 — Bug-F-009 Option α 解消
+
+これらは Sub-F の SSoT であり、本書（`cli-vault-commands` feature）の `TC-UT-***` 系列とは**TC-ID も配置モジュールも責務も独立**している。Issue #76 の実装担当（坂田銀時）は本書の `TC-UT-***` を再実装する必要は無く、Sub-F 側の `TC-F-U**` 13 件（U01〜U07 + U10〜U15、TC-F-U08/U09 を除く）のみを新規実装する。
+
+**設計原則整合**:
+
+- **DRY**: 同一観点を 2 系列の TC で二重に検証しない。本表で「重複なし」と機械的に articulate
+- **SOLID / Single Responsibility**: TC-ID 系列を feature に閉じ、cross-feature の TC 設計責務分離を明示
+- **Boy Scout Rule**: Issue #75 で発生した TC-ID ドリフトを Issue #76 工程2 で全面解消、設計書↔コードの一致を回復
+
+---
+
+*この文書は `index.md` の分割成果。結合テストは `integration.md`、E2E は `e2e.md`、CI は `ci.md` を参照。Sub-F TC は `vault-encryption/test-design/sub-f-cli-subcommands/index.md` を参照*

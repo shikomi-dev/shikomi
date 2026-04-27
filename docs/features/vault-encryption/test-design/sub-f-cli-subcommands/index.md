@@ -22,7 +22,7 @@
 | 対象成果物 | `vault-encryption/detailed-design/cli-subcommands.md`（Rev1 修正、§セキュリティ設計 / §env seam / §終了コード SSoT 新設）/ `requirements.md`（REQ-S15/S16 確定 + MSG-S07/S11/S14/S18/S20 CLI 文言）/ `basic-design/{processing-flows,ux-and-msg,index}.md`（EDIT、F-F1〜F-F8 + MSG 翻訳キー索引）/ `sub-0-threat-model.md`（CLI 攻撃面追補）/ `cli-vault-commands/requirements.md`（MSG-CLI-103 Boy Scout）/ **横断**: `daemon-ipc/{requirements.md, detailed-design/protocol-types.md}`（`IpcResponse::Records` 構造体化、`ProtectionModeBanner` enum 追加）|
 | 設計根拠 | `cli-subcommands.md` `Subcommand::Vault(VaultSubcommand)` **7 variant**（`recovery-show` 廃止）/ 7 usecase / 3 presenter (recovery_disclosure / mode_banner / cache_relocked_warning) / `--output {screen\|print\|braille\|audio}` 統合 / i18n TOML 辞書 / 契約 **C-33〜C-41**（欠落キー fail-soft / paste 抑制 / disclose 1 度限り / cache_relocked: false 終了コード 0 / `mode_banner::display` 必須呼出 / stdin パイプ拒否 / output 排他 / env seam debug 限定 / core dump 抑制）|
 | 対象 crate | `shikomi-cli`（`cli::Subcommand::Vault` + `cli::VaultSubcommand` enum 7 variant + `usecase::vault::*` 7 件 + `presenter::{recovery_disclosure,mode_banner,cache_relocked_warning}` + `input::{password,mnemonic,decrypt_confirmation}` + `accessibility::{print_pdf,braille_brf,audio_tts,output_target}` + `i18n::Localizer` + `process_hardening::{prctl,setrlimit,seterrormode}`、新規）+ `shikomi-core`（`IpcResponse::Records` 構造体化 + `ProtectionModeBanner` enum 追加、横断的変更）+ **`shikomi-daemon` Boy Scout**（`IdleTimer` env var 連動 + `FORCE_RELOCK_FAILURE` env init + 起動時 allowlist、`#[cfg(debug_assertions)]` 限定）|
-| **Sub-F TC 総数** | **37 件**（ユニット 13 + 結合 12 + アクセシビリティ 5 + E2E 1 + property 0 + 静的検査 6 = 37、Sub-A〜E と同型レンジ。Rev1 で +2 TC: TC-F-U13 stdin 拒否 (C-38) / TC-F-A05 一時ファイル umask 077、+1 TC-F-S06 env allowlist grep gate）|
+| **Sub-F TC 総数** | **39 件**（ユニット 15 + 結合 12 + アクセシビリティ 5 + E2E 1 + property 0 + 静的検査 6 = 39、Sub-A〜E と同型レンジ。Rev1 で +2 TC: TC-F-U13 stdin 拒否 (C-38) / TC-F-A05 一時ファイル umask 077、+1 TC-F-S06 env allowlist grep gate。Issue #75 (#74-A) で +2 TC: TC-F-U08 `windows_pipe_name_from_dir` 純関数性 (Bug-F-007) / TC-F-U09 `connect_with_vault_dir` MSG-S09(b) 強制発火 (Bug-F-009) — 旧 TC-F-U08 (`accessibility::output_target::resolve()`) は **TC-F-U14**、旧 TC-F-U09 (終了コード SSoT 整合) は **TC-F-U15** にリナンバ。Issue #76 (#74-B) スコープは TC-F-U01〜U07 + U10〜U15 = **13 件**で本数維持、TC-F-U08/U09 は Issue #75 で実装済 `07ae079`）|
 
 ### 15.1 Sub-F テストレベルの読み替え（CLI 経路 + アクセシビリティ + 田中ペルソナ E2E）
 
@@ -30,7 +30,7 @@ Sub-F は **Sub-A〜E で凍結した型・契約・IPC スキーマ + Sub-D `Va
 
 | テストレベル | 通常の対応 | Sub-F での読み替え | 検証手段 |
 |---|---|---|---|
-| **ユニット** | メソッド単位、ホワイトボックス | (a) `clap` 派生型 `VaultSubcommand` 7 variant の構築 + 引数 parse、(b) `i18n::Localizer` fallback (C-33)、(c) `decrypt_confirmation::prompt` paste 抑制 `< 30ms` 機械閾値 (C-34)、(d) `recovery_disclosure::display(words: Vec<SerializableSecretBytes>, target: OutputTarget)` の zeroize 連鎖、(e) `mode_banner::display` の ANSI カラー / NO_COLOR 切替、(f) `cache_relocked_warning::display` の MSG-S20 連結、(g) `ProtectionModeBanner` 4 variant 網羅（cross-crate `_` arm 許可）、(h) accessibility 自動切替 (SHIKOMI_ACCESSIBILITY env)、(i) 終了コード `ExitCode` マッピング（cli-subcommands.md §終了コード SSoT 参照）、(j) **stdin パイプ拒否 (C-38)**、(k) **core dump 抑制 (C-41)** | `cargo test -p shikomi-cli --lib cli::tests` + `cargo test -p shikomi-cli --lib presenter::tests` + `cargo test -p shikomi-cli --lib i18n::tests` + `cargo test -p shikomi-cli --lib input::tests` |
+| **ユニット** | メソッド単位、ホワイトボックス | (a) `clap` 派生型 `VaultSubcommand` 7 variant の構築 + 引数 parse、(b) `i18n::Localizer` fallback (C-33)、(c) `decrypt_confirmation::prompt` paste 抑制 `< 30ms` 機械閾値 (C-34)、(d) `recovery_disclosure::display(words: Vec<SerializableSecretBytes>, target: OutputTarget)` の zeroize 連鎖、(e) `mode_banner::display` の ANSI カラー / NO_COLOR 切替、(f) `cache_relocked_warning::display` の MSG-S20 連結、(g) `ProtectionModeBanner` 4 variant 網羅（cross-crate `_` arm 許可）、(h) **`windows_pipe_name_from_dir` 純関数性 (Bug-F-007、Issue #75 で実装済 `07ae079`)**、(i) **`connect_with_vault_dir` 全経路失敗時の `DaemonNotRunning(primary)` 変換 = MSG-S09(b) 強制発火 (Bug-F-009 Option α、Issue #75 で実装済)**、(j) accessibility 自動切替 (SHIKOMI_ACCESSIBILITY env)、(k) 終了コード `ExitCode` マッピング（cli-subcommands.md §終了コード SSoT 参照）、(l) **stdin パイプ拒否 (C-38)**、(m) **core dump 抑制 (C-41)** | `cargo test -p shikomi-cli --lib cli::tests` + `cargo test -p shikomi-cli --lib presenter::tests` + `cargo test -p shikomi-cli --lib i18n::tests` + `cargo test -p shikomi-cli --lib input::tests` + `cargo test -p shikomi-cli --lib io::ipc_vault_repository::windows_pipe_name_tests` |
 | **結合** | モジュール連携、契約検証 | (a) **7 サブコマンド × IPC V2 ラウンドトリップ** (recovery-show 廃止): `vault encrypt/decrypt/unlock/lock/change-password/rekey/rotate-recovery` を `assert_cmd` 経由実行、(b) **既存 CRUD ロック時 fail fast** (REQ-S16): `shikomi list/add/edit/remove` を Locked 状態で実行、(c) **shikomi list バナー 3 状態**、(d) **`cache_relocked: false` 表示**: env seam (`SHIKOMI_DAEMON_FORCE_RELOCK_FAIL=1`) + 終了コード 0 (C-31/C-36)、(e) **stdin パイプ拒否** (`echo pw \| shikomi vault unlock` → 終了コード 1, C-38) | `cargo test -p shikomi-cli --test vault_subcommands` + `cargo test -p shikomi-cli --test mode_banner_integration` + `assert_cmd` + `tempfile` + 実 `shikomi-daemon` 子プロセス + `expectrl` PTY |
 | **アクセシビリティ** | WCAG 2.1 AA 経路、stdout fixture | `vault encrypt --output print` PDF / `--output braille` BRF / `--output audio` TTS / `SHIKOMI_ACCESSIBILITY=1` 自動切替 / **PDF/BRF 一時ファイル umask 077 確認** の 5 経路。stdout のバイナリヘッダ / 構造で出力経路を機械検証 | `cargo test -p shikomi-cli --test accessibility_paths` + PDF/BRF magic byte assert + ファイルパーミッション確認 |
 | **E2E** | 完全ブラックボックス、ペルソナ | **TC-F-E01**（Sub-E `TC-E-E01` 田中ペルソナ完走の Sub-F 段階詳細化）: 田中（経理担当者）が daemon 起動 → `shikomi vault unlock` → `shikomi list` で業務 → アイドル自動 lock → 次操作で MSG-S09(c) → `shikomi vault unlock` 再入力 → `shikomi vault change-password` → MSG-S05 確認、6 ステップ完走 | `bash tests/e2e/sub-f-tanaka-persona.sh` + `assert_cmd` + `SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS=2` env 経由 idle 短縮（C-40 debug ビルド限定 seam）|
@@ -58,7 +58,7 @@ Sub-F は **Sub-A〜E で凍結した型・契約・IPC スキーマ + Sub-D `Va
 | **C-36** | `cache_relocked: false` 経路で終了コード 0、Err 終了コードを返さない（C-31 整合）| 結合（TC-F-I07c）|
 | **C-37** | `usecase::list` の出力経路で `mode_banner::display` を**必須呼出**（型レベル強制 + cross-crate grep gate、Rev1 ペテルギウス指摘7 再設計）| ユニット（TC-F-U07）+ 静的検査（TC-F-S02）|
 | **C-38** | パスワード / 24 語入力は `/dev/tty` 経由のみ、stdin パイプ拒否（Rev1 服部指摘5 解消）| ユニット（TC-F-U13）+ 結合（TC-F-I12） |
-| **C-39** | `--output {screen\|print\|braille\|audio}` フラグは排他指定、`screen` 既定 + アクセシビリティ自動切替 | ユニット（TC-F-U08） |
+| **C-39** | `--output {screen\|print\|braille\|audio}` フラグは排他指定、`screen` 既定 + アクセシビリティ自動切替 | ユニット（TC-F-U14） |
 | **C-40** | env seam は `#[cfg(debug_assertions)]` 限定 + allowlist sanity check（Rev1 服部指摘6 + ペテルギウス致命3 解消）| 静的検査（TC-F-S05 + TC-F-S06）|
 | **C-41** | shikomi-cli プロセスは core dump 抑制（Linux `prctl` / macOS `setrlimit` / Windows `SetErrorMode`）| ユニット（TC-F-U10）|
 | EC-F1 | F-F1 `vault encrypt --output {target}`: 平文 vault → 暗号化 vault マイグレーション + RecoveryDisclosure を 1 度のみ表示 + zeroize 連鎖 (C-19) | 結合（TC-F-I01）+ アクセシビリティ（TC-F-A01〜A03）|
@@ -70,10 +70,12 @@ Sub-F は **Sub-A〜E で凍結した型・契約・IPC スキーマ + Sub-D `Va
 | EC-F7 | F-F7 `vault rotate-recovery --output`: rekey + recovery rotation atomic + cache_relocked 分岐 + 24 語 1 度返却 + zeroize | 結合（TC-F-I08）|
 | EC-F8 | F-F8 既存 CRUD（`add/list/edit/remove`）ロック時 fail fast（MSG-S09(c) + `vault unlock` 誘導 + 終了コード 3、レコード内容/ID/ラベル含めない）| 結合（TC-F-I09 / I09b）|
 | EC-F9 | `shikomi list` バナー 3 状態表示（`[plaintext]` / `[encrypted, locked]` / `[encrypted, unlocked]`、ANSI カラー + 文字二重符号化、`NO_COLOR` env 経路で文字のみ）| 結合（TC-F-I10）|
-| EC-F10 | アクセシビリティ自動切替（`SHIKOMI_ACCESSIBILITY=1` env 経路で `--output {print,braille,audio}` のいずれかが自動選択）| アクセシビリティ（TC-F-A04）|
+| EC-F10 | アクセシビリティ自動切替（`SHIKOMI_ACCESSIBILITY=1` env 経路で `--output {print,braille,audio}` のいずれかが自動選択）| ユニット（TC-F-U14）+ アクセシビリティ（TC-F-A04）|
 | EC-F11 | i18n 翻訳辞書 `messages.toml`（ja-JP / en-US）に MSG-S01〜S20 全 20 キーが定義されている、欠落時 fallback 経路機能 (C-33) | ユニット（TC-F-U02）+ 静的検査（TC-F-S03）|
 | EC-F12 | `presenter::recovery_disclosure::display(words: Vec<SerializableSecretBytes>, target)` 1 度表示構造防衛: **所有権消費**、関数戻り後は呼出側で words 再利用不能（型レベル強制）| ユニット（TC-F-U04 / TC-F-U12）+ 静的検査（TC-F-S04）|
 | EC-F13 | PDF/BRF 一時ファイル / リダイレクト先のパーミッション `0o600` 相当（Rev1 服部指摘 §一時ファイル対策、ユーザの `>` リダイレクト先は umask 077 案内）| アクセシビリティ（TC-F-A05）|
+| EC-F14 | Bug-F-007: `--vault-dir <DIR>` の Windows pipe 名 `<H>` 算式は **`<DIR>` 文字列 → NFC 正規化 → lowercase → SHA-256 → Base32 lower no-pad 16 文字** の純関数（IO 操作なし、symlink 状態差を排除して CLI / daemon 間で同一導出）。`crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_from_dir` を SSoT、daemon 側 bind 経路と DRY 共有 | ユニット（TC-F-U08、Issue #75 で実装済 `07ae079`）|
+| EC-F15 | Bug-F-009: `--vault-dir <DIR>` 指定 + 全経路 daemon 不在の組合せで `connect_with_vault_dir` が `PersistenceError::DaemonNotRunning(primary)` を返却し、`presenter::error::render_daemon_not_running` 経由で MSG-S09(b) (`pass --vault-dir <DIR>` 案内) を強制発火させる（Option α、`fallback connect failed: <io error>` の原因 chain は `tracing::warn!` で構造化保持）| ユニット（TC-F-U09、Issue #75 で実装済 `07ae079`）|
 
 ### 15.4 Sub-F テストマトリクス
 
@@ -86,12 +88,14 @@ Sub-F は **Sub-A〜E で凍結した型・契約・IPC スキーマ + Sub-D `Va
 | TC-F-U05 | EC-F9 | `mode_banner::display(ProtectionModeBanner::Plaintext)` が `[plaintext]`、`EncryptedLocked` が `[encrypted, locked]`、`EncryptedUnlocked` が `[encrypted, unlocked]`、`Unknown` が `[unknown]` を ANSI カラー付きで返却。`NO_COLOR=1` env 経路でカラーシーケンス除去 | ユニット | バナー文字列 |
 | TC-F-U06 | C-32 / C-36 | `presenter::cache_relocked_warning::display()` が MSG-S07/S19 完了文言 + MSG-S20「次の操作前に `shikomi vault unlock` を再度実行してください」連結を返却、終了コード 0 を返す呼出側責務を doc コメントで明示 | ユニット | MSG 連結 |
 | TC-F-U07 | C-37 / EC-F9 | `match banner: ProtectionModeBanner { Plaintext => "p", EncryptedLocked => "el", EncryptedUnlocked => "eu", Unknown => "u", _ => "fail-secure" }` を **cross-crate** 経路で書く。**defensive fail-secure `_` arm を許可**（Sub-E TC-E-S01 同型、Rev1 ペテルギウス致命1 解消、`#[non_exhaustive]` cross-crate 防御的 `_` arm の正当性を機械検証）| ユニット | enum 網羅 + 防御 arm |
-| TC-F-U08 | C-39 / EC-F10 | `accessibility::output_target::resolve()` を 4 パターンで呼出: (a) `SHIKOMI_ACCESSIBILITY=1` set + フラグ無し、(b) フラグ `--output print` set、(c) どちらも未設定、(d) `SHIKOMI_ACCESSIBILITY=1` + `--output audio` 併用 | ユニット | 自動切替 |
-| TC-F-U09 | REQ-S15 / cli-subcommands.md §終了コード SSoT | 終了コードマッピング SSoT 参照: 成功=**0** / 一般エラー=**1** / **`BackoffActive`=2** / **`VaultLocked`=3** / **`ProtocolDowngrade`=4** / **`RecoveryRequired`=5** / `EX_USAGE`=64 / `EX_CONFIG`=78、すべて `usecase::vault::*` 戻り値型で `Result<ExitCode, CliError>` 経由で確定。Rev1 ペガサス致命指摘②解消 | ユニット | 終了コード SSoT 整合 |
+| TC-F-U08 | EC-F14 / Bug-F-007 | `windows_pipe_name_from_dir(<DIR>)` の純関数性を 4 ケースで機械検証: (a) 同一 `<DIR>` で同一文字列導出（決定性）、(b) 戻り値長 = 16 文字固定 + 80bit、(c) alphabet が Base32 lowercase no-pad (`a-z2-7`) のみ、(d) 異なる `<DIR>` 間で異なる文字列導出（衝突耐性）。配置: `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_tests`。**Issue #75 (#74-A) で実装済 `07ae079`**、Issue #76 では参照のみ（再実装不要）| ユニット | pipe 名純関数 |
+| TC-F-U09 | EC-F15 / Bug-F-009 | `IpcVaultRepository::connect_with_vault_dir(Some(<DIR>))` を未存在 tempdir + daemon 不在環境で呼出（test 内で `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` を全 unset、`#[serial_test::serial(env_xdg_home)]` で直列化）。期待: `Err(PersistenceError::DaemonNotRunning(primary))`（primary = `<DIR>/shikomi.sock` 派生）。同モジュール `windows_pipe_name_tests` 配置。**Issue #75 で実装済 `07ae079`**、Issue #76 では参照のみ | ユニット | Bug-F-009 Option α |
 | TC-F-U10 | C-41 | `process_hardening::install()` が起動時に Linux `prctl(PR_SET_DUMPABLE, 0)` / macOS `setrlimit(RLIMIT_CORE, 0)` / Windows `SetErrorMode(SEM_NOGPFAULTERRORBOX)` を呼び出すこと、関数 signature 存在確認（unit はシグネチャと OS 別 cfg 分岐の存在のみ、syscall 実機呼出は OS 別 manual smoke）| ユニット | core dump 抑制 |
 | TC-F-U11 | C-37 | clap 派生型に `--no-mode-banner` / `--hide-banner` 等の隠蔽フラグが**定義されていない**こと、`mode_banner::display` の呼出経路が `usecase::list::execute` から到達可能であることを反射 + grep 検証 | ユニット | 隠蔽不能補強 |
 | TC-F-U12 | EC-F12 / C-19 | `presenter::recovery_disclosure::display(words: Vec<SerializableSecretBytes>, target: OutputTarget)` の関数本体が `mem::replace(&mut words, vec![])` 等で**確実に Drop を発火**、scope 終了時の zeroize を逃さない（メモリパターン観測 + Sub-A `RecoveryWords` 同型）。**引数型は `Vec<SerializableSecretBytes>`** で統一（Rev1 ペテルギウス致命2 解消、`[String; 24]` 言及削除）| ユニット | Drop 連鎖 + 型整合 |
 | TC-F-U13 | C-38 | `input::password::prompt` / `input::mnemonic::prompt` が以下 3 パターン: (a) TTY 経由 (`expectrl` PTY) → `Ok(SecretString)`、(b) stdin パイプ非 TTY (`is-terminal::IsTerminal::is_terminal == false`) → `Err(CliError::NonInteractivePassword)`、(c) `/dev/tty` open 失敗（環境依存）→ `Err(CliError::TtyUnavailable)` | ユニット | stdin 拒否 (Rev1 新設) |
+| TC-F-U14 | C-39 / EC-F10 | `accessibility::output_target::resolve()` を 4 パターンで呼出: (a) `SHIKOMI_ACCESSIBILITY=1` set + フラグ無し、(b) フラグ `--output print` set、(c) どちらも未設定、(d) `SHIKOMI_ACCESSIBILITY=1` + `--output audio` 併用。**旧 TC-F-U08（Issue #75 で TC-ID 占有のため Issue #76 でリナンバ）**| ユニット | 自動切替 |
+| TC-F-U15 | REQ-S15 / cli-subcommands.md §終了コード SSoT | 終了コードマッピング SSoT 参照: 成功=**0** / 一般エラー=**1** / **`BackoffActive`=2** / **`VaultLocked`=3** / **`ProtocolDowngrade`=4** / **`RecoveryRequired`=5** / `EX_USAGE`=64 / `EX_CONFIG`=78、すべて `usecase::vault::*` 戻り値型で `Result<ExitCode, CliError>` 経由で確定。Rev1 ペガサス致命指摘②解消。**旧 TC-F-U09（Issue #75 で TC-ID 占有のため Issue #76 でリナンバ）**| ユニット | 終了コード SSoT 整合 |
 | TC-F-I01 | EC-F1 / REQ-S15 | `assert_cmd` で `shikomi vault encrypt --output screen` を強パスワード stdin 注入で実行（PTY 経由、C-38）→ stdout に MSG-S01 + 24 語表示 + 終了コード 0、vault.db が暗号化形式（`SqliteVaultRepository::load` で ProtectionMode::Encrypted）| 結合 | F-F1 正常 |
 | TC-F-I02 | EC-F2 / C-20 | `shikomi vault decrypt` で正規パスワード入力 + DECRYPT 大文字確認文字列入力 → 終了コード 0 + vault.db 平文化、不正 DECRYPT 確認 (例: `decrypt`) で 終了コード 1 + DECRYPT 中止メッセージ | 結合 | F-F2 正常 + 確認 |
 | TC-F-I02b | C-34 | `expectrl` で paste 模擬 (`< 30ms` で 2 回入力) → `Err(PasteSuspected)` + 終了コード 1 + MSG-S14 paste 検出文言、`>= 30ms` 跨ぎで通常入力 OK | 結合 | C-34 paste 抑制 |
@@ -135,14 +139,21 @@ Sub-F は **Sub-A〜E で凍結した型・契約・IPC スキーマ + Sub-D `Va
 | TC-F-U07 | `match banner: ProtectionModeBanner { Plaintext => "p", EncryptedLocked => "el", EncryptedUnlocked => "eu", Unknown => "u", _ => "fail-secure", }` を **cross-crate** 経路で書く（shikomi-cli 側 → shikomi-core の enum 参照、Sub-E TC-E-S01 同型「`#[non_exhaustive]` cross-crate 防御的 `_` arm 許可」と整合）| `cargo check` 警告 0 件、4 variant 全網羅 + `_` defensive fail-secure arm が**正当に許容**されることを機械検証。Rev1 ペテルギウス致命1 解消 |
 | TC-F-U12 | `recovery_disclosure::display` を `Vec<SerializableSecretBytes>` 渡しで実行後、内部バッファの再観測（test 用 `unsafe` hook 経由）。**引数型 `[String; 24]` ではなく `Vec<SerializableSecretBytes>`** に統一 | 実行後の旧バッファ位置が `[0u8; ...]` または retrieve 不能（zeroize 連鎖発火、Sub-A `RecoveryWords` 同型）。Rev1 ペテルギウス致命2 解消 |
 
+#### Bug-F-007 / Bug-F-009 vault-dir 経路（EC-F14 / EC-F15、Issue #75 で実装済 `07ae079`）
+
+| テストID | 検証手段 | 期待結果 |
+|---|---|---|
+| TC-F-U08 | `windows_pipe_name_from_dir(Path::new("..."))` を 4 ケースで呼出（同一 DIR 2 回 / 戻り値長 / Base32 alphabet / 異 DIR 比較） | 4 ケース全 PASS: 決定性 / 16 文字固定長 / `[a-z2-7]` のみ / 異 DIR で異なる文字列。配置 `io::ipc_vault_repository::windows_pipe_name_tests`、関数名 `tc_f_u08_*` 3 件 + 補助 `vault_dir_socket_path_is_pure` 1 件 = 4 件 |
+| TC-F-U09 | `IpcVaultRepository::connect_with_vault_dir(Some(<未存在 tempdir>))` を test 内 `XDG_RUNTIME_DIR` / `HOME` / `SHIKOMI_VAULT_DIR` 全 unset + `#[serial_test::serial(env_xdg_home)]` 直列化で呼出 | `Err(PersistenceError::DaemonNotRunning(primary))`（primary = `<tempdir>/shikomi.sock` 派生）。MSG-S09(b) 強制発火経路 SSoT。同モジュール配置、関数名 `tc_f_u09_connect_with_vault_dir_returns_daemon_not_running_with_primary_path` |
+
 #### アクセシビリティ + 終了コード + core dump（C-39 / C-41 / EC-F10）
 
 | テストID | 検証手段 | 期待結果 |
 |---|---|---|
-| TC-F-U08 | `accessibility::output_target::resolve()` を 4 パターンで呼出 (env / フラグ排他確認) | (a) `Some(Auto)`、(b) `Some(Print)`、(c) `None`（screen 既定）、(d) `Some(Audio)`（明示フラグ優先）|
-| TC-F-U09 | `usecase::vault::unlock` が各 `Result<(), MigrationError>` 系統に対し **cli-subcommands.md §終了コード SSoT** 通り返す: `Ok` → 0、`WrongPassword/BackoffActive` → 2、`VaultLocked` → 3、`ProtocolDowngrade` → 4、`RecoveryRequired` → 5、`Internal/SystemError` → 1 / 64 / 78（用途別）| 各分岐で SSoT 表通り ExitCode 返却。Rev1 ペガサス致命指摘②解消 |
 | TC-F-U10 | `process_hardening::install()` のシグネチャ存在 + Linux/macOS/Windows 各 `#[cfg(target_os)]` 分岐の存在を検証 (シンボル走査 + grep) | 3 OS 分岐すべて存在、起動時 main 関数からの呼出経路あり (cross-crate ref) |
 | TC-F-U11 | `cargo run -- vault list --no-mode-banner` 試行 / `grep -rE "no_mode_banner\|--no-mode-banner\|--hide-banner" crates/shikomi-cli/src/` | clap parse エラー (`unknown flag --no-mode-banner`) + grep ゼロ件、C-37 構造防衛維持 |
+| TC-F-U14 | `accessibility::output_target::resolve()` を 4 パターンで呼出 (env / フラグ排他確認) | (a) `Some(Auto)`、(b) `Some(Print)`、(c) `None`（screen 既定）、(d) `Some(Audio)`（明示フラグ優先）。**旧 TC-F-U08 リナンバ** |
+| TC-F-U15 | `usecase::vault::unlock` が各 `Result<(), MigrationError>` 系統に対し **cli-subcommands.md §終了コード SSoT** 通り返す: `Ok` → 0、`WrongPassword/BackoffActive` → 2、`VaultLocked` → 3、`ProtocolDowngrade` → 4、`RecoveryRequired` → 5、`Internal/SystemError` → 1 / 64 / 78（用途別）| 各分岐で SSoT 表通り ExitCode 返却。Rev1 ペガサス致命指摘②解消。**旧 TC-F-U09 リナンバ** |
 
 ### 15.6 Sub-F 結合テスト詳細
 
@@ -210,7 +221,7 @@ Sub-D Rev3 / Rev4 / Sub-E TC-E-S01..S09 で凍結した「**実装直読 SSoT + 
 
 ```bash
 # Rust unit + integration tests
-cargo test -p shikomi-cli --lib                       # TC-F-U01..U13
+cargo test -p shikomi-cli --lib                       # TC-F-U01..U15 (TC-F-U08/U09 は Issue #75 で実装済 `07ae079`、Issue #76 では U01..U07 + U10..U15 = 13 件追加)
 cargo test -p shikomi-cli --test vault_subcommands    # TC-F-I01..I12
 cargo test -p shikomi-cli --test accessibility_paths  # TC-F-A01..A05
 
@@ -237,7 +248,7 @@ cargo test -p shikomi-daemon --test ipc_integration
 
 ### 15.11 Sub-F テスト証跡
 
-- `cargo test -p shikomi-cli --lib` の stdout（unit 13 件 pass）
+- `cargo test -p shikomi-cli --lib` の stdout（unit **15 件 pass**、内訳: Issue #76 実装分 13 件 + Issue #75 実装済 TC-F-U08/U09 2 件 = 15 件）
 - `cargo test -p shikomi-cli --test vault_subcommands` の stdout（integration TC-F-I01..I12 pass）
 - `cargo test -p shikomi-cli --test accessibility_paths` の stdout（TC-F-A01..A05 magic byte / umask assert pass）
 - 静的検証スクリプト stdout（`sub-f-static-checks.sh` **6 件: TC-F-S01..S06**）
@@ -325,7 +336,7 @@ cargo test -p shikomi-daemon --test ipc_integration
 | # | 指摘元 | 内容 | 解消経路 |
 |---|---|---|---|
 | 1 | ペガサス致命① | `vault recovery-show` 別プロセス state 共有不能 | `vault {encrypt,rekey,rotate-recovery} --output` 統合、TC-F-A01..A03 を encrypt 経由に書き直し、TC-F-S01 を 7 variant 整合に修正 |
-| 2 | ペガサス致命② | 終了コードドリフト（BackoffActive=2 vs 5）| cli-subcommands.md §終了コード SSoT を唯一の真実源として TC-F-U09 / TC-F-I03 / TC-F-I03b / TC-F-E01 全て参照に統一 |
+| 2 | ペガサス致命② | 終了コードドリフト（BackoffActive=2 vs 5）| cli-subcommands.md §終了コード SSoT を唯一の真実源として TC-F-U15（旧 TC-F-U09、Issue #76 でリナンバ） / TC-F-I03 / TC-F-I03b / TC-F-E01 全て参照に統一 |
 | 3 | ペテルギウス致命1 | TC-F-U07 `#[non_exhaustive]` cross-crate match 矛盾 | defensive fail-secure `_` arm 許可（Sub-E TC-E-S01 同型）に修正 |
 | 4 | ペテルギウス致命2 | TC-F-U12 型不整合 (`[String; 24]` vs `Vec<SerializableSecretBytes>`)| `Vec<SerializableSecretBytes>` に統一、TC-F-S04 でも旧型残存を grep 検出 |
 | 5 | ペテルギウス致命3 | env seam SSoT 不在 | C-40 凍結 + TC-F-S05 / S06 grep gate で `#[cfg(debug_assertions)]` 限定 + allowlist 機械検証 |
@@ -334,4 +345,26 @@ cargo test -p shikomi-daemon --test ipc_integration
 | 8 | ペテルギウス指摘6 | TC-F-A03 録音判定 scope 過大 | env サニタイズ + dictation prefs 確認のみに scope 縮小、録音可能アプリ検出は MSG-S18 受容前提 |
 | 9 | ペテルギウス指摘7 | C-37 grep gate 脆弱（特定文字列不在検証）| `mode_banner::display` 必須呼出経路の cross-crate grep に再設計、TC-F-S02 で `usecase::list` から `presenter::mode_banner::display` への呼出存在を機械検証 |
 | 10 | 服部致命1〜6 | CLI 攻撃面追補 + stdin 拒否 + 一時ファイル umask + env サニタイズ + liblouis FFI 監査 + core dump 抑制 | C-38（TC-F-U13/I12 stdin 拒否）+ C-41（TC-F-U10 core dump）+ TC-F-A05（umask 077）+ TC-F-S06（env allowlist）+ liblouis 不採用方針（自前 wordlist テーブル）凍結 |
+
+### 15.14b Issue #76 (#74-B) 工程2 TC-ID リナンバ履歴（Sub-F 実装事実への追従）
+
+Issue #75 (#74-A) 工程3 実装（merge `07ae079`）で `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_tests` モジュールに **TC-F-U08 4 ケース**（`windows_pipe_name_from_dir` 純関数性 = Bug-F-007 解消）と **TC-F-U09 1 ケース**（`connect_with_vault_dir` MSG-S09(b) 強制発火 = Bug-F-009 Option α 解消）が機械検証として既コミットされた。これにより設計書側の TC-ID と実装事実に**三重衝突**（Issue #76 起票本文 / 旧設計書 / 実装側で TC-F-U08/U09 が異なる定義）が発生していた。
+
+工程2 で以下の方針で SSoT を一方向追従させる:
+
+| 観点 | 修正前 | 修正後 |
+|---|---|---|
+| **TC-F-U08 の意味論 SSoT** | 旧設計書: `accessibility::output_target::resolve()` 4 パターン / Issue #76 起票本文: `--vault-dir` flag 解釈 / 実装: `windows_pipe_name_from_dir` 純関数性 4 ケース | **実装側 SSoT** = `windows_pipe_name_from_dir` 純関数性 4 ケース（EC-F14 / Bug-F-007）に固定。設計書を実装事実に追従 |
+| **TC-F-U09 の意味論 SSoT** | 旧設計書: 終了コード SSoT 整合 / Issue #76 起票本文: mode banner 文字列 / 実装: `connect_with_vault_dir` Bug-F-009 Option α | **実装側 SSoT** = `connect_with_vault_dir` Bug-F-009 Option α（EC-F15）に固定 |
+| **旧 TC-F-U08（accessibility resolve）の TC-ID** | TC-F-U08 | **TC-F-U14** にリナンバ。検証内容は不変 |
+| **旧 TC-F-U09（終了コード SSoT 整合）の TC-ID** | TC-F-U09 | **TC-F-U15** にリナンバ。検証内容は不変 |
+| **Sub-F ユニット TC 件数** | 13 件（U01〜U13）| **15 件**（U01〜U07 + U08/U09 (Issue #75 実装済) + U10〜U15）|
+| **Sub-F TC 総数** | 37 件 | **39 件**（ユニット 15 + 結合 12 + アクセシビリティ 5 + E2E 1 + 静的検査 6）|
+| **Issue #76 実装スコープ TC 件数** | 13 件（U01〜U13）| **13 件**（U01〜U07 + U10〜U15、TC-F-U08/U09 は Issue #75 で実装済 `07ae079` のため除外）|
+
+リナンバの**設計原則**:
+
+- **DRY / SSoT 一方向追従**: merge 済の実装事実を真実として、設計書側を追従させる。実装側の関数名 `tc_f_u08_*` / `tc_f_u09_*` を再 PR で書き換えるコストを払う代わりに設計書だけを修正する判断（Boy Scout: 設計書↔コードのドリフト解消は最小編集距離の側で行う）
+- **YAGNI**: TC-F-U** の番号は単なる整理符号で外部契約ではない。リナンバによる影響は本ファイルおよび `cli-vault-commands/test-design/unit.md` の Cross-ref のみに閉じる
+- **Fail Fast / 履歴保持**: 旧 TC-ID は本表で明示的に「リナンバ済」とマーキングし、実装担当・テスト担当が「以前の TC-F-U08 を見て混乱する」事故を防ぐ
 
