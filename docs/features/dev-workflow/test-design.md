@@ -108,7 +108,7 @@
 
 ### TC-CI-026 サブケース — `audit-secret-paths.sh` `unsafe` ブロック検出 grep gate（コメント行除外、Issue #85）
 
-**設計根拠**: `docs/features/dev-workflow/detailed-design.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）。
+**設計根拠**: `docs/features/dev-workflow/detailed-design/scripts.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）。
 
 **経緯**: Issue #75 (PR #82) で `crates/shikomi-cli/src/io/ipc_vault_repository.rs` の doc コメントに「`` `unsafe { std::env::remove_var(...) }` は Rust 2024 edition の env 操作 unsafe 化 ``」という解説文字列が導入された。当時の grep gate（`grep -rnE 'unsafe[[:space:]]*\{' ... --include='*.rs'`）はソース行とコメント行を区別しないため、**doc コメント内の `unsafe { ... }` 解説文字列を実 `unsafe` ブロックと誤検出**して TC-CI-026 が FAIL し、PR #82 / #84 で連続して `--admin` バイパスを誘発した。本 5 サブケースは、**コメント行除外契約（行頭から最初の非空白文字が `//` で始まる行を一律除外）の有効性と、実 `unsafe` 検出力の維持を同時に保証する** 回帰防止 SSoT。
 
