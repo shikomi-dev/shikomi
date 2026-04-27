@@ -1682,6 +1682,8 @@ dependencies = [
  "dirs",
  "futures-util",
  "is-terminal",
+ "libc",
+ "nix 0.29.0",
  "predicates",
  "rmp-serde",
  "rpassword",
@@ -1698,6 +1700,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]

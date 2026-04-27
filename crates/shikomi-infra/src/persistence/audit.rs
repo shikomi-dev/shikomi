@@ -62,4 +62,54 @@ impl Audit {
             }
         }
     }
+
+    /// rename retry 試行を監査ログに記録する（Issue #65、`AtomicWriter` の Win retry 補強）。
+    ///
+    /// 設計根拠:
+    /// - `docs/features/vault-persistence/basic-design/security.md`
+    ///   §atomic write の二次防衛線 §retry 監査ログ
+    /// - 同 §監査ログ規約 §rename retry 発火 / §rename retry 全敗
+    ///
+    /// `outcome` の意味と発行レベル:
+    ///
+    /// | `outcome`     | レベル  | 発行タイミング                                |
+    /// |---------------|--------|---------------------------------------------|
+    /// | `"pending"`   | `warn` | 各 retry 試行直前（sleep + 再 rename の前）  |
+    /// | `"succeeded"` | `warn` | retry の rename 成功直後                     |
+    /// | `"exhausted"` | `error`| 5 回全敗で `AtomicWriteFailed` 返却直前      |
+    ///
+    /// シグネチャは `&'static str` / `u32` / `i32` / `u64` / `&'static str` のみで秘密値を含まない
+    /// （§秘密値マスクの型保証 §防衛線 と整合）。daemon 側 subscriber は本イベント頻度から DoS 兆候を
+    /// 検知し OWASP A09 連携で上位通報する（別 Issue 範疇、本 crate は emit 側責務のみ）。
+    ///
+    /// 本関数の実呼出は `cfg(windows)` rename retry 経由のみだが、API としては全プラットフォームで
+    /// 公開する（テスト・将来の他経路再利用を想定）。非 Windows ビルドの dead_code 警告を抑制する。
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn retry_event(
+        stage: &'static str,
+        attempt: u32,
+        raw_os_error: i32,
+        elapsed_ms: u64,
+        outcome: &'static str,
+    ) {
+        if outcome == "exhausted" {
+            tracing::error!(
+                stage,
+                attempt,
+                raw_os_error,
+                elapsed_ms,
+                outcome,
+                "persistence: rename retry exhausted"
+            );
+        } else {
+            tracing::warn!(
+                stage,
+                attempt,
+                raw_os_error,
+                elapsed_ms,
+                outcome,
+                "persistence: rename retry event"
+            );
+        }
+    }
 }
