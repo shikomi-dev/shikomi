@@ -270,7 +270,7 @@ cargo test -p shikomi-daemon --test ipc_integration
 | **Bug-F-001** | BLOCKER | `vault unlock --recovery` が Phase 5 stub のまま未実装。EC-F3 / TC-F-I03b 完全踏み倒し中 | `crates/shikomi-cli/src/usecase/vault/unlock.rs:29-32` |
 | **Bug-F-002** | HIGH | `success::*_with_fallback_notice` がデッドコード化、Phase 5 文言「is not yet wired in this build (Phase 5)」が残存 | `crates/shikomi-cli/src/presenter/success.rs:175,206,232-237` |
 | **Bug-F-003** | BLOCKER | CI が `shikomi-cli` / `shikomi-daemon` テストを実行していない（`unit-core` = `-p shikomi-core`、`test-infra` = `-p shikomi-infra` のみ）→「Linux 全 green」報告は **CI 観測スコープの錯覚** | `justfile`、`.github/workflows/test-infra.yml`、`unit-core.yml` |
-| **Bug-F-004** | BLOCKER | Sub-F の IPC V2 移行で既存 IPC integration / e2e テスト 36 件が破壊（`it_server_connection` 10/11 失敗、`it_ipc_vault_repository_phase15` 10/10 全壊、`e2e_daemon_phase15` 6/7 失敗）。client side が V1 のまま `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` | `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs`、`crates/shikomi-daemon/tests/it_server_connection.rs` 他 |
+| **Bug-F-004** | BLOCKER | Sub-F の IPC V2 移行で既存 IPC integration / e2e テスト **29 件**（§15.16.1 実測 SSoT、Sub-F 工程5 articulate 時点の概算「36 件」を訂正）が破壊（`it_server_connection` / `it_ipc_vault_repository_phase15` / `e2e_daemon_phase15` / `e2e_daemon_phase15_pty`）。client side が V1 のまま `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` | `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs`、`crates/shikomi-daemon/tests/it_server_connection.rs` 他（実 TC ID 全列挙は §15.16.1）|
 | **Bug-F-005** | HIGH | Encrypted vault fixture が壊れている（"wrapped_vek ciphertext is too short"）+ TC-E2E-040 で exit code 3 (VaultLocked) 期待 vs 実装 exit code 2 (BackoffActive) のドリフト | `crates/shikomi-cli/tests/common/fixtures.rs` 想定 |
 | **Bug-F-006** | MEDIUM | `vault encrypt --help` の `--output` Possible values 説明文に「Phase 5 で実装」が残存、Phase 6/7 完了主張と矛盾 | `crates/shikomi-cli/src/cli.rs:171-175` |
 | **Bug-F-007** | MEDIUM | vault サブコマンドで `--vault-dir` flag が完全に無視される。実際必要なのは XDG_RUNTIME_DIR / HOME だが、エラー文言は誤って SHIKOMI_VAULT_DIR を案内 | `crates/shikomi-cli/src/lib.rs::run_vault`、`crates/shikomi-cli/src/io/ipc_vault_repository.rs::unix_default_socket_path` |
@@ -340,11 +340,11 @@ cargo test -p shikomi-daemon --test ipc_integration
 | **Bug-F-001** | BLOCKER | `vault unlock --recovery` Phase 5 stub 解消、`UnlockArgs::recovery: bool` を functional 化 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（`vault-encryption/detailed-design/cli-subcommands.md` §Issue #75 工程2 §Bug-F-001 解消）、工程3 待機 |
 | **Bug-F-002** | HIGH | `success::*_with_fallback_notice` を C-31/C-36 経路に正式接続（経路復活）、Phase 5 文言除去 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-002 解消）、工程3 待機 |
 | **Bug-F-003** | BLOCKER | CI に `test-cli` / `test-daemon` ジョブ追加、`-p shikomi-cli` / `-p shikomi-daemon` を必須 check 化 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（`cli-vault-commands/test-design/ci.md` §7 Issue #75 §7.2/§7.3）、工程3 待機 |
-| **Bug-F-004** | BLOCKER | IPC V2 移行で破壊された既存テスト 36 件の追従、client 側 V2 アップグレード | **#75 (#74-A) 工程3** | ⏳ 工程3 待機（実装側の機械的追従、設計書影響は最小、`vault-encryption/detailed-design/vek-cache-and-ipc.md` の handshake 仕様 SSoT を維持） |
+| **Bug-F-004** | BLOCKER | IPC V2 移行で破壊された既存テスト **29 件**（§15.16.1 実測 SSoT、§15.13 表中および Issue body 概算「36 件」を訂正）の追従、client 側 V2 アップグレード | **#75 (#74-A) 工程3** | ⏳ 工程3 待機（実装側の機械的追従、設計書影響は最小、`vault-encryption/detailed-design/vek-cache-and-ipc.md` の handshake 仕様 SSoT を維持） |
 | **Bug-F-005** | HIGH | encrypted vault fixture 修復（`crates/shikomi-cli/tests/common/fixtures.rs`）、TC-E2E-040 exit code 整合（VaultLocked=3 / BackoffActive=2、cli-subcommands.md §終了コード SSoT） | **#75 (#74-A) 工程3** | ⏳ 工程3 待機 |
 | **Bug-F-006** | MEDIUM | `vault encrypt --help` 等の Phase 5 残存削除、`Phase\s+\d+` grep gate (TC-F-S05) で再演防止 | **#75 (#74-A) 工程3** + **#74-E** | ⏳ 工程2 設計 articulate 完了（`cli-subcommands.md` §Bug-F-006 解消）、grep gate は #74-E |
 | **Bug-F-007** | MEDIUM | `--vault-dir` flag を daemon socket 解決順序のヒントとして functional 化、エラー文言 `XDG_RUNTIME_DIR` / `HOME` 案内に SSoT 訂正 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-007 解消）、工程3 待機 |
-| **Bug-F-008** | LOW | daemon 起動時 vault.db auto-create / 案内 | **別 Issue 推奨**（#74 範囲外、#75 でも非対応） | 🔧 別 Issue で起票推奨、現状未着手 |
+| **Bug-F-008** | LOW | daemon 起動時 vault.db auto-create / 案内 | **#80**（別 Issue として正式起票済、#74 範囲外、#75 でも非対応） | 📌 #80 で trackable 化、優先度 LOW、別 PR で対応（ペテルギウス Issue #75 工程5 review 指摘 4「推奨と書いて起票しないのは Boy Scout 踏み倒し」解消） |
 
 #### Sub-F 専用テスト 37 TC 実装ステータス
 

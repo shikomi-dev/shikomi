@@ -404,7 +404,8 @@ Sub-F (#44) マージ後の実機検証で確定した Bug-F-001 / Bug-F-002 / B
 | 項目 | 契約 |
 |------|------|
 | clap 派生型 | `VaultSubcommand::Unlock(UnlockArgs)` の `UnlockArgs::recovery: bool`（既存図表 §clap 派生型構造）が **functional** に切り替わる。`--recovery` 指定時は password 系 prompt を**スキップ**し、24 語入力 prompt を起動 |
-| 排他関係 | password 経路と `--recovery` 経路は**実行時排他**（同時指定は clap の `conflicts_with` で静的拒否）。`SHIKOMI_VAULT_PASSWORD` env による非対話起動は `--recovery` と**併用不可**（`CliError::IncompatibleAuthFlags` で fail fast、exit code 64 = `EX_USAGE`） |
+| 排他関係 | password 経路と `--recovery` 経路は**実行時排他**（同時指定は clap の `conflicts_with` で静的拒否、clap 既定 exit code 2 = argument error）。`shikomi-cli` は **password 受領 env 経路を提供しない**（C-38「パスワードはコマンド引数として受け付けない、stdin / プロンプトのみ」と完全一貫、`SHIKOMI_VAULT_PASSWORD` 等の env 受領は `/proc/<pid>/environ` 漏洩 / 子プロセス継承 / shell history 残存 / journal 記録の攻撃面拡大経路として服部 Issue #75 工程5 review で**却下凍結**）。非対話起動 / CI / バッチ用途は `/dev/tty` 経路に限定し、将来 `--password-from-fd N` 等の代替経路は別 Issue で検討（YAGNI、本 Issue では提供しない） |
+| 排他違反検知（defensive） | clap `conflicts_with` でカバーできない動的経路（将来の代替認証フラグ追加 / `--recovery` 経路への遷移時の状態遷移エラー等）に備え、`shikomi_cli::error::CliError::IncompatibleAuthFlags { hint: &'static str }` を defensive 経路として提供する。発火時の文言は **MSG-S21**（`i18n/locales/{ja-JP,en-US}/messages.toml` 新規キー、ja: 「複数の認証経路が同時に指定されています。`--recovery` と password 入力は併用できません」 / en: "Conflicting authentication flags. `--recovery` cannot be combined with password input."）を経由して `presenter::error::display(MSG-S21, hint)` で出力。exit code は **64** (`EX_USAGE`)。`§終了コード SSoT` 表 64 行の脚注に「`IncompatibleAuthFlags` も `EX_USAGE` 経路」を追記 |
 | 入力経路 | `input::mnemonic_prompt` を経由（`/dev/tty` 強制 + 非エコー + paste 抑制 + `subtle::ConstantTimeEq` 比較）。bip39 検証は `shikomi-core::MnemonicValidator` trait で集約、CLI からの直接 `bip39` import は禁止（既存 §モジュール配置と責務 §依存方向） |
 | IPC variant | `IpcRequest::Unlock { master_password: Option<MasterPassword>, recovery: Option<RecoveryMnemonic> }`（**いずれか必須、両方不可**を schema レベルで保証）。daemon 側は recovery 経路で wrapped_vek_by_recovery を AEAD 復号 → VEK cache に格納 |
 | 成功時 presenter | `success::display(MSG-S03)` + 「次回から password 経路で unlock 可能」案内（`recovery` 単発使用を明示、永続的 recovery ログイン化を防止） |
@@ -443,15 +444,20 @@ Sub-F (#44) マージ後の実機検証で確定した Bug-F-001 / Bug-F-002 / B
 
 **現状**: vault サブコマンドで `--vault-dir` flag が完全に無視され、エラー文言が `SHIKOMI_VAULT_DIR` を誤案内。実際必要なのは IPC daemon socket の解決順序（`XDG_RUNTIME_DIR` / `HOME`）。
 
+**解消後の意味論契約**（フラグ名 `--vault-dir` の語彙を残す根拠と整合 — ペテルギウス Issue #75 工程5 review 致命指摘 1 解消）:
+
+> **`--vault-dir <DIR>` の意味は「vault.db の所在ディレクトリ」**。ユーザの認知モデル（vault.db のあるディレクトリを指定）を裏切らない。Phase 2 規定（CLI は vault.db に**直接**触らない、IPC 経由のみ）の下では、CLI は受け取った `<DIR>` を **daemon socket path の派生元**として用いる。具体的には「**vault.db と同じディレクトリ `<DIR>` 内の `shikomi.sock`（Unix）または `<DIR>` ハッシュから派生した名前付きパイプ（Windows）を最優先で試す**」契約を SSoT として固定する。これにより `--vault-dir` の語彙とフラグの実機効果が**意味論的に一致**する（vault.db を指す → 同じ場所の daemon socket を見る）。
+
 **解消後の挙動契約**:
 
 | 項目 | 契約 |
 |------|------|
-| `--vault-dir` の意味論 | **Phase 2 規定**（CLI は vault に直接触らない、IPC 経由のみ）と整合させ、`--vault-dir` は **daemon socket path 解決のヒント**として動作。具体的には `--vault-dir <DIR>` 指定時、`<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-<DIR-hash>`（Windows）を**最優先で試行**し、失敗時は標準解決順序にフォールバック |
-| 標準解決順序（SSoT） | (1) `--vault-dir` 引数（指定時）→ (2) `SHIKOMI_VAULT_DIR` env（指定時）→ (3) `XDG_RUNTIME_DIR/shikomi.sock`（Unix）→ (4) `$HOME/.shikomi/shikomi.sock`（Unix fallback、`XDG_RUNTIME_DIR` 不在時）→ (5) Windows: `\\.\pipe\shikomi-<user-sid-hash>`（固定）。本順序を `crates/shikomi-cli/src/io/ipc_vault_repository.rs` の `unix_default_socket_path` / `windows_default_pipe_name` の doc コメントに**コード側 SSoT として記述** |
-| エラー文言 SSoT | daemon socket 不在 → `IpcError::DaemonNotRunning` → MSG-S09(b) 経由 → exit code **64** (`EX_USAGE`)。文言は「Could not connect to daemon. Tried: `<socket-path>`. Ensure `shikomi-daemon` is running, or set `--vault-dir` / `XDG_RUNTIME_DIR`」（既存「`SHIKOMI_VAULT_DIR` を案内」を**訂正**）。`SHIKOMI_VAULT_DIR` は **vault.db 位置の env**（daemon 側責務）として残置するが、CLI 側のエラー文言ではこれを案内しない（責務分離） |
-| Phase 2 規定との整合 | `--vault-dir` は **CLI が vault.db に直接触る経路ではない**ことを文言 / 実装 / テストすべてで明確化。誤って `SqliteVaultRepository` 等を CLI から再利用する経路に流れたら TC-CI-012（既存 grep gate）で拒否 |
-| Boy Scout | TC-F-U08（`crates/shikomi-cli/src/cli.rs::tests`、#74-B で実装）で `--vault-dir` の clap parse + 解決順序を機械検証、TC-F-I12（`crates/shikomi-cli/tests/vault_subcommands.rs`、#74-C で実装）で daemon 不在時の MSG-S09(b) 文言と exit code 64 を機械検証 |
+| `--vault-dir` の意味論 SSoT | `<DIR>` は **vault.db の所在ディレクトリ**を指す。CLI は `<DIR>` を直接読まず、`<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-<H>`（Windows、`<H>` は後述）を最優先で試行する。`<DIR>` と vault.db / shikomi.sock のディレクトリが一致する**契約**を `shikomi-daemon` 側起動時の socket bind 仕様（`crates/shikomi-daemon/src/lib.rs` 起動経路）でも対称に固定し、daemon が `<DIR>` 配下に socket を作成する責務を負う |
+| Windows pipe 名の `<H>` 契約 | `<H>` は **`<DIR>` 絶対パスを正規化（NFC + 大文字小文字を OS に合わせて lowercase 化）した後の SHA-256 を Base32（パディングなし、`a-z2-7`）で先頭 16 文字**。同一 `<DIR>` を指定した CLI / daemon が同じ pipe 名を導出することを保証する純関数。Windows pipe 名は ASCII 64 文字以下に収める制約があるため SHA-256 全長は不採用。本算式を `crates/shikomi-cli/src/io/ipc_vault_repository.rs::windows_pipe_name_from_dir` の doc コメントに**コード側 SSoT** として記述、`crates/shikomi-daemon/src/bin/shikomi_daemon.rs` 側の bind 経路も同関数を共有（DRY） |
+| 標準解決順序（SSoT） | (1) `--vault-dir <DIR>` 引数（指定時、最優先）→ `<DIR>/shikomi.sock`（Unix）or `\\.\pipe\shikomi-<H>`（Windows） / (2) `SHIKOMI_VAULT_DIR` env（指定時、`<DIR>` と同等扱い）→ 同上派生 / (3) `XDG_RUNTIME_DIR/shikomi/shikomi.sock`（Unix、daemon 標準実行時の所在）→ vault.db は `$XDG_DATA_HOME/shikomi/vault.db` 既定（daemon 側 SSoT 参照）/ (4) `$HOME/.shikomi/shikomi.sock`（Unix fallback、`XDG_RUNTIME_DIR` 不在時）/ (5) Windows: `\\.\pipe\shikomi-<user-sid-hash>`（既定、`<user-sid-hash>` は `<H>` 算式と同方式で user SID から導出）。本順序を `unix_default_socket_path` / `windows_default_pipe_name` の doc コメントに**コード側 SSoT** として記述 |
+| エラー文言 SSoT | daemon socket 不在 → `IpcError::DaemonNotRunning` → MSG-S09(b) 経由 → exit code **64** (`EX_USAGE`)。文言は **MSG-S09(b) 拡張**として「Could not connect to daemon. Tried: `<socket-path>`. Ensure `shikomi-daemon` is running, or pass `--vault-dir <DIR>` to point at the vault.db directory whose `shikomi.sock` you want to use.」（`<DIR>` が vault.db ディレクトリを指す意味論を文言で明示、ユーザ認知モデルと一致）。`SHIKOMI_VAULT_DIR` env はこの文言で**直接案内しない**（`--vault-dir` フラグ経由の方が明示的、env は副次経路として `--help` で言及）|
+| Phase 2 規定との整合 | `--vault-dir <DIR>` を受け取った後、CLI は **`<DIR>/vault.db` を直接 open しない**。`SqliteVaultRepository` 等のクラス参照は `crates/shikomi-cli/src/` 配下から TC-CI-012（既存 grep gate）で拒否。CLI が触るのは `<DIR>/shikomi.sock` のみで、socket 経由で daemon が `<DIR>/vault.db` を所有して I/O する責務分離を維持 |
+| Boy Scout | TC-F-U08（`crates/shikomi-cli/src/cli.rs::tests`、#74-B で実装）で `--vault-dir` の clap parse + 解決順序を機械検証、TC-F-I12（`crates/shikomi-cli/tests/vault_subcommands.rs`、#74-C で実装）で daemon 不在時の MSG-S09(b) 文言と exit code 64 を機械検証。Windows pipe 名 `<H>` 算式の純関数性は `windows_pipe_name_from_dir` ユニットテスト（同 PR で `tests` モジュールに最小ケース追加）で固定 |
 
 ### Bug-F-* 全体の SSoT 整合（横断方針）
 
