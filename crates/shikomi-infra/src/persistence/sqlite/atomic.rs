@@ -630,4 +630,121 @@ mod tests {
             "vault.db の内容が変わっている（.new がリネームされてしまった）"
         );
     }
+
+    // -------------------------------------------------------------------
+    // TC-I29-D (unit) — Win retry 中 TOCTOU 再検証ユニットテスト群
+    // -------------------------------------------------------------------
+    //
+    // `reverify_no_reparse_point` は `cfg(windows)` の rename retry ループ内で
+    // 各 attempt の sleep 直後に呼ばれ、retry 窓中の symlink / NTFS reparse point
+    // 差替え (`mklink /J` 等) を fail fast する。基本設計
+    // `security.md §atomic write の二次防衛線 §Win retry 中 TOCTOU` 対応。
+    //
+    // 整合する受入基準: AC-19 (Issue #65 retry 補強の二次防衛線、TOCTOU 側)。
+    //
+    // integration test ではなく unit に置く理由:
+    // - 関数が `pub(crate)` 未満 (private) で integration からアクセス不可
+    // - retry sleep 窓中に junction を差し替える race は非決定的で flaky になりやすい
+    //   ため、判定単体を直接呼んで決定的に検証する方が SSoT 担保になる
+
+    /// TC-I29-D-1: 通常ファイル → Ok。
+    #[cfg(windows)]
+    #[test]
+    fn tc_i29_d1_reverify_returns_ok_for_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join("regular.bin");
+        std::fs::write(&f, b"x").unwrap();
+        AtomicWriter::reverify_no_reparse_point(&f)
+            .expect("通常ファイルで reverify が誤判定 (Ok を期待)");
+    }
+
+    /// TC-I29-D-2: 未存在パス (vault.db 初回作成時の final_path) → Ok。
+    #[cfg(windows)]
+    #[test]
+    fn tc_i29_d2_reverify_returns_ok_for_missing_path() {
+        let dir = TempDir::new().unwrap();
+        let f = dir.path().join("not_yet.bin");
+        AtomicWriter::reverify_no_reparse_point(&f)
+            .expect("未存在パスで reverify が誤判定 (Ok を期待 — 初回 save の final_path 経路)");
+    }
+
+    /// TC-I29-D-3: ディレクトリ junction (`mklink /J`) → SymlinkNotAllowed。
+    ///
+    /// junction はディレクトリの reparse point で **管理者権限不要** で作成できる。
+    /// `FILE_ATTRIBUTE_REPARSE_POINT (0x400)` ビット検出経路を直接検証する。
+    /// `mklink` 不能ランナー (一部の minimal 環境) では skip する。
+    #[cfg(windows)]
+    #[test]
+    fn tc_i29_d3_reverify_detects_directory_junction() {
+        use crate::persistence::error::VaultDirReason;
+
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target_dir");
+        std::fs::create_dir(&target).unwrap();
+        let junction = dir.path().join("junction_dir");
+
+        // mklink /J は cmd.exe 経由でしか叩けない (Windows の組み込みコマンド)
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .status()
+            .expect("cmd /C mklink /J 実行不能 (Windows ランナーで mklink が見つからない)");
+
+        if !status.success() {
+            // 一部の制約付きランナーで junction 作成権限が無い場合は skip
+            // (本 TC の決定性は確保できないが、本流 Windows runner は通常通る)
+            eprintln!(
+                "skipping tc_i29_d3: mklink /J が失敗した (権限不足の可能性、exit={:?})",
+                status.code()
+            );
+            return;
+        }
+
+        let result = AtomicWriter::reverify_no_reparse_point(&junction);
+        match result {
+            Err(PersistenceError::InvalidVaultDir {
+                reason: VaultDirReason::SymlinkNotAllowed,
+                ..
+            }) => {}
+            other => panic!(
+                "junction で SymlinkNotAllowed を期待したが {:?}",
+                other.err()
+            ),
+        }
+    }
+
+    /// TC-I29-D-4: ディレクトリ symlink (`std::os::windows::fs::symlink_dir`) → SymlinkNotAllowed。
+    ///
+    /// `is_symlink()` 検出経路を直接検証する (junction とは別経路)。
+    /// dir symlink は **Developer Mode 有効または管理者権限** が必要なので、
+    /// 作成失敗時は skip する (windows-latest GA runner は Developer Mode 有効)。
+    #[cfg(windows)]
+    #[test]
+    fn tc_i29_d4_reverify_detects_directory_symlink() {
+        use crate::persistence::error::VaultDirReason;
+        use std::os::windows::fs::symlink_dir;
+
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target_dir");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("symlink_dir");
+
+        if symlink_dir(&target, &link).is_err() {
+            eprintln!("skipping tc_i29_d4: dir symlink 作成権限が無い (Developer Mode 無効)");
+            return;
+        }
+
+        let result = AtomicWriter::reverify_no_reparse_point(&link);
+        match result {
+            Err(PersistenceError::InvalidVaultDir {
+                reason: VaultDirReason::SymlinkNotAllowed,
+                ..
+            }) => {}
+            other => panic!(
+                "dir symlink で SymlinkNotAllowed を期待したが {:?}",
+                other.err()
+            ),
+        }
+    }
 }

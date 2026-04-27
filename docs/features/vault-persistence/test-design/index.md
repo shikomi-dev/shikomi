@@ -94,7 +94,13 @@
 | TC-U15 | AC-16 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
 | TC-U16 | AC-16 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
 | TC-I28 | AC-18 | REQ-P04 | Win CI で `cargo test -p shikomi-infra --test vault_migration_integration` を実行 → 5 件全 PASS（修正前の `AtomicWriteFailed { stage: Rename, code:5 PermissionDenied }` パターンが消滅、PR #64 失敗ログとの diff を証跡） | 結合（Win） | 異常系の green 化 |
-| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で 150ms 保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が **jitter 込み最悪 375ms 以内**に完了（`../basic-design/security.md` §atomic write の二次防衛線 §jitter） | 結合（Win） | 異常系（race 状態下での正常完了検証） |
+| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で 150ms 保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が **jitter 込み最悪 375ms 以内**に完了（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）+ 監査ログに `outcome="pending"` / `outcome="succeeded"` が emit される | 結合（Win） | 異常系（race 状態下での正常完了検証） |
+| TC-I29-A | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で **600ms** 保持中に `save()` 発火 → retry 5 回全敗で `Err(AtomicWriteFailed { stage: Rename })`、監査ログに `"rename retry exhausted"` (**error レベル**) + `outcome="exhausted"` が emit される（DoS 兆候の OWASP A09 上位通報起点） | 結合（Win） | 異常系（fail fast + 監査 error 経路） |
+| TC-I29-B | AC-19 | REQ-P04 | race 不在の通常 `save()` 2 回 → 両 `Ok(())`、監査ログに `"persistence: rename retry event"` / `"rename retry exhausted"` / `outcome="pending"` / `outcome="succeeded"` / `outcome="exhausted"` のいずれも **emit されない**（偽 emit バグ回帰防止） | 結合（Win） | 正常系（sanity check） |
+| TC-I29-D-1 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に通常ファイル → `Ok` | ユニット（Win） | 正常系 |
+| TC-I29-D-2 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に未存在パス → `Ok`（初回 save の `final_path` 経路） | ユニット（Win） | 正常系 |
+| TC-I29-D-3 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に `mklink /J` で作った junction → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })`（reparse point ビット検出経路） | ユニット（Win） | 異常系 |
+| TC-I29-D-4 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に `symlink_dir` で作った dir symlink → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })`（`is_symlink()` 検出経路） | ユニット（Win） | 異常系 |
 
 ---
 
@@ -207,4 +213,6 @@ echo "=== 全テスト PASS ==="
 *改訂 v5: 涅マユリ（テスト担当）/ 2026-04-23 — キャプテン決定「17 項目体系確定」に基づき requirements-analysis.md 現行体系と 1:1 合致する形へ再修正。セルとのマスターテーブル合意（2026-04-23）後に実施。① AC-03=save/load 統合を廃止し AC-03=save のみ・AC-04=load のみに分離 ② 旧 AC-05（クラッシュ参考観点）を削除し AC-05=.new 残存 load に戻す ③ AC-06=write_new_only（R-01 決定的等価）を確定 ④ AC-07〜AC-17 を requirements-analysis.md 現行の順序に完全一致 ⑤ R-01 をリスク観点として明示 ⑥ integration.md・unit.md・テストマトリクス全 AC 参照を追随更新*
 *改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① AC-18 追加（Sub-D `vault_migration_integration` 5 件 Win green 化を受入条件化）② AC-19 追加（並行 read open race を retry が吸収する補強検証）③ TC-I28・TC-I29 をマトリクスに追加 ④ カバレッジ基準の AC 範囲を AC-19 まで拡張、TC 範囲を TC-I29 まで拡張 ⑤ Fail Secure ケースに「Win file-handle semantics」行を追加し `#[cfg(windows)] #[ignore]` 回避禁止を SSoT 化（`integration.md` §0 外部 I/O 依存マップ・冒頭注記と二重露出による忘却防止）*
 *改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映。`security.md` §atomic write の二次防衛線 §jitter（±25ms 一様乱数追加、最悪 375ms / 平均 ~250ms）の同期漏れを修正。① AC-19 のretry 上限記述を「上限 約 375ms（50ms × 5 + jitter ±25ms × 5）/ 平均 ~250ms」に更新、`security.md` §jitter への参照追加 ② TC-I29 行のタイムアウト閾値を「jitter 込み最悪 375ms 以内」に更新 ③ `integration.md` 側 TC-I29 期待結果と実装上の注意を「150ms 保持は 1〜2 回目 retry で吸収される設計」と明確化（security.md ↔ flows.md ↔ test-design/* 三位一体の SSoT 整合確保）*
+
+*改訂 v7.0: 涅マユリ（テスト担当）/ 2026-04-27 — Issue #65 工程4（テスト実装）対応で AC-19 のテストカバレッジを 6 ケースに拡張。① TC-I29-A（DoS 兆候 / `outcome="exhausted"` error レベル発火）追加、補助スレッド 600ms 保持で retry 5 回全敗を決定的に再現 ② TC-I29-B（race 不在の通常 save で retry 監査ログが一切 emit されない sanity check、偽 emit バグ回帰防止）追加 ③ TC-I29-D-1〜D-4（`reverify_no_reparse_point` 4 経路ユニット検証、TOCTOU 二次防衛線）追加。詳細は `integration.md` §TC-I29-A / §TC-I29-B / §TC-I29-D 参照*
 *対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード） / #65 fix(persistence): Windows AtomicWrite rename 失敗*

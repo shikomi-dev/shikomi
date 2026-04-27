@@ -472,8 +472,67 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 
 ---
 
+## TC-I29-A: retry 5 回全敗で `outcome="exhausted"` が **error レベル**で発火する（Windows、Issue #65 DoS 兆候）
+
+> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **600ms 保持**し、retry の上限契約 `~375ms` を超過させることで 5 回 retry を全敗に追い込む。`Audit::retry_event` の `outcome="exhausted"` 経路 (error レベル) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-A |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、DoS 兆候側） |
+| 対応する工程 | 基本設計（`../basic-design/security.md` §atomic write の二次防衛線 §retry 監査ログ §rename retry 全敗 / 詳細設計 `../detailed-design/flows.md` §`save` step 7.3） |
+| 種別 | 異常系（fail fast の意図確認 + 監査ログ error 経路の発火確認） |
+| 前提条件 | `#[cfg(windows)]` ガード。`tempfile::TempDir`。初期 `vault.db` を save 済。`tracing_test::traced_test` でログ収集 |
+| 操作 | 1. 初期 vault を save 完了 2. 補助スレッドが `share_mode(0)` で `vault.db` を **600ms 保持**（`>375ms` で retry を 5 回全敗させる） 3. 補助スレッド ready 直後に `repo.save(&new_vault)` 4. save 戻り値とトレーシングログを検証 |
+| 期待結果 | `repo.save()` が `Err(AtomicWriteFailed { stage: Rename, source: code:5/32/33 })` を返す。監査ログに `"rename retry exhausted"`（error レベル）+ `outcome="exhausted"` が emit される。`outcome="pending"` も併発するが `outcome="succeeded"` は emit されない（fail 経路）|
+
+**実装上の注意**:
+- `tracing_test::traced_test` は **DEBUG 以上**の events を捕捉する。`Audit::retry_event` の error 分岐は `tracing::error!` を発行するため `logs_contain("rename retry exhausted")` で観測可能
+- 補助スレッドの 600ms は `>375ms` であれば足りるが、CI ランナーの sleep 精度揺らぎ (±20ms) を吸収する余裕値として固定。500ms でも仕様上は十分
+
+---
+
+## TC-I29-B: race 不在の通常 save では retry 監査ログが一切 emit されない（Windows、偽 emit 防止）
+
+> **背景**: `windows_rename_retry` は 1 回目の rename が成功したら**呼ばれない**契約 (`flows.md` §`save` step 7)。1 回目成功時に `Audit::retry_event` の経路へ誤って分岐する**偽 emit バグ**を未然に検出する sanity check。Issue #65 修正後の `rename_atomic` 内 `is_windows_transient_rename_error` 判定の制御フローを emit 側証跡で固定する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-B |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、回帰防止） |
+| 対応する工程 | 詳細設計（`../detailed-design/flows.md` §`save` step 7、`../detailed-design/classes.md` §`AtomicWriter::rename_atomic` 制御フロー） |
+| 種別 | 正常系（race 無し経路の sanity check） |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir`。`tracing_test::traced_test` |
+| 操作 | 1. race 無しで `repo.save(&vault)` を呼ぶ（初回作成）2. race 無しで `repo.save(&updated)` を呼ぶ（置換）3. トレーシングログを検証 |
+| 期待結果 | 両 save が `Ok(())`。監査ログに `"persistence: rename retry event"` / `"rename retry exhausted"` / `outcome="pending"` / `outcome="succeeded"` / `outcome="exhausted"` のいずれも **emit されていない** |
+
+---
+
+## TC-I29-D (unit): `reverify_no_reparse_point` の TOCTOU 判定単体検証（Windows、`atomic.rs` 内 `#[cfg(test)]`）
+
+> **背景**: Issue #65 retry 補強の二次防衛線 §`Win retry 中 TOCTOU` を担保する `reverify_no_reparse_point` を**ユニットレベルで決定的に検証**する。retry sleep 窓中に junction を差し替える race は非決定的で flaky になりやすいため、判定単体を直接呼び出して 4 経路（通常ファイル / 未存在 / junction / dir symlink）を網羅する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-D-1 〜 TC-I29-D-4 |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、TOCTOU 二次防衛線） |
+| 対応する工程 | 基本設計（`../basic-design/security.md` §atomic write の二次防衛線 §Win retry 中 TOCTOU）/ 詳細設計（`AtomicWriter::reverify_no_reparse_point`） |
+| 種別 | 正常系 (D-1, D-2) / 異常系 (D-3, D-4) |
+| 配置 | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` の `#[cfg(test)] mod tests` 内 `#[cfg(windows)]` ガード（関数が `pub(crate)` 未満で integration 不可） |
+| 操作 | D-1: 通常ファイル → `Ok` / D-2: 未存在パス → `Ok`（初回 save の `final_path` 経路）/ D-3: `mklink /J` で junction → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` / D-4: `symlink_dir` で dir symlink → 同上 |
+| 期待結果 | 上記 4 経路すべて期待値通り。D-3 / D-4 は `mklink /J` / `symlink_dir` が失敗する制約付きランナー（権限不足）では skip（`stderr` に skip 理由を出力）|
+
+**実装上の注意**:
+- D-3 (junction) は **管理者権限不要** で作成可能（`FILE_ATTRIBUTE_REPARSE_POINT (0x400)` ビット検出経路）
+- D-4 (dir symlink) は **Developer Mode 有効または管理者権限**が必要（`is_symlink()` 検出経路、`windows-latest` GA runner は Developer Mode 有効）
+- D-3 と D-4 で **検出経路が異なる**（reparse point ビット vs symlink フラグ）ため両方検証が必要
+
+---
+
 *対応 Issue: #10, #14, #65 / 親ドキュメント: `test-design/index.md`*
 
 *改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① §0 「Issue #65 由来の外部 I/O 依存マップ」を新規追加（`rusqlite` / `std::fs::rename` / `MoveFileExW` の境界明示、PR #64 失敗ログを raw fixture として要起票化、assumed mock 禁止の reviewer 却下基準明記）② TC-I28 追加（Sub-D `vault_migration_integration` 5 件 green 化を Issue #65 受入条件として明示、AC-18）③ TC-I29 追加（並行 read open 中の rename race を retry が吸収することを `share_mode(0)` で決定的に再現、AC-19）④ ツール選択根拠に `#[cfg(windows)] #[ignore]` 回避禁止注記を追加（Bug-F-003 再演防止）*
 
 *改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映（`security.md` §atomic write の二次防衛線 §jitter ±25ms 追加に伴う test-design 同期漏れ修正）。① TC-I29 期待結果のタイムアウト閾値を「250ms 超過なら fail」→「**約 375ms 超過なら fail**」に更新、`security.md §jitter` への参照追加 ② TC-I29 実装上の注意を「retry 上限（250ms）の内側」→「**jitter 込み最悪 375ms の内側**、補助スレッド保持 150ms は 1〜2 回目 retry（経過 ~50〜150ms）で吸収される設計」に明確化 ③ `index.md` 側 AC-19 とマトリクス TC-I29 行も同期更新（v6.1）*
+
+*改訂 v7.0: 涅マユリ（テスト担当）/ 2026-04-27 — Issue #65 工程4（テスト実装）対応。① TC-I29-A（`outcome="exhausted"` の error レベル発火 / DoS 兆候側 emit 経路）を新規追加、補助スレッド 600ms 保持で retry 5 回全敗を決定的に再現 ② TC-I29-B（race 不在の通常 save で retry 監査ログが一切 emit されない sanity check、偽 emit バグの回帰防止）を新規追加 ③ TC-I29-D-1〜D-4（`reverify_no_reparse_point` ユニットレベル判定検証 4 経路）を `atomic.rs` 内 `#[cfg(test)] mod tests` に追加（関数が `pub(crate)` 未満で integration 不可のため） ④ 実装ファイル: `crates/shikomi-infra/tests/integration_windows_retry.rs`（TC-I29 / TC-I29-A / TC-I29-B）+ `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` `#[cfg(test)] mod tests`（TC-I29-D-1〜D-4）*
