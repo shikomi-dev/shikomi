@@ -52,10 +52,10 @@
 | バリアント | 意味 |
 |-----------|------|
 | `PrepareNew` | `.new` 作成前の準備（親ディレクトリ作成等） |
-| `WriteTemp` | `.new` への SQLite 書込中（open / PRAGMA / DDL / insert / COMMIT） |
+| `WriteTemp` | `.new` への SQLite 書込中（open / PRAGMA / DDL / insert / COMMIT / **`PRAGMA wal_checkpoint(TRUNCATE)`** / **`PRAGMA journal_mode = DELETE`** / **`Connection::close()` 明示呼出**）。close 失敗は本 stage に分類（Issue #65、Win file-handle semantics 対応）|
 | `FsyncTemp` | `.new` の `sync_all` |
 | `FsyncDir` | 親ディレクトリの `sync_all` |
-| `Rename` | `rename` / `ReplaceFileW` |
+| `Rename` | `std::fs::rename`（OS 抽象、Unix `rename(2)` / Win `MoveFileExW`）。`ReplaceFileW` 直接採用しない（unsafe FFI 境界追加回避、KISS）。Win 限定で一過性エラー（`ERROR_ACCESS_DENIED` / `ERROR_SHARING_VIOLATION` / `ERROR_LOCK_VIOLATION`）に対する **50ms ± jitter × 最大 5 回 retry**（**最悪 ~375ms / 平均 ~250ms**、`../basic-design/security.md` §jitter）+ retry 直前 symlink 再検証 + 監査ログ記録を本 stage に内包。retry 全敗で本 stage 失敗として上位へ return（Issue #65、`../basic-design/error.md` §Windows rename PermissionDenied 行 / `../basic-design/security.md` §atomic write の二次防衛線）|
 | `CleanupOrphan` | `.new` の削除失敗（best-effort） |
 
 ## load / save のアルゴリズム詳細（制御フロー）
@@ -100,12 +100,16 @@
    8. `Mapping::vault_header_to_params(vault.header())` で params 取得、`tx.execute(INSERT_VAULT_HEADER, params)` 実行
    9. `for record in vault.records()`: `Mapping::record_to_params(record)` → `tx.execute(INSERT_RECORD, params)`
    10. `tx.commit()?`
-   11. `drop(conn)`
+   11. **`execute("PRAGMA wal_checkpoint(TRUNCATE)")`** — WAL モード採用時に `-wal` / `-shm` サイドカーをチェックポイント+truncate で物理空にする（DELETE モード採用時は no-op だが副作用なし、SQLite "Write-Ahead Logging" §`PRAGMA wal_checkpoint` https://www.sqlite.org/pragma.html#pragma_wal_checkpoint 参照）
+   12. **`execute("PRAGMA journal_mode = DELETE")`** — 残存の `-journal` / `-wal` / `-shm` サイドカーを削除モードに切替し、close 時にサイドカーが物理消去されることを契約として固定（Issue #65 由来、Win file-handle semantics 対応の根本対策）。**defense-in-depth の意図**: `schema.rs::PRAGMA_JOURNAL_MODE` で初期 DELETE 設定済（`atomic.rs:70-71`）の冗長 issue だが、将来 WAL モードへ切り替える設計判断（パフォーマンス改善 / 並行 read 性能）が入った時に **本 step を消し忘れて Win rename race を再導入する罠を構造的に塞ぐ**。`PRAGMA_JOURNAL_MODE` 定数の値変更時、本 step が「DELETE への明示的な強制切替」として動き、`.new` 書込中だけは確実に DELETE モードで close される（Boy Scout / Fail Safe）
+   13. **`conn.close()` を明示呼出**。`Result<(), (Connection, rusqlite::Error)>` を握り、失敗時は **`PersistenceError::Sqlite { source: rusqlite::Error }` を直接返す**（`io::Error::other` 等で型情報を失う変換を行わない、`../basic-design/error.md` §禁止事項 §エラー情報を失う型の公開 API 使用 と整合）。`drop(conn)` 任せで Win file-handle 解放遅延を許容しない（rusqlite Drop は `sqlite3_close_v2` を呼ぶが pending stmt cache があると close を遅延する semantics — `rusqlite::Connection::close` doc https://docs.rs/rusqlite/latest/rusqlite/struct.Connection.html#method.close 参照）。close 失敗時は `AtomicWriter::cleanup_new(new_path)` を呼んで `.new` を best-effort 削除し、元の `Sqlite` エラーを伝播（`../basic-design/security.md` §atomic write の二次防衛線 §`Connection::close()` 失敗時の `.new` クリーンアップ）
 7. `AtomicWriter::fsync_and_rename(self.paths)`:
-   1. `File::open(new_path)?.sync_all()?`（`FsyncTemp`）
+   1. `File::open(new_path)?.sync_all()?`（`FsyncTemp`、Win では `read(true).write(true)` で開く — `FlushFileBuffers` が書込権限を要求するため）
    2. `File::open(dir)?.sync_all()?`（`FsyncDir`、Unix のみ。Windows では no-op）
-   3. `fs::rename(new_path, final_path)?` または `ReplaceFileW(..., REPLACEFILE_WRITE_THROUGH)`（`Rename`）
-   4. 各段階で失敗したら `AtomicWriter::cleanup_new(new_path)` を呼び、best-effort で `.new` を削除。元のエラーを `AtomicWriteFailed { stage, source }` にラップして return
+   3. **rename 段（共通実装、Win のみ retry 補強）**: `fs::rename(new_path, final_path)` を呼ぶ。Rust `std::fs::rename` は OS 抽象を内部で行い、Unix では `rename(2)`（POSIX atomic）、Windows では `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` 相当に展開される（`std::fs::rename` Win 挙動 https://doc.rust-lang.org/std/fs/fn.rename.html#platform-specific-behavior 参照）。**`ReplaceFileW` 直接呼出は採用しない**（採否根拠: ① `std::fs::rename` で十分な atomicity を得られる、② `ReplaceFileW` 直接採用は `shikomi-infra` に新たな unsafe FFI 境界を追加し本 PR スコープを越える、③ メタデータ preserve は本 vault では不要 — `.new` を `vault.db` で完全置換する一方向で、attribute / ADS / timestamp を保つ必要がない、④ `MOVEFILE_WRITE_THROUGH` で書込貫通も `std::fs::rename` 経路で達成。Microsoft Learn "MoveFileExW" https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw / "ReplaceFileW" https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew 参照）。
+   - **Unix**: 失敗即 `AtomicWriteFailed { stage: Rename, source }`
+   - **Windows (`cfg(windows)` 限定 retry 補強)**: `Err` の場合、`io::Error::raw_os_error()` を読み、`ERROR_ACCESS_DENIED (5)` / `ERROR_SHARING_VIOLATION (32)` / `ERROR_LOCK_VIOLATION (33)` を**一過性エラー**として識別。これらは Win Indexer / Defender / バックアップソフトの一過性ハンドル / SQLite Drop 順序の残響等で発生するため、**50ms ± jitter × 最大 5 回 retry**（**最悪 ~375ms / 平均 ~250ms**、jitter は `±25ms` 一様乱数で固定タイミングを timing oracle 化させない、`../basic-design/security.md` §atomic write の二次防衛線 §jitter）を挿入する。retry 直前に `VaultPaths` の **シンボリックリンク再検証**（`fs::symlink_metadata` で `vault.db` / `.new` 双方の `is_symlink` を再確認）を行う（retry 窓中の TOCTOU 差替え攻撃対策、`../basic-design/security.md` §atomic write の二次防衛線 §Win retry 中 TOCTOU）。再検証で symlink が検出されたら retry を打ち切り `InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast。**それ以外のエラーコード**（`ERROR_DISK_FULL (112)` / `ERROR_PATH_NOT_FOUND (3)` 等）は即 fail fast、retry しない。retry 全敗で `AtomicWriteFailed { stage: Rename, source }` を返す。retry 発火・完了は `audit::retry_event(stage, attempt, elapsed_ms, outcome)` で監査ログに記録（`../basic-design/security.md` §atomic write の二次防衛線 §retry 監査ログ）
+   4. 各段階で失敗したら `AtomicWriter::cleanup_new(new_path)` を呼び、best-effort で `.new` を削除。元のエラーを `AtomicWriteFailed { stage, source }`（または `Sqlite { source }` for close 失敗、`InvalidVaultDir { reason }` for retry 中 symlink 検知）にラップして return
 8. `audit::exit_ok_save(record_count, bytes_written, elapsed_ms)` を発行、`VaultLock` が drop され排他ロックが解放される
 9. `Ok(())` を返却
 
