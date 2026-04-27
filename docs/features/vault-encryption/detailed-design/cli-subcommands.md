@@ -390,3 +390,77 @@ Sub-0 `sub-0-threat-model.md` の L1〜L4 capability matrix に **CLI 攻撃面 
 1. **Tauri WebView 起動経路**: `shikomi_cli::usecase::vault::*` を `shikomi_gui` から呼出可能にするため、`pub` 公開範囲を Sub-F PR で確定（Boy Scout）
 2. **MSG-S17 GUI バッジ**: 後続 GUI feature で実装、本書では `requirements.md` MSG-S17 の TBD のまま
 3. **i18n 辞書共有**: `messages.toml` を CLI / GUI 両方で参照、辞書ファイル配置を `shared/i18n/` 等に再配置する Boy Scout を後続 GUI feature 工程2 で検討
+
+## Issue #75 (#74-A) 工程2 — Sub-F 残存 Bug 解消の挙動 articulate
+
+Sub-F (#44) マージ後の実機検証で確定した Bug-F-001 / Bug-F-002 / Bug-F-006 / Bug-F-007 に対し、本書で**正式な挙動契約**を articulate する。実装は #75 工程3（実装担当）が本節を SSoT として遵守する。テスト担当（涅マユリ）は #74-B/C/D/E の各 TC で本節の挙動を機械検証する。
+
+### Bug-F-001 解消 — `vault unlock --recovery` 経路の機能化
+
+**現状**: `crates/shikomi-cli/src/usecase/vault/unlock.rs:29-32` が Phase 5 stub のまま、EC-F3 / TC-F-I03b を完全踏み倒し中。
+
+**解消後の挙動契約**:
+
+| 項目 | 契約 |
+|------|------|
+| clap 派生型 | `VaultSubcommand::Unlock(UnlockArgs)` の `UnlockArgs::recovery: bool`（既存図表 §clap 派生型構造）が **functional** に切り替わる。`--recovery` 指定時は password 系 prompt を**スキップ**し、24 語入力 prompt を起動 |
+| 排他関係 | password 経路と `--recovery` 経路は**実行時排他**（同時指定は clap の `conflicts_with` で静的拒否）。`SHIKOMI_VAULT_PASSWORD` env による非対話起動は `--recovery` と**併用不可**（`CliError::IncompatibleAuthFlags` で fail fast、exit code 64 = `EX_USAGE`） |
+| 入力経路 | `input::mnemonic_prompt` を経由（`/dev/tty` 強制 + 非エコー + paste 抑制 + `subtle::ConstantTimeEq` 比較）。bip39 検証は `shikomi-core::MnemonicValidator` trait で集約、CLI からの直接 `bip39` import は禁止（既存 §モジュール配置と責務 §依存方向） |
+| IPC variant | `IpcRequest::Unlock { master_password: Option<MasterPassword>, recovery: Option<RecoveryMnemonic> }`（**いずれか必須、両方不可**を schema レベルで保証）。daemon 側は recovery 経路で wrapped_vek_by_recovery を AEAD 復号 → VEK cache に格納 |
+| 成功時 presenter | `success::display(MSG-S03)` + 「次回から password 経路で unlock 可能」案内（`recovery` 単発使用を明示、永続的 recovery ログイン化を防止） |
+| 失敗時 exit code | recovery passphrase 不一致 → `IpcError::Crypto { reason: "wrong-recovery-passphrase" }` → **exit code 2**（password 経路と同型、`§終了コード SSoT` 表で `2` の脚注に「recovery 経路も同コード」を追記）。BackoffActive / VaultLocked / RecoveryRequired との重複は発生しない（recovery 経路に backoff は適用されない設計、Sub-D 凍結） |
+| 監査ログ | 既存 `audit.rs` に新規発火点なし（IPC 経由で daemon 側が `entry_unlock` / `exit_ok_unlock` で記録、CLI 側は `tracing::info!("unlock: recovery path")` を**含めない**＝C-38 等価で経路情報も漏洩経路化を防ぐ） |
+
+**処理フロー §F-F3 の更新**: 既存表 (§処理フロー詳細) の F-F3 行で「`--recovery` 経路への移行案内」と記載済み。Bug-F-001 解消で**移行案内ではなく functional 経路として完備**された旨を `processing-flows.md` §F-F3 (basic-design 側 SSoT) で同期更新（#75 工程3 で同 PR 内同期）。
+
+### Bug-F-002 解消 — `success::*_with_fallback_notice` の正式接続（経路復活、削除しない）
+
+**現状**: `crates/shikomi-cli/src/presenter/success.rs:175,206,232-237` の 3 関数が「is not yet wired in this build (Phase 5)」文言を残したまま**デッドコード化**。
+
+**解消後の挙動契約**:
+
+| 項目 | 契約 |
+|------|------|
+| 採用方針 | **経路復活**（削除ではなく `cache_relocked == false` 経路に正式接続）。理由: §設計判断 §`cache_relocked: false` 経路の CLI 表示分岐 で凍結済みの C-31 / C-32 / C-36 articulate が presenter 層で**実体的責務**を持つため、削除すると C-31/C-36 articulate が空疎化（DRY 違反、Tell, Don't Ask 違反） |
+| 接続先 | `usecase::vault::rekey` および `usecase::vault::rotate_recovery` で `IpcResponse::Rekeyed { cache_relocked: false }` または `RecoveryRotated { cache_relocked: false }` 受領時に呼出 |
+| 文言契約 | Phase 5 文言「is not yet wired in this build (Phase 5)」を**完全除去**し、`i18n/locales/{ja-JP,en-US}/messages.toml` の **MSG-S20 連結文言**（`presenter::cache_relocked_warning::display` の出力）と統合される SSoT に更新。`success::rekey_with_fallback_notice` は MSG-S07 完了文言 + MSG-S20 連結 + 「次の操作前に `shikomi vault unlock` を再度実行してください」案内の 3 文を順次出力（`recovery_disclosure::display` の後段に呼出） |
+| 終了コード | **0**（C-31 / C-36 通り、operation 自体は成功）。Phase 5 文言が exit code に影響していたなら同時除去 |
+| Boy Scout | デッドコード化の温床となった「Phase X 文言の暫定残置」パターンを `cli-vault-commands/test-design/ci.md` §7（Issue #75 工程2 で追加）の TC-F-S05 grep gate（doc コメント / panic 文言 / 通常出力経路の Phase X grep）で構造的に再演防止する |
+
+### Bug-F-006 解消 — `vault encrypt --help` の Phase 5 残存削除
+
+**現状**: `crates/shikomi-cli/src/cli.rs:171-175` の `--output` Possible values 説明文に「Phase 5 で実装」が残存。Phase 6/7 完了主張と矛盾。
+
+**解消後の挙動契約**:
+
+| 項目 | 契約 |
+|------|------|
+| `--help` 文言 SSoT | `--output` の Possible values 説明文は §アクセシビリティ代替経路 表（§本書）と **1:1 対応**を取り、Phase 5 / Phase 6 / Phase 7 等の暫定状態タグを**含めない**。clap `#[arg(value_enum, help = "...")]` の help 文字列は i18n 対象外（CLI 引数仕様は英語固定、設計 SSoT 凍結） |
+| Boy Scout | TC-F-S05（`tests/docs/sub-f-static-checks.sh`、#74-E で実装）で `crates/shikomi-cli/src/cli.rs` 内の `Phase\s+\d+` 正規表現マッチが**ゼロ件**になることを grep gate で機械検証 |
+| 同期更新 | `vault decrypt --help` / `vault unlock --help` 等の他サブコマンドにも同パターン残存があれば**同 PR で一括除去**（grep gate が捕捉、Boy Scout 規律） |
+
+### Bug-F-007 解消 — `--vault-dir` flag 経路 + エラー文言 SSoT 訂正
+
+**現状**: vault サブコマンドで `--vault-dir` flag が完全に無視され、エラー文言が `SHIKOMI_VAULT_DIR` を誤案内。実際必要なのは IPC daemon socket の解決順序（`XDG_RUNTIME_DIR` / `HOME`）。
+
+**解消後の挙動契約**:
+
+| 項目 | 契約 |
+|------|------|
+| `--vault-dir` の意味論 | **Phase 2 規定**（CLI は vault に直接触らない、IPC 経由のみ）と整合させ、`--vault-dir` は **daemon socket path 解決のヒント**として動作。具体的には `--vault-dir <DIR>` 指定時、`<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-<DIR-hash>`（Windows）を**最優先で試行**し、失敗時は標準解決順序にフォールバック |
+| 標準解決順序（SSoT） | (1) `--vault-dir` 引数（指定時）→ (2) `SHIKOMI_VAULT_DIR` env（指定時）→ (3) `XDG_RUNTIME_DIR/shikomi.sock`（Unix）→ (4) `$HOME/.shikomi/shikomi.sock`（Unix fallback、`XDG_RUNTIME_DIR` 不在時）→ (5) Windows: `\\.\pipe\shikomi-<user-sid-hash>`（固定）。本順序を `crates/shikomi-cli/src/io/ipc_vault_repository.rs` の `unix_default_socket_path` / `windows_default_pipe_name` の doc コメントに**コード側 SSoT として記述** |
+| エラー文言 SSoT | daemon socket 不在 → `IpcError::DaemonNotRunning` → MSG-S09(b) 経由 → exit code **64** (`EX_USAGE`)。文言は「Could not connect to daemon. Tried: `<socket-path>`. Ensure `shikomi-daemon` is running, or set `--vault-dir` / `XDG_RUNTIME_DIR`」（既存「`SHIKOMI_VAULT_DIR` を案内」を**訂正**）。`SHIKOMI_VAULT_DIR` は **vault.db 位置の env**（daemon 側責務）として残置するが、CLI 側のエラー文言ではこれを案内しない（責務分離） |
+| Phase 2 規定との整合 | `--vault-dir` は **CLI が vault.db に直接触る経路ではない**ことを文言 / 実装 / テストすべてで明確化。誤って `SqliteVaultRepository` 等を CLI から再利用する経路に流れたら TC-CI-012（既存 grep gate）で拒否 |
+| Boy Scout | TC-F-U08（`crates/shikomi-cli/src/cli.rs::tests`、#74-B で実装）で `--vault-dir` の clap parse + 解決順序を機械検証、TC-F-I12（`crates/shikomi-cli/tests/vault_subcommands.rs`、#74-C で実装）で daemon 不在時の MSG-S09(b) 文言と exit code 64 を機械検証 |
+
+### Bug-F-* 全体の SSoT 整合（横断方針）
+
+| 観点 | 整合先 SSoT |
+|------|-----------|
+| `--help` 文言 / `--output` バリアント | 本書 §アクセシビリティ代替経路 + §clap 派生型構造 |
+| 終了コード | 本書 §終了コード SSoT（独立節） |
+| MSG-S* 文言 | `i18n/locales/{ja-JP,en-US}/messages.toml`（コード側 SSoT、本書はキー名のみ参照） |
+| C-31 〜 C-41 契約 | 本書 §不変条件・契約 + `processing-flows.md` |
+| daemon socket 解決順序 | 本書 §Bug-F-007 解消 表 + `io/ipc_vault_repository.rs` の doc コメント |
+
+**Issue #75 (#74-A) 工程2 の責務範囲**: 本節の articulate **のみ**。実装（#75 工程3）と各 Bug の機械検証（#74-B/C/D/E）は別 PR で行う。設計書（本節）が SSoT として確定することで、実装担当 / テスト担当 / レビュアーの三者間で「何が解消後の正解か」を曖昧さなく共有できる構造を Boy Scout 規律として確立する。

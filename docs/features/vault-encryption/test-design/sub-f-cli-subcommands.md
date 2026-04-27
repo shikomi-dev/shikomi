@@ -328,3 +328,47 @@ cargo test -p shikomi-daemon --test ipc_integration
 | 8 | ペテルギウス指摘6 | TC-F-A03 録音判定 scope 過大 | env サニタイズ + dictation prefs 確認のみに scope 縮小、録音可能アプリ検出は MSG-S18 受容前提 |
 | 9 | ペテルギウス指摘7 | C-37 grep gate 脆弱（特定文字列不在検証）| `mode_banner::display` 必須呼出経路の cross-crate grep に再設計、TC-F-S02 で `usecase::list` から `presenter::mode_banner::display` への呼出存在を機械検証 |
 | 10 | 服部致命1〜6 | CLI 攻撃面追補 + stdin 拒否 + 一時ファイル umask + env サニタイズ + liblouis FFI 監査 + core dump 抑制 | C-38（TC-F-U13/I12 stdin 拒否）+ C-41（TC-F-U10 core dump）+ TC-F-A05（umask 077）+ TC-F-S06（env allowlist）+ liblouis 不採用方針（自前 wordlist テーブル）凍結 |
+
+### 15.15 Issue #75 (#74-A) 解消ステータス更新（2026-04-27）
+
+§15.13（Sub-F 工程5 マユリ実機検証で確定した Bug-F-001〜008 + 専用テスト 0/37 実装ギャップ）に対し、Issue #75 (#74-A) で実体的解消の作業計画が確定。本節で **Bug-F-* 各項目の解消経路 + #74 親 Issue 全体の構造**を articulate する。§15.13 の表は **Sub-F 工程5 時点のスナップショット**として保存し、本節 §15.15 が **Issue #75 着手後の現在の解消状況 SSoT** として運用される。
+
+#### Bug-F-* 解消ステータスマトリクス
+
+| Bug ID | 重大度 | 解消経路 | 担当 Issue / 工程 | 状態 |
+|--------|------|---------|----------------|------|
+| **Bug-F-001** | BLOCKER | `vault unlock --recovery` Phase 5 stub 解消、`UnlockArgs::recovery: bool` を functional 化 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（`vault-encryption/detailed-design/cli-subcommands.md` §Issue #75 工程2 §Bug-F-001 解消）、工程3 待機 |
+| **Bug-F-002** | HIGH | `success::*_with_fallback_notice` を C-31/C-36 経路に正式接続（経路復活）、Phase 5 文言除去 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-002 解消）、工程3 待機 |
+| **Bug-F-003** | BLOCKER | CI に `test-cli` / `test-daemon` ジョブ追加、`-p shikomi-cli` / `-p shikomi-daemon` を必須 check 化 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（`cli-vault-commands/test-design/ci.md` §7 Issue #75 §7.2/§7.3）、工程3 待機 |
+| **Bug-F-004** | BLOCKER | IPC V2 移行で破壊された既存テスト 36 件の追従、client 側 V2 アップグレード | **#75 (#74-A) 工程3** | ⏳ 工程3 待機（実装側の機械的追従、設計書影響は最小、`vault-encryption/detailed-design/vek-cache-and-ipc.md` の handshake 仕様 SSoT を維持） |
+| **Bug-F-005** | HIGH | encrypted vault fixture 修復（`crates/shikomi-cli/tests/common/fixtures.rs`）、TC-E2E-040 exit code 整合（VaultLocked=3 / BackoffActive=2、cli-subcommands.md §終了コード SSoT） | **#75 (#74-A) 工程3** | ⏳ 工程3 待機 |
+| **Bug-F-006** | MEDIUM | `vault encrypt --help` 等の Phase 5 残存削除、`Phase\s+\d+` grep gate (TC-F-S05) で再演防止 | **#75 (#74-A) 工程3** + **#74-E** | ⏳ 工程2 設計 articulate 完了（`cli-subcommands.md` §Bug-F-006 解消）、grep gate は #74-E |
+| **Bug-F-007** | MEDIUM | `--vault-dir` flag を daemon socket 解決順序のヒントとして functional 化、エラー文言 `XDG_RUNTIME_DIR` / `HOME` 案内に SSoT 訂正 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-007 解消）、工程3 待機 |
+| **Bug-F-008** | LOW | daemon 起動時 vault.db auto-create / 案内 | **別 Issue 推奨**（#74 範囲外、#75 でも非対応） | 🔧 別 Issue で起票推奨、現状未着手 |
+
+#### Sub-F 専用テスト 37 TC 実装ステータス
+
+| 配置先 / TC ID | 担当 Issue | 状態 |
+|---------------|----------|------|
+| `crates/shikomi-cli/src/**::tests` (TC-F-U01〜U13、ユニット 13 件) | **#74-B** | ⏳ #74-A 完了後に着手 |
+| `crates/shikomi-cli/tests/vault_subcommands.rs` (TC-F-I01〜I09, I11, I12、結合 11 件) | **#74-C** | ⏳ #74-A 完了後に着手 |
+| `crates/shikomi-cli/tests/mode_banner_integration.rs` (TC-F-I10、結合 1 件) | **#74-C** | ⏳ #74-A 完了後に着手 |
+| `crates/shikomi-cli/tests/accessibility_paths.rs` (TC-F-A01〜A05、PTY 5 件) | **#74-D** | ⏳ #74-A 完了後 + `expectrl` dev-dep 追加 |
+| `tests/e2e/sub-f-tanaka-persona.sh` (TC-F-E01、E2E 1 件) | **#74-E** | ⏳ #74-A/B/C/D 完了推奨後に着手 |
+| `tests/docs/sub-f-static-checks.sh` (TC-F-S01〜S06、静的 6 件) | **#74-E** | ⏳ #74-A 完了後に着手（B/C/D と並列可） |
+| **合計** | — | **0/37 実装、計画上 37/37 着地予定** |
+
+#### #74 親 Issue クローズ条件（DoD トレース）
+
+- [ ] **#75 (#74-A)** マージ — Bug-F-001/002/003/004/005/006/007 全解消 + 設計書 SSoT 同期（本節 §15.15 + `cli-subcommands.md` §Issue #75 工程2 + `cli-vault-commands/test-design/ci.md` §7）
+- [ ] **#74-B** マージ — TC-F-U01〜U13（13/13 件）pass、`cargo test -p shikomi-cli --lib` で観測
+- [ ] **#74-C** マージ — TC-F-I01〜I12（12/12 件）pass、`vault_subcommands.rs` + `mode_banner_integration.rs` で観測
+- [ ] **#74-D** マージ — TC-F-A01〜A05（5/5 件）pass、PTY 経由 3 OS で観測（OS 別 manual smoke 別 PR articulate）
+- [ ] **#74-E** マージ — TC-F-E01（1/1）+ TC-F-S01〜S06（6/6）pass、田中ペルソナ完走 + 静的検査全 grep gate 通過
+- [ ] **§15.13 表の全 Bug-F-001〜007 が「解消済」になり、§15.10 TC 総数 37 件が「実装済 37/37」になる**ことを本節 §15.15 で最終 articulate
+
+#### Boy Scout / 教訓（Issue #75 articulate）
+
+- **「Linux 全 green」報告の構造的錯覚**（Bug-F-003）は **CI スコープを設計書 SSoT として明示し、必須 check 化する**ことで構造的に再演防止できる。本 Issue で確立する `test-cli` / `test-daemon` ジョブ + `justfile` 同期 + grep gate (TC-F-S01〜S06) の三位一体経路を、後続 Issue で新 crate を追加する際の**チェックリスト**として継承する（`cli-vault-commands/test-design/ci.md` §7.6 articulate）
+- **Phase X 暫定文言の温床**（Bug-F-002 / Bug-F-006）は doc / panic / 通常出力経路の `Phase\s+\d+` grep gate で構造的に再演防止する。Phase 番号は実装中に頻繁に変動するため、設計書側に明示しないか、明示する場合は本節 §15.15 のような **改訂日付付き履歴 articulate** に限定する Boy Scout 規律を確立
+- **Sub-issue 分割（#74-A〜E）による依存関係 articulate**: BLOCKER 系 Bug を #74-A 単独に集約し、TC 実装 (#74-B〜E) を並列着手可能にする構造は、Issue #65 の Bug-G-001〜G-008 7 ラウンド実験で確立された「対症療法と本質要件の責務分離」と同型。今後の大規模 Sub-issue 起票テンプレートとして本構造を継承可能
