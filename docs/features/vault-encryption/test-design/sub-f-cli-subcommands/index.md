@@ -8,10 +8,12 @@
 <!-- TC-E-E01 田中ペルソナ E2E は Sub-E `sub-e-vek-cache-ipc.md` §14.4 で凍結された 6 ステップシナリオを Sub-F CLI 完成後に**実機完走**するもの。本書 §15.8 で TC-F-E01 として詳細化（同型 ID）。 -->
 <!-- 終了コード: cli-subcommands.md §終了コード SSoT を**唯一の真実源**として参照、本書では再定義しない（ペガサス致命指摘②解消）。 -->
 <!-- Issue #75 (#74-A) 関連の Bug-F-* 解消ステータス + 工程4 検証手順 SSoT は、本ディレクトリ配下の [issue-75-verification.md](issue-75-verification.md) を参照。-->
+<!-- Issue #76 (#74-B) ユニットテスト 13 件 工程3 実装 + 工程4 検証手順 SSoT は、同ディレクトリ配下の [issue-76-verification.md](issue-76-verification.md) を参照。-->
 
-> **本書の構成（Issue #75 工程2 内部レビュー反映による分割）**:
-> - `index.md`（本書、§15.1〜§15.14）— Sub-F 本体（テストレベル / 受入基準 / マトリクス / 詳細 TC / 静的検査 / 実行手順 / 証跡 / Rev1 修正履歴）
+> **本書の構成（Issue #75 工程2 内部レビュー反映による分割 + Issue #76 工程2 で issue-76-verification.md 追加）**:
+> - `index.md`（本書、§15.1〜§15.14）— Sub-F 本体（テストレベル / 受入基準 / マトリクス / 詳細 TC / 静的検査 / 実行手順 / 証跡 / Rev1 修正履歴 / Issue #76 リナンバ履歴 §15.14b）
 > - [`issue-75-verification.md`](issue-75-verification.md)（§15.15〜§15.16）— Issue #75 (#74-A) Bug-F-* 解消ステータス（セル `c626310` 反映: 36→29 + Bug-F-008 #80 起票）+ 工程4 検証手順 SSoT
+> - [`issue-76-verification.md`](issue-76-verification.md)（§15.17）— Issue #76 (#74-B) ユニットテスト 13 件 工程3 実装スコープ + 工程4 検証手順 SSoT + 自己批判チェックリスト
 
 ## 15. Sub-F (#44) テスト設計 — shikomi-cli vault サブコマンド + 既存 CRUD ロック時挙動 + 田中ペルソナ E2E
 
