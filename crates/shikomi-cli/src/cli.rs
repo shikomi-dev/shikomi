@@ -21,7 +21,7 @@ pub const ENV_VAR_VAULT_DIR: &str = "SHIKOMI_VAULT_DIR";
 #[command(
     name = "shikomi",
     version,
-    about = "shikomi — a local encrypted credential vault (CLI Phase 1: plaintext only)",
+    about = "shikomi — a local encrypted credential vault",
     long_about = None,
 )]
 pub struct CliArgs {
@@ -41,7 +41,7 @@ pub struct CliArgs {
     /// Use the running shikomi-daemon over IPC instead of opening the vault file directly.
     /// Currently supported only with the `list` subcommand; requires shikomi-daemon to be running.
     // NOTE: 内部メモ — daemon-ipc feature (Issue #26) で追加。`add`/`edit`/`remove` の IPC 経路は
-    // Phase 2 移行 PR で完成させるため、本フラグは現状 `list` 限定の opt-in。
+    // Sub-F 移行 PR で完成させるため、本フラグは現状 `list` 限定の opt-in。
     // ユーザ向けには上記 doc comment のみ露出する（`--help` 内部用語汚染を避けるため）。
     #[arg(long, global = true)]
     pub ipc: bool,
@@ -224,7 +224,7 @@ pub struct EditArgs {
     /// 値を stdin から読み取る。`--value` と併用不可。
     #[arg(long)]
     pub stdin: bool,
-    // NOTE: `--kind` フィールドは定義しない（Phase 1 スコープ外、requirements.md REQ-CLI-003）。
+    // NOTE: `--kind` フィールドは定義しない（requirements.md REQ-CLI-003 スコープ外）。
 }
 
 // -------------------------------------------------------------------
@@ -313,7 +313,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Sub-F (#44) Phase 2: VaultSubcommand clap 派生型の最小受理確認
+    // Sub-F (#44): VaultSubcommand clap 派生型の最小受理確認
     // 設計根拠: docs/features/vault-encryption/detailed-design/cli-subcommands.md
     // §clap 派生型構造（Subcommand 拡張）
     // ---------------------------------------------------------------
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_cli_args_edit_kind_flag_is_unknown_arg() {
-        // Phase 1 スコープ外のため `edit --kind` は clap のエラーになる
+        // requirements.md REQ-CLI-003 スコープ外のため `edit --kind` は clap のエラーになる
         let result = CliArgs::try_parse_from([
             "shikomi",
             "edit",

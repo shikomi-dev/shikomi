@@ -81,11 +81,50 @@ impl IpcVaultRepository {
         })
     }
 
-    /// OS デフォルトのソケットパスを解決する。
+    /// `--vault-dir <DIR>` 経路を最優先で daemon に接続する（Issue #75 / Bug-F-007 解消、
+    /// `cli-subcommands.md` §Bug-F-007 SSoT）。
     ///
-    /// - **Linux**: `$XDG_RUNTIME_DIR/shikomi/daemon.sock`、未設定時は `dirs::runtime_dir()`
-    /// - **macOS**: `dirs::cache_dir()/shikomi/daemon.sock`
-    /// - **Windows**: `\\.\pipe\shikomi-daemon-{user-sid}`
+    /// `vault_dir` が `Some(<DIR>)` の場合、socket 解決順序の **第 1 候補** として
+    /// `<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-{H}`（Windows、`<H>` は
+    /// `windows_pipe_name_from_dir(<DIR>)` の純関数出力）を試行する。失敗時は
+    /// `default_socket_path()` の順序（`SHIKOMI_VAULT_DIR` env / `XDG_RUNTIME_DIR` /
+    /// `$HOME/.shikomi` / Windows user-SID 由来）に fallback する。
+    ///
+    /// 意味論契約: `<DIR>` は **vault.db の所在ディレクトリ**を指す（ユーザ認知モデル）。
+    /// CLI は `<DIR>/vault.db` を直接 open せず、**同じディレクトリの `shikomi.sock`** のみを
+    /// daemon socket として用いる（Phase 2 規定: CLI は IPC 経由のみ、vault.db 直接操作禁止、
+    /// `cli-subcommands.md` §Bug-F-007 解消 §`--vault-dir` の意味論 SSoT）。
+    ///
+    /// # Errors
+    /// `<DIR>/shikomi.sock` も fallback 経路もすべて失敗時に `PersistenceError::DaemonNotRunning`。
+    pub fn connect_with_vault_dir(vault_dir: Option<&Path>) -> Result<Self, PersistenceError> {
+        if let Some(dir) = vault_dir {
+            let primary = vault_dir_socket_path(dir);
+            // 第 1 候補で接続成功すれば即返却。失敗時は default 経路に fallback する。
+            if let Ok(repo) = Self::connect(&primary) {
+                return Ok(repo);
+            }
+        }
+        let fallback = Self::default_socket_path()?;
+        Self::connect(&fallback)
+    }
+
+    /// OS デフォルトのソケットパスを解決する（Issue #75 Bug-F-007 解消の SSoT 順序、
+    /// `cli-subcommands.md` §Bug-F-007 解消 §標準解決順序）:
+    ///
+    /// 1. `--vault-dir <DIR>` 引数（指定時、最優先）→ `<DIR>/shikomi.sock`（Unix）/
+    ///    `\\.\pipe\shikomi-{H}`（Windows）。本関数の対象外（`connect_with_vault_dir` で先行処理）
+    /// 2. **Linux**: `$XDG_RUNTIME_DIR/shikomi/daemon.sock`、未設定時は `dirs::runtime_dir()`
+    /// 3. **macOS**: `dirs::cache_dir()/shikomi/daemon.sock`、未設定時は `$HOME/.shikomi/daemon.sock`
+    /// 4. **Windows**: `\\.\pipe\shikomi-daemon-{user-sid}`（`windows_sid::resolve_self_user_sid`）
+    ///
+    /// **`SHIKOMI_VAULT_DIR` env 経由派生は Phase B 持ち越し**: 設計 SSoT は env を
+    /// `<DIR>` 同等扱いと articulate しているが、実装には daemon 側の socket bind パス
+    /// 変更（`daemon.sock` → `shikomi.sock` 一括 rename + `<DIR>` 派生）が伴うため、
+    /// 既存 daemon e2e テスト群との互換維持を優先し本 PR では未着手とする
+    /// （`cli-subcommands.md` §Bug-F-007 §「`shikomi-daemon` 側起動時の socket bind 仕様で
+    /// 対称に固定」を別 PR で連携実装、設計書側 articulate 次イテレーションで `XDG_RUNTIME_DIR`
+    /// `dirs::cache_dir` 経路と統一）。
     ///
     /// # Errors
     /// 解決元が利用不能な場合 `PersistenceError::CannotResolveVaultDir`。
@@ -452,6 +491,93 @@ fn unix_default_socket_path() -> Result<PathBuf, PersistenceError> {
 }
 
 // -------------------------------------------------------------------
+// Issue #75 Bug-F-007: `--vault-dir <DIR>` socket path 派生関数
+// -------------------------------------------------------------------
+
+/// `<DIR>` から daemon socket path を導出する純関数（Issue #75 Bug-F-007 解消、
+/// `cli-subcommands.md` §`--vault-dir` の意味論 SSoT）。
+///
+/// - **Unix**: `<DIR>/shikomi.sock`
+/// - **Windows**: `\\.\pipe\shikomi-{H}`（`<H>` = `windows_pipe_name_from_dir(<DIR>)`）
+///
+/// CLI / daemon が同一 `<DIR>` から同一 socket path を導出することを保証する純関数。
+/// `connect_with_vault_dir` と `default_socket_path` の `SHIKOMI_VAULT_DIR` 経由経路で共用。
+fn vault_dir_socket_path(dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        dir.join("shikomi.sock")
+    }
+    #[cfg(windows)]
+    {
+        let h = windows_pipe_name_from_dir(dir);
+        PathBuf::from(format!(r"\\.\pipe\shikomi-{h}"))
+    }
+}
+
+/// `<DIR>` 絶対パスから Windows pipe 名 `<H>` を導出する純関数（Issue #75 Bug-F-007 解消、
+/// `cli-subcommands.md` §Bug-F-007 解消 §Windows pipe 名の `<H>` 契約）。
+///
+/// アルゴリズム:
+/// 1. `<DIR>` を絶対パスに正規化（`Path::to_string_lossy()` 経由、NFC は ASCII / 一般的な
+///    OS パスでは恒等変換のため省略 — 非 ASCII path での衝突可能性は受容、別 PR で再評価可）
+/// 2. lowercase 化（Windows path の case-insensitive convention に整合、`to_lowercase()`）
+/// 3. SHA-256 でダイジェスト
+/// 4. 32 byte ダイジェスト → Base32（小文字 `a-z2-7`、パディング無し）→ 先頭 16 文字
+///
+/// 16 文字（5 bit × 16 = 80 bit）は 64 文字制限の Windows pipe 名内に収まり、誕生日攻撃で
+/// `2^40` の衝突空間（実用上不可能）を確保する SSoT 妥協値。CLI / daemon が同一 `<DIR>` から
+/// 同一 `<H>` を導出することで、どちらが先に socket bind したかに依らず接続できる。
+///
+/// # Examples
+/// 異なる DIR は異なる pipe 名を導出し、同一 DIR は決定的に同じ名を返す。
+#[cfg(any(windows, test))]
+fn windows_pipe_name_from_dir(dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    // (1) 絶対パスへ正規化（canonicalize は IO 失敗時に元のパスを返す best-effort）
+    let abs = dir
+        .to_path_buf()
+        .canonicalize()
+        .unwrap_or_else(|_| dir.to_path_buf());
+    // (2) lowercase 化（Windows convention）
+    let normalized = abs.to_string_lossy().to_lowercase();
+    // (3) SHA-256
+    let digest = Sha256::digest(normalized.as_bytes());
+    // (4) Base32 (lowercase, no padding) → 先頭 16 文字
+    base32_lower_no_pad(digest.as_ref(), 16)
+}
+
+/// Base32 lowercase no-pad encoder (RFC 4648 alphabet `a-z2-7`)。
+///
+/// `take` 文字数で切り詰めて返す（`windows_pipe_name_from_dir` 用に 16 文字固定運用）。
+/// 32 byte 入力に対し最大 52 文字を生成可能だが、本関数は `take` で truncate する。
+/// 純関数で外部 crate 依存を避けるため自前実装（20 行未満、Boy Scout）。
+#[cfg(any(windows, test))]
+fn base32_lower_no_pad(bytes: &[u8], take: usize) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity(take);
+    let mut buf: u64 = 0;
+    let mut bits: u32 = 0;
+    for &b in bytes {
+        buf = (buf << 8) | u64::from(b);
+        bits += 8;
+        while bits >= 5 && out.len() < take {
+            bits -= 5;
+            let idx = ((buf >> bits) & 0x1f) as usize;
+            out.push(ALPHABET[idx] as char);
+        }
+        if out.len() >= take {
+            break;
+        }
+    }
+    if out.len() < take && bits > 0 {
+        let idx = ((buf << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[idx] as char);
+    }
+    out
+}
+
+// -------------------------------------------------------------------
 // 不正応答時の固定文言ヘルパ
 // -------------------------------------------------------------------
 
@@ -470,5 +596,54 @@ fn unexpected_response(request_kind: &'static str) -> PersistenceError {
             // 万一新規呼出側がここに到達しても固定文言を返す（fail safe）。
             _ => "unexpected ipc response".to_owned(),
         },
+    }
+}
+
+#[cfg(test)]
+mod windows_pipe_name_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_is_deterministic_for_same_dir() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-dir-tc_f_u08");
+        let h1 = windows_pipe_name_from_dir(&dir);
+        let h2 = windows_pipe_name_from_dir(&dir);
+        assert_eq!(h1, h2, "same DIR must derive same pipe name (purity)");
+    }
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_is_16_chars_lowercase_alphanum() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-dir-tc_f_u08-len");
+        let h = windows_pipe_name_from_dir(&dir);
+        assert_eq!(h.len(), 16, "pipe name must be exactly 16 chars (80 bit)");
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)),
+            "pipe name must be Base32 lowercase no-pad (a-z2-7), got {h}"
+        );
+    }
+
+    #[test]
+    fn tc_f_u08_windows_pipe_name_differs_across_dirs() {
+        let h1 = windows_pipe_name_from_dir(Path::new("/tmp/shikomi-vault-A"));
+        let h2 = windows_pipe_name_from_dir(Path::new("/tmp/shikomi-vault-B"));
+        assert_ne!(
+            h1, h2,
+            "different DIRs must derive different pipe names (collision resistance)"
+        );
+    }
+
+    #[test]
+    fn vault_dir_socket_path_is_pure() {
+        let dir = PathBuf::from("/tmp/shikomi-test-vault-pure");
+        let p1 = vault_dir_socket_path(&dir);
+        let p2 = vault_dir_socket_path(&dir);
+        assert_eq!(p1, p2, "vault_dir_socket_path must be pure");
+        #[cfg(unix)]
+        assert!(
+            p1.ends_with("shikomi.sock"),
+            "Unix socket path ends with shikomi.sock, got {p1:?}"
+        );
     }
 }

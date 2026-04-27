@@ -48,8 +48,13 @@ test-doc-core:
 test-infra:
     cargo test -p shikomi-infra
 
+# Issue #75 Bug-F-003 解消 (cli-vault-commands/test-design/ci.md §7.4 SSoT 部分反映):
+# `--all-targets` で integration / e2e tests も含むよう拡張。`shikomi-infra/test-fixtures`
+# feature flag は本リポジトリにまだ存在しないため、本 PR では未付与 (Bug-F-005 fixture 経路
+# 整備時に同 PR で追加予定、`vault-encryption/test-design/sub-f-cli-subcommands/issue-75-verification.md`
+# §15.16.4 articulate)。CI / lefthook / 手動 3 経路は本レシピ 1 行で SSoT 化。
 test-cli:
-    cargo test --no-fail-fast -p shikomi-cli
+    cargo test --no-fail-fast --all-targets -p shikomi-cli
 
 # Sub-F (#44) 工程4 マユリ Bug-F-003 解消: shikomi-daemon 専用テスト CI ジョブ。
 # 既存 `unit-core` / `test-infra` で network / IPC 経路がカバーされていなかったため、
@@ -58,8 +63,10 @@ test-cli:
 # `-p shikomi-cli` を同時指定: e2e_daemon の `tc_e2e_080_*` 等が assert_cmd 経由で
 # `shikomi` (cli bin) を起動するため `CARGO_BIN_EXE_shikomi` が必要 (cross-package
 # bin 依存)。daemon パッケージ単独だと unset で全 e2e fail する。
+# Issue #75 Bug-F-003 解消: `--all-targets` で daemon の e2e / property tests も CI 観測スコープに
+# 含める (ci.md §7.2.2 SSoT)。
 test-daemon:
-    cargo test --no-fail-fast -p shikomi-daemon -p shikomi-cli
+    cargo test --no-fail-fast --all-targets -p shikomi-daemon -p shikomi-cli
 
 # ------------------------------------------------------------------ bench
 

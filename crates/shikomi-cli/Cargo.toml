@@ -34,6 +34,13 @@ tracing       = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror     = { workspace = true }
 dirs          = { workspace = true }
+# Issue #75 / Bug-F-007: `windows_pipe_name_from_dir` で `<DIR>` 絶対パスを SHA-256
+# Base32 先頭 16 文字の純関数化（`docs/features/vault-encryption/detailed-design/cli-subcommands.md`
+# §Bug-F-007 解消の Windows pipe 名 `<H>` 契約）。CLI / daemon が同 hash を導出する
+# 共有実装の起点。Base32 自体は本 crate 内部で 5-bit alphabet `a-z2-7` を直接実装する
+# (新規依存追加を最小化、Boy Scout: pure function かつ 20 行未満)。
+sha2          = { workspace = true }
+
 # IPC 経路（daemon-ipc feature）
 tokio         = { workspace = true }
 tokio-util    = { workspace = true }

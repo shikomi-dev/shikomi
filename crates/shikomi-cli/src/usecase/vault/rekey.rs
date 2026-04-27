@@ -17,7 +17,7 @@ use crate::accessibility::{audio_tts, braille_brf, output_target, print_pdf, uma
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
-use crate::presenter::{cache_relocked_warning, success, Locale};
+use crate::presenter::{success, Locale};
 
 /// `vault rekey --output` を実行する。
 ///
@@ -45,11 +45,19 @@ fn render_rekey(
     let resolved = output_target::resolve(output);
     match resolved {
         OutputTarget::Screen => {
-            let mut rendered =
-                success::render_rekeyed(outcome.records_count, &outcome.words, locale);
-            if !outcome.cache_relocked {
-                cache_relocked_warning::render_to(&mut rendered, locale);
-            }
+            // Issue #75 Bug-F-002 §経路復活: `success::render_rekeyed_with_fallback_notice`
+            // を `cache_relocked == false` 時に呼出 (`cli-subcommands.md` §Bug-F-002 解消の
+            // SSoT 通り presenter 層に責務移譲、C-31/C-36 articulate を実体化)。
+            // `cache_relocked == true` 経路は警告不要のため `render_rekeyed` のままを使う。
+            let rendered = if outcome.cache_relocked {
+                success::render_rekeyed(outcome.records_count, &outcome.words, locale)
+            } else {
+                success::render_rekeyed_with_fallback_notice(
+                    outcome.records_count,
+                    &outcome.words,
+                    locale,
+                )
+            };
             write_to_stdout(&rendered)
         }
         OutputTarget::Braille => {

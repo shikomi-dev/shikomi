@@ -12,7 +12,7 @@ use crate::accessibility::{audio_tts, braille_brf, output_target, print_pdf, uma
 use crate::cli::{OutputArgs, OutputTarget};
 use crate::error::CliError;
 use crate::io::ipc_vault_repository::IpcVaultRepository;
-use crate::presenter::{cache_relocked_warning, success, Locale};
+use crate::presenter::{success, Locale};
 
 /// `vault rotate-recovery --output` を実行する。
 ///
@@ -40,10 +40,13 @@ fn render_rotate_recovery(
     let resolved = output_target::resolve(output);
     match resolved {
         OutputTarget::Screen => {
-            let mut rendered = success::render_recovery_rotated(&outcome.words, locale);
-            if !outcome.cache_relocked {
-                cache_relocked_warning::render_to(&mut rendered, locale);
-            }
+            // Issue #75 Bug-F-002 §経路復活: presenter 層の `*_with_fallback_notice` を経由
+            // (cli-subcommands.md §Bug-F-002 解消、C-31/C-36 articulate)。
+            let rendered = if outcome.cache_relocked {
+                success::render_recovery_rotated(&outcome.words, locale)
+            } else {
+                success::render_recovery_rotated_with_fallback_notice(&outcome.words, locale)
+            };
             write_to_stdout(&rendered)
         }
         OutputTarget::Braille => {

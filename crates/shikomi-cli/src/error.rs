@@ -118,6 +118,18 @@ pub enum CliError {
     /// 設計書 §終了コード SSoT exit 1 (UserError)。
     #[error("refusing to read password from non-tty stdin (run from a terminal)")]
     NonInteractivePassword,
+
+    // ---------------- Issue #75 / Bug-F-001: 認証フラグ排他違反 (defensive) ----------------
+    /// 複数の認証経路（`--recovery` と password 入力等）が同時指定された動的 defensive 経路。
+    /// clap の `conflicts_with` で静的に弾けない経路（将来の代替認証フラグ追加 / `--recovery`
+    /// 経路への動的遷移時の状態遷移エラー等）に備える防衛線。MSG-S21 で文言化、`EX_USAGE`
+    /// (exit 64) として `§終了コード SSoT` に整合（`cli-subcommands.md` §Bug-F-001 解消
+    /// §排他違反検知 (defensive) 行）。
+    #[error("conflicting authentication flags: {hint}")]
+    IncompatibleAuthFlags {
+        /// 衝突した経路の固定文言ヒント（`&'static str`、動的データ非含有）。
+        hint: &'static str,
+    },
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -202,6 +214,10 @@ pub enum ExitCode {
     ProtocolDowngrade = 4,
     /// recovery 経路必須 (MSG-S09(a) 派生、Sub-F SSoT exit 5)。
     RecoveryRequired = 5,
+    /// 認証フラグ排他違反 (Issue #75 / Bug-F-001 §排他違反検知 (defensive)、`EX_USAGE` /
+    /// sysexits.h、`cli-subcommands.md` §終了コード SSoT 表 64 行 §脚注「`IncompatibleAuthFlags`
+    /// も `EX_USAGE` 経路」)。clap `conflicts_with` で静的に弾ききれない動的経路の defensive 受け皿。
+    UsageError64 = 64,
 }
 
 impl std::process::Termination for ExitCode {
@@ -238,6 +254,8 @@ impl From<&CliError> for ExitCode {
             CliError::ProtocolDowngrade => Self::ProtocolDowngrade,
             // exit 5: recovery 経路必須
             CliError::RecoveryRequired => Self::RecoveryRequired,
+            // exit 64 (`EX_USAGE`、Issue #75 Bug-F-001 §排他違反検知 (defensive))
+            CliError::IncompatibleAuthFlags { .. } => Self::UsageError64,
         }
     }
 }
