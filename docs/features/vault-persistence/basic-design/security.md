@@ -48,7 +48,7 @@
 | `exists` 呼出 | `debug` | 戻り値直前 | `vault_dir`, `found: bool` | — |
 | `PersistenceError` 全バリアント | `warn`（`InvalidPermission` / `OrphanNewFile` / `Locked` / `UnsupportedYet`）／ `error`（`Sqlite` / `Corrupted` / `AtomicWriteFailed` / `SchemaMismatch` / `Io` / `InvalidVaultDir` / `CannotResolveVaultDir`） | return の直前 | エラーバリアント名、`path`（秘密でない）、`stage`（atomic write 時）、`table`（Corrupted 時）、`reason`（列挙の variant 名のみ） | 下位 `#[source]` の `Debug` 文字列全体（`SecretString` の `Debug` は `"[REDACTED]"` 固定だが、SQLite エラーメッセージにパラメータ値が混入する可能性があるため、`source` は `display_redacted()` ヘルパ経由で記録し、SQL パラメータは `?` 化して記録） |
 | atomic write 中間段階 | `debug` | 各 stage（`PrepareNew` / `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` / `CleanupOrphan`）遷移時 | `stage` 名、`elapsed_ms` | ファイル内容 |
-| **rename retry 発火**（Issue #65） | `warn` | `cfg(windows)` rename 段で一過性エラー（`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION`）検知時、各 retry 試行直前 / 完了直後 | `stage = Rename`、`attempt: u32`（1〜5）、`raw_os_error: i32`、`elapsed_ms`、`outcome: "pending" \| "succeeded" \| "exhausted"` | path のシンボリックリンク先実体・ファイル内容 |
+| **rename retry 発火**（Issue #65） | `warn` | `cfg(windows)` rename 段で一過性エラー（`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION`）検知時、各 retry 試行直前 / 完了直後 | `stage = Rename`、`attempt: u32`（1〜5）、`raw_os_error: i32`、`elapsed_ms`、`outcome: RetryOutcome`（型安全 enum、バリアント `Pending` / `Succeeded` / `Exhausted`、tracing には `Display` 由来の文字列 `"pending"` / `"succeeded"` / `"exhausted"` で出力） | path のシンボリックリンク先実体・ファイル内容 |
 | **rename retry 全敗**（Issue #65） | `error` | retry 5 回全敗で `AtomicWriteFailed { stage: Rename }` 返却直前 | `total_attempts: 5`、`total_elapsed_ms`、`final_raw_os_error: i32` | 同上。daemon 側はこのイベントを **DoS 兆候** として上位通報候補（OWASP A09 連携）|
 
 **秘密値マスクの型保証**:
@@ -140,8 +140,8 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 **対策**:
 
-1. **`audit::retry_event(stage, attempt, raw_os_error, elapsed_ms, outcome)` 関数を新設**: `audit.rs` の公開関数を 5 → 6 に拡張。シグネチャは `&'static str` / `u32` / `i32` / `u64` / `&'static str` のみ（秘密値を含まない型、`§監査ログ規約` §秘密値マスクの型保証 §防衛線 と整合）
-2. **発火ポイント**: 各 retry 試行直前に `outcome = "pending"`、成功時に `"succeeded"`、5 回全敗時に `"exhausted"`（後者は `error` レベル）。`§監査ログ規約` テーブルに 2 行追加済
+1. **`audit::retry_event(stage, attempt, raw_os_error, elapsed_ms, outcome)` 関数を新設**: `audit.rs` の公開関数を 5 → 6 に拡張。シグネチャは `&'static str` / `u32` / `i32` / `u64` / `RetryOutcome` のみ（秘密値を含まない型、`§監査ログ規約` §秘密値マスクの型保証 §防衛線 と整合）。`outcome` は **型安全な `enum RetryOutcome { Pending, Succeeded, Exhausted }`** で表現し、文字列 switch（`if outcome == "exhausted"` 等）を排除する（タイポ即バグの防止、Tell, Don't Ask、`../detailed-design/data.md` §Audit §`RetryOutcome` 参照）。tracing イベントへの出力は `Display` 実装で `"pending"` / `"succeeded"` / `"exhausted"` の文字列となるため、subscriber 側のフィールド grep / 集計ロジックは従来と同じ語彙で機能する（後方互換）。
+2. **発火ポイント**: 各 retry 試行直前に `RetryOutcome::Pending`、成功時に `RetryOutcome::Succeeded`、5 回全敗時に `RetryOutcome::Exhausted`（後者は `error` レベル）。`§監査ログ規約` テーブルに 2 行追加済。発行レベル分岐は **enum の `match` で網羅性検査** され、新バリアント追加時にコンパイラが分岐漏れを検出する（Fail Safe by type）
 3. **daemon 側 DoS 検知**: 別 Issue（daemon Issue）で「同一 vault_dir に対し 1 分間に `retry_event` が 10 回以上 = 異常頻度」の閾値ロジックを追加し、`tracing` subscriber 経由で上位通報。本 Issue では監査ログの **emit 側責務のみ**を実装
 
 #### jitter — timing oracle 防止 + 指数バックオフ（Bug-G-001 反映）
@@ -162,7 +162,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
    | 4 | 400ms | 375–425ms | 750ms |
    | 5 | 800ms | 775–825ms | 1550ms |
 
-   = **最悪 ~1675ms / 平均 ~1550ms**。**SSoT 上の上限値は「最悪 ~1675ms」**（`./error.md` §Windows rename PermissionDenied / `../detailed-design/flows.md` §`save` step 7 / `../test-design/integration.md` TC-I29 / `../test-design/index.md` AC-19 と同一語彙で整合）。「平均 ~1550ms」は CI 期待値・SLA 評価指標として併記。
+   = **最悪 ~1675ms / 平均 ~1550ms**。**SSoT 上の上限値は「最悪 ~1675ms」**（`./error.md` §Windows rename PermissionDenied / `../detailed-design/flows.md` §`save` step 7 / `../test-design/integration/index.md` TC-I29 / `../test-design/index.md` AC-19 と同一語彙で整合）。「平均 ~1550ms」は CI 期待値・SLA 評価指標として併記。
 4. **指数バックオフ採否根拠**:
    - **線形 50ms × 5 では Defender / Search Indexer (~250ms+ 保持) を吸収不可**（Bug-G-001 §3 CI 観測）
    - **Defender 解放までの待機を attempt 3 (~350ms 累積) で完了**でき、典型 race を救う

@@ -69,13 +69,28 @@ Rust のシグネチャをインラインで示す。`Result` は `Result<_, Per
 - `pub(crate) fn acquire_shared(paths: &VaultPaths) -> Result<VaultLock, PersistenceError>` — `load` 用。`try_lock_shared` / `LockFileEx(LOCKFILE_FAIL_IMMEDIATELY)`（`LOCKFILE_EXCLUSIVE_LOCK` なし）
 - `Drop` 実装でロック解放とファイルハンドル close。`vault.db.lock` ファイル自体は残す（再利用、0 bytes）
 
-### `Audit`（`pub(crate)`、REQ-P14、秘密を受けない 5 関数）
+### `Audit`（`pub(crate)`、REQ-P14、秘密を受けない 6 関数）
 
 - `pub(crate) fn entry_load(paths: &VaultPaths)` — `load` 冒頭の info イベント発行
 - `pub(crate) fn entry_save(paths: &VaultPaths, record_count: usize)` — `save` 冒頭の info イベント発行
 - `pub(crate) fn exit_ok_load(record_count: usize, protection_mode: ProtectionMode, elapsed_ms: u64)` — load 成功時
 - `pub(crate) fn exit_ok_save(record_count: usize, bytes_written: u64, elapsed_ms: u64)` — save 成功時
 - `pub(crate) fn exit_err(err: &PersistenceError, elapsed_ms: u64)` — 全エラー経路の終了イベント（内部でバリアント→レベル写像、`../basic-design/security.md` §監査ログ規約参照）
+- `pub(crate) fn retry_event(stage: &'static str, attempt: u32, raw_os_error: i32, elapsed_ms: u64, outcome: RetryOutcome)` — Issue #65、`cfg(windows)` rename 段の retry 発火・完了・全敗を発行（`Pending` / `Succeeded` は `warn`、`Exhausted` は `error`、`../basic-design/security.md` §retry 監査ログ参照）。`#[cfg_attr(not(windows), allow(dead_code))]` で非 Windows ビルドの dead_code 警告を抑止しつつ API 公開は全プラットフォームで維持（テスト・将来の他経路再利用想定）
+
+### `RetryOutcome`（`pub(crate)`、Issue #65、`Audit::retry_event` 引数の型安全 enum）
+
+```text
+RetryOutcome
+├── Pending      — 各 retry 試行直前（sleep + 再 rename の前）に発行、warn レベル
+├── Succeeded    — retry の rename 成功直後に発行、warn レベル
+└── Exhausted    — 5 回全敗で AtomicWriteFailed { stage: Rename } 返却直前に発行、error レベル（DoS 兆候、OWASP A09 上位通報候補）
+```
+
+- **採用根拠（DRY / Tell, Don't Ask / Fail Safe by type）**: 旧シグネチャ `outcome: &'static str` は `if outcome == "exhausted"` の文字列 switch を内部で必要とし、タイポ即バグ（`"exhuasted"` 等を実装側が誤記しても型検査で検出されない）。enum 化で **発行レベル分岐の網羅性をコンパイラに検査させる**（新バリアント追加時に `match` の分岐漏れを CI で検出）。`PersistenceError::AtomicWriteStage` enum と同方針（`./error.md` §`AtomicWriteStage`）
+- **`Display` 実装**: `Pending => "pending"` / `Succeeded => "succeeded"` / `Exhausted => "exhausted"` の文字列を返す。`tracing::warn!(outcome = %outcome, ...)` の `%` 表記でフィールド出力され、subscriber 側 grep / 集計ロジックは旧文字列語彙のまま機能（後方互換）。subscriber が enum の構造（discriminant 等）に依存することは設計外
+- **`Debug` 実装**: derive で十分（`Pending` / `Succeeded` / `Exhausted` のバリアント名がそのまま出る、秘密値を含まない型なので `?outcome` も安全）
+- **`#[cfg_attr(not(windows), allow(dead_code))]`**: `retry_event` と同様に非 Windows ビルドでの dead_code 警告を抑止。本 enum 自体は `cfg(any(test, windows))` ガードを掛けず常時定義（テスト経路 / 将来の他経路再利用想定、API 一貫性）
 
 ### `PersistenceError`（`thiserror::Error` derive）
 

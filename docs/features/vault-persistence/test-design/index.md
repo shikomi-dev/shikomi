@@ -15,7 +15,8 @@
 | ファイル | 内容 |
 |---------|------|
 | `index.md`（本ファイル） | 概要・受入基準・テストマトリクス・E2E設計・モック方針・実行手順・カバレッジ基準 |
-| `integration.md` | 結合テスト設計（TC-I01〜TC-I29）詳細。§0 に Issue #65 由来の外部 I/O 依存マップ |
+| `integration/index.md` | 結合テスト設計（TC-I01〜TC-I29）詳細。§0 に Issue #65 由来の外部 I/O 依存マップ |
+| `integration/changelog.md` | 結合テスト設計の改訂履歴（v6〜v8.5、Bug-G-002〜G-007 7 ラウンド実験経緯） |
 | `unit.md` | ユニットテスト設計（TC-U01〜TC-U16）詳細 |
 
 ---
@@ -108,7 +109,7 @@
 
 **省略理由**: `shikomi-infra` は `VaultRepository` を提供する内部ライブラリ crate であり、エンドユーザーが直接操作する CLI / GUI / 公開 HTTP API を持たない。
 
-テスト戦略ガイドの方針「エンドユーザー操作（UI/CLI/公開API）がない場合は結合テストで代替可」に従い、E2E は本 feature では設計対象外とする。エンドユーザーが `shikomi-infra` を直接触れるのは後続 Issue（`shikomi-cli` / `shikomi-daemon`）が公開される段階。受入基準 AC-01〜AC-17 は `integration.md` の結合テストで網羅する。
+テスト戦略ガイドの方針「エンドユーザー操作（UI/CLI/公開API）がない場合は結合テストで代替可」に従い、E2E は本 feature では設計対象外とする。エンドユーザーが `shikomi-infra` を直接触れるのは後続 Issue（`shikomi-cli` / `shikomi-daemon`）が公開される段階。受入基準 AC-01〜AC-17 は `integration/index.md` の結合テストで網羅する。
 
 ---
 
@@ -202,7 +203,7 @@ echo "=== 全テスト PASS ==="
 | 境界値 | ゼロレコード（TC-I19）、絵文字ラベル（TC-I08）、ゼロバイトファイル（TC-I13）、不正バイト列（TC-I14） |
 | カバレッジ数値 | `cargo llvm-cov` 行カバレッジ 80% 以上（AC-10） |
 | Fail Secure ケース | `.new` 残存 load 側（TC-I05）・`.new` 残存 save 側（TC-I15）・OS パーミッション異常（TC-I07, TC-I12, TC-U10, TC-U12）・暗号化モード拒否（TC-I03, TC-I04）・VaultDir バリデーション（TC-I22, TC-U13〜U16）・ロック競合（TC-I21）が**必須**（省略不可） |
-| Win file-handle semantics（Issue #65） | Sub-D 既存 5 件（TC-I28）と並行 read open race（TC-I29）の双方が Windows ランナーで PASS することが**必須**。**`#[cfg(windows)] #[ignore]` での回避は問答無用で却下**（CI スコープ錯覚 = Bug-F-003 の再演温床、`integration.md` 冒頭注記 / `../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合） |
+| Win file-handle semantics（Issue #65） | Sub-D 既存 5 件（TC-I28）と並行 read open race（TC-I29）の双方が Windows ランナーで PASS することが**必須**。**`#[cfg(windows)] #[ignore]` での回避は問答無用で却下**（CI スコープ錯覚 = Bug-F-003 の再演温床、`integration/index.md` 冒頭注記 / `../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合） |
 
 ---
 
@@ -216,5 +217,8 @@ echo "=== 全テスト PASS ==="
 
 *改訂 v7.0: 涅マユリ（テスト担当）/ 2026-04-27 — Issue #65 工程4（テスト実装）対応で AC-19 のテストカバレッジを 6 ケースに拡張。① TC-I29-A（DoS 兆候 / `outcome="exhausted"` error レベル発火）追加、補助スレッド 600ms 保持で retry 5 回全敗を決定的に再現 ② TC-I29-B（race 不在の通常 save で retry 監査ログが一切 emit されない sanity check、偽 emit バグ回帰防止）追加 ③ TC-I29-D-1〜D-4（`reverify_no_reparse_point` 4 経路ユニット検証、TOCTOU 二次防衛線）追加。詳細は `integration.md` §TC-I29-A / §TC-I29-B / §TC-I29-D 参照*
 
-*改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映。Win CI ランナーの Defender / Search Indexer が `vault.db` ハンドルを `~250ms+` 保持し続けるため、当初の線形 `50ms × 5 = 最悪 ~375ms` budget では `vault_migration_integration` 5 件 + TC-I29 主 + TC-I29-B が継続 fail する事象を解消。① AC-19 を「指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms」に SSoT 拡張 ② TC-I29 / TC-I29-A / TC-I29-B 行のタイムアウト閾値・補助スレッド保持時間を新 SSoT に同期 ③ TC-I29-B 期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（`integration.md` v7.1 で既に test 側に反映済の SSoT 同期）。`security.md` §jitter ↔ `error.md` ↔ `flows.md` ↔ `test-design/*` の四角形を新数値で同期*
+*改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映。Win CI ランナーの Defender / Search Indexer が `vault.db` ハンドルを `~250ms+` 保持し続けるため、当初の線形 `50ms × 5 = 最悪 ~375ms` budget では `vault_migration_integration` 5 件 + TC-I29 主 + TC-I29-B が継続 fail する事象を解消。① AC-19 を「指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms」に SSoT 拡張 ② TC-I29 / TC-I29-A / TC-I29-B 行のタイムアウト閾値・補助スレッド保持時間を新 SSoT に同期 ③ TC-I29-B 期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（旧 `integration.md` v7.1 で既に test 側に反映済の SSoT 同期）。`security.md` §jitter ↔ `error.md` ↔ `flows.md` ↔ `test-design/*` の四角形を新数値で同期*
+
+*改訂 v8.5: セル（設計担当）+ 坂田銀時（実装担当）/ 2026-04-27 — 工程5 三者レビュー指摘反映パッケージ。① **`integration.md` を `integration/` ディレクトリに分割**（ペガサス指摘、500 行ルール超過 621 行解消）: TC 本体 → `integration/index.md`、改訂履歴 v6〜v8.5 → `integration/changelog.md`。本ファイル §1 ファイル構成を新リンクに同期。② **`enum RetryOutcome` 化**（ペテルギウス指摘 2 反映）: `audit::retry_event` の `outcome` 引数を `&'static str` から型安全 enum へ。`security.md` §retry 監査ログ + `detailed-design/data.md` §`Audit` / §`RetryOutcome` を同期改訂、文字列 switch を排除（タイポ即バグ防止 / Tell, Don't Ask）。③ **`RENAME_JITTER_RANGE` のマジックナンバー解消**（ペテルギウス指摘 1）: `HALF_RANGE_MS * 2 + 1` で導出（実装側で適用、設計影響なし、本履歴で articulate のみ）。④ **helpers retry loop 共通化**（ペテルギウス指摘 3、実装側）。⑤ **Bug-G-007 反映**（涅マユリ全 integration test ファイル走査）: `vault_migration_property::tc_d_p01_encrypt_decrypt_roundtrip_property`（proptest 1000 ケース）にも `#[ignore]` 適用、reason 統一フォーマットに「Bug-G-002〜G-007 articulated in test-design v8.5」明記（ペテルギウス指摘 4「articulated in test-design」整合性回復、指摘 5 版番号一貫化）。詳細 7 ラウンド統合表 + 解除条件 (a)/(b)/(c) 拡大は `integration/changelog.md` v8.5 参照*
+
 *対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード） / #65 fix(persistence): Windows AtomicWrite rename 失敗*
