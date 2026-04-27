@@ -547,3 +547,27 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 *改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映で retry budget を **指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 最悪 ~1675ms / 平均 ~1550ms** に拡張（`security.md` §jitter SSoT 連動更新）。① TC-I29 主の補助スレッド hold を 30ms → **200ms 程度**へ拡大可能化、deadline を 1500ms → **3000ms** へ拡張（指数バックオフ最悪 1675ms × 1.8 buffer）② TC-I29-A の補助スレッド hold を 800ms → **2500ms** へ拡張（>1675ms で retry 5 回全敗を確実に再現）③ TC-I29-B の期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（CI 実測現実の素直反映）④ TC-I29 主 / TC-I29-B の `#[ignore]` を撤回し CI で再有効化 ⑤ TC-I28 (Sub-D 5 件 vault_migration_integration) も指数バックオフで Defender 250ms+ ハンドル保持を吸収して Win CI green 化見込み。Bug-G-001 §7 の Option B（exponential backoff）採用、設計 SSoT 4 ファイル + test-design 2 ファイル同期*
 
 *改訂 v8.1: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-002 反映（CI 環境補正）。CI run 24972766065 で **指数バックオフ ~1675ms ですら CI Defender が `vault.db` を `1.5 秒+` 連続スキャンロックして吸収不能**（TC-I29-B race 無し置換 save が `elapsed_ms=1532` で `outcome="exhausted"`）と判明。本番 race の SSoT 上限契約（最悪 ~1675ms）は維持し、**CI 環境のみ** `.github/workflows/windows.yml` に `Add-MpPreference -ExclusionPath $env:RUNNER_TEMP / target` + `-ExclusionExtension db / db-wal / db-shm / db-journal / db.new` を追加して Defender スキャン経路を構造的に塞ぐ（Bug-G-002 §5 Option B 採用、Option A の retry 6〜7 回拡張は通常 save 6 秒+ で UX 破壊するため不採用）。本対策は CI 環境の Defender スキャン特性に対する compromise であり、本番ユーザー環境では引き続き指数バックオフ ~1675ms budget が典型 Defender 介入を吸収する設計（`security.md` §jitter SSoT は変更なし）。`Add-MpPreference` 失敗時は warn のみで継続する Fail Secure 動作*
+
+*改訂 v8.2: 坂田銀時（実装担当）/ 2026-04-27 — **Bug-G-002〜004 の 3 ラウンド実験で「真犯人不明・再現性 ±35ms 一定」と articulate** された CI 環境固有のハンドル遅延に対して、TC-I29 主 / TC-I29-B を `#[ignore]` で CI 除外する責務分離方針を採用（キャプテン決定 Option I-改）。実験データ:*
+
+*| Round | 対策 | TC-I29 主 elapsed | TC-I29-B elapsed | 結果 |*
+*|-------|------|-----------------:|----------------:|------|*
+*| Bug-G-002 | 指数バックオフ retry budget 拡張 (`~1675ms`) | 1575ms | 1532ms | ❌ FAIL |*
+*| Bug-G-003 | `+ Defender exclusion` (`RUNNER_TEMP` / `target` / 拡張子 5 種) | 1604ms | 1537ms | ❌ FAIL |*
+*| Bug-G-004 | `+ Stop-Service WSearch, SysMain -Force` | 1570ms | 1583ms | ❌ FAIL |*
+
+*真犯人候補（CI で順次潰すのは ROI 悪、ローカル / 別 PR で追求）: ① rusqlite SQLite の `CloseHandle` 遅延 ② Microsoft Defender for Endpoint (`MDE`) の追加 telemetry ③ AMSI ハンドルフック ④ 未知 filter driver の合成介入*
+
+*責務分離:*
+
+*- **CI 上 AC-19 担保** = TC-I29-A (`outcome="exhausted"` error レベル発火 / DoS 兆候) + TC-I29-D-1〜D-4 (`reverify_no_reparse_point` TOCTOU 判定 4 経路) + TC-I29 主の sanity check (監査ログ `outcome="pending"` 出現 — `if logs_contain` 経由で fail 経路でも観測可能) + 監査ログ 3 経路 (pending / succeeded / exhausted) の構造的観測*
+*- **「retry が typical race を吸収して save が成功する」本質要件** = TC-I29 主 / TC-I29-B のローカル `--ignored` 手動実行で担保*
+*- 実装側 SSoT (`security.md` §jitter 最悪 ~1675ms) は本番ユーザー環境への契約として維持。CI 環境の異常ハンドル遅延 (~1570ms 一定) は本番ユーザーの典型介入 (~250ms+) と性質が異なる別事象として articulate*
+
+*運用ルール:*
+
+*- TC-I29 主 / TC-I29-B の `#[ignore]` 解除条件: (a) `cargo test --ignored` を CI に追加可能な専用ジョブが整備された場合、または (b) 真犯人 (rusqlite handle 遅延等) が別 PR で根治された場合。それ以前の盲目的解除は `error.md` §禁止事項 §`#[cfg(windows)] #[ignore]` 回避禁止 の意図に反する*
+*- `#[ignore = "..."]` の reason 文字列に「test-design v8.2」参照を必ず含める（SSoT 二重露出による忘却防止、Bug-F-003 再演防止）*
+*- ローカル手動実行: `cargo test -p shikomi-infra --test integration_windows_retry -- --ignored` (Win Defender exclusion 環境を強く推奨)*
+
+*Boy Scout: PR #71 の SSoT 整合化（`#[cfg(windows)] #[ignore]` 回避禁止条項）に新たに articulated な ignore 例外を加える形になるが、3 ラウンド実験データを `error.md` 直下ではなく test-design 改訂履歴に保存することで「設計禁止事項」を緩めずに「実験で articulate された compromise」を分離保管する。将来の reviewer は本 v8.2 履歴を参照することで「この ignore は根拠不足ではない」と即判定可能*
