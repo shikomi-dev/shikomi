@@ -30,22 +30,22 @@
 
 | 配置先 / TC ID | 担当 Issue | 状態 |
 |---------------|----------|------|
-| `crates/shikomi-cli/src/**::tests` (TC-F-U01〜U13、ユニット 13 件) | **#74-B** | ⏳ #74-A 完了後に着手 |
+| `crates/shikomi-cli/src/**::tests` (TC-F-U01〜U07 + U10〜U15、Issue #76 で実装する 13 件) | **#74-B** | ⏳ #74-A 完了後に着手。TC-F-U08/U09 は Issue #75 で実装済 `07ae079` (Sub-F unit 合計 15 件) |
 | `crates/shikomi-cli/tests/vault_subcommands.rs` (TC-F-I01〜I09, I11, I12、結合 11 件) | **#74-C** | ⏳ #74-A 完了後に着手 |
 | `crates/shikomi-cli/tests/mode_banner_integration.rs` (TC-F-I10、結合 1 件) | **#74-C** | ⏳ #74-A 完了後に着手 |
 | `crates/shikomi-cli/tests/accessibility_paths.rs` (TC-F-A01〜A05、PTY 5 件) | **#74-D** | ⏳ #74-A 完了後 + `expectrl` dev-dep 追加 |
 | `tests/e2e/sub-f-tanaka-persona.sh` (TC-F-E01、E2E 1 件) | **#74-E** | ⏳ #74-A/B/C/D 完了推奨後に着手 |
 | `tests/docs/sub-f-static-checks.sh` (TC-F-S01〜S06、静的 6 件) | **#74-E** | ⏳ #74-A 完了後に着手（B/C/D と並列可） |
-| **合計** | — | **0/37 実装、計画上 37/37 着地予定** |
+| **合計** | — | **Issue #75 で 2/39 実装済 (TC-F-U08/U09)、計画上 39/39 着地予定** (Sub-F TC 総数は Issue #75 で 37→39 に拡張) |
 
 #### #74 親 Issue クローズ条件（DoD トレース）
 
 - [ ] **#75 (#74-A)** マージ — Bug-F-001/002/003/004/005/006/007 全解消 + 設計書 SSoT 同期（本節 §15.15 + `cli-subcommands.md` §Issue #75 工程2 + `cli-vault-commands/test-design/ci.md` §7）
-- [ ] **#74-B** マージ — TC-F-U01〜U13（13/13 件）pass、`cargo test -p shikomi-cli --lib` で観測
+- [ ] **#74-B** マージ — TC-F-U01〜U07 + U10〜U15（13/13 件、TC-F-U08/U09 は Issue #75 で実装済 `07ae079`、合計 15/15 件）pass、`cargo test -p shikomi-cli --lib` で観測
 - [ ] **#74-C** マージ — TC-F-I01〜I12（12/12 件）pass、`vault_subcommands.rs` + `mode_banner_integration.rs` で観測
 - [ ] **#74-D** マージ — TC-F-A01〜A05（5/5 件）pass、PTY 経由 3 OS で観測（OS 別 manual smoke 別 PR articulate）
 - [ ] **#74-E** マージ — TC-F-E01（1/1）+ TC-F-S01〜S06（6/6）pass、田中ペルソナ完走 + 静的検査全 grep gate 通過
-- [ ] **§15.13 表の全 Bug-F-001〜007 が「解消済」になり、§15.10 TC 総数 37 件が「実装済 37/37」になる**ことを本節 §15.15 で最終 articulate
+- [ ] **§15.13 表の全 Bug-F-001〜007 が「解消済」になり、§15.10 TC 総数 39 件（Issue #75 で 37→39 に拡張、unit 13→15）が「実装済 39/39」になる**ことを本節 §15.15 で最終 articulate
 
 #### Boy Scout / 教訓（Issue #75 articulate）
 
