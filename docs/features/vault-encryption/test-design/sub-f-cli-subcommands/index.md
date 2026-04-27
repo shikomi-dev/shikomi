@@ -1,11 +1,17 @@
-# テスト設計書 — Sub-F (#44) shikomi-cli vault サブコマンド (Rev1)
+# テスト設計書 — Sub-F (#44) shikomi-cli vault サブコマンド (Rev1) — 索引
 
 <!-- 親: docs/features/vault-encryption/test-design/index.md -->
-<!-- 配置先: docs/features/vault-encryption/test-design/sub-f-cli-subcommands.md -->
+<!-- 配置先: docs/features/vault-encryption/test-design/sub-f-cli-subcommands/index.md -->
+<!-- 分割: 旧 sub-f-cli-subcommands.md (592 行) を Issue #75 工程2 内部レビュー (ペガサス指摘) で分割。本 index.md は §15.1〜§15.14 (Sub-F 本体)、Issue #75 関連の §15.15〜§15.16 は同ディレクトリの issue-75-verification.md に分離 -->
 <!-- 共通方針（テストレベル読み替え / 受入基準 AC-* / E2E ペルソナ等）は sub-0-threat-model.md §1〜§9 を正本とする。 -->
 <!-- 横断的変更: 本書は vault-encryption feature のテスト設計だが、daemon-ipc feature の `IpcResponse::Records` 構造体化に伴う後方互換 TC（TC-IT-026..028 想定）と双方向参照する。 -->
 <!-- TC-E-E01 田中ペルソナ E2E は Sub-E `sub-e-vek-cache-ipc.md` §14.4 で凍結された 6 ステップシナリオを Sub-F CLI 完成後に**実機完走**するもの。本書 §15.8 で TC-F-E01 として詳細化（同型 ID）。 -->
 <!-- 終了コード: cli-subcommands.md §終了コード SSoT を**唯一の真実源**として参照、本書では再定義しない（ペガサス致命指摘②解消）。 -->
+<!-- Issue #75 (#74-A) 関連の Bug-F-* 解消ステータス + 工程4 検証手順 SSoT は、本ディレクトリ配下の [issue-75-verification.md](issue-75-verification.md) を参照。-->
+
+> **本書の構成（Issue #75 工程2 内部レビュー反映による分割）**:
+> - `index.md`（本書、§15.1〜§15.14）— Sub-F 本体（テストレベル / 受入基準 / マトリクス / 詳細 TC / 静的検査 / 実行手順 / 証跡 / Rev1 修正履歴）
+> - [`issue-75-verification.md`](issue-75-verification.md)（§15.15〜§15.16）— Issue #75 (#74-A) Bug-F-* 解消ステータス（セル `c626310` 反映: 36→29 + Bug-F-008 #80 起票）+ 工程4 検証手順 SSoT
 
 ## 15. Sub-F (#44) テスト設計 — shikomi-cli vault サブコマンド + 既存 CRUD ロック時挙動 + 田中ペルソナ E2E
 
@@ -270,7 +276,7 @@ cargo test -p shikomi-daemon --test ipc_integration
 | **Bug-F-001** | BLOCKER | `vault unlock --recovery` が Phase 5 stub のまま未実装。EC-F3 / TC-F-I03b 完全踏み倒し中 | `crates/shikomi-cli/src/usecase/vault/unlock.rs:29-32` |
 | **Bug-F-002** | HIGH | `success::*_with_fallback_notice` がデッドコード化、Phase 5 文言「is not yet wired in this build (Phase 5)」が残存 | `crates/shikomi-cli/src/presenter/success.rs:175,206,232-237` |
 | **Bug-F-003** | BLOCKER | CI が `shikomi-cli` / `shikomi-daemon` テストを実行していない（`unit-core` = `-p shikomi-core`、`test-infra` = `-p shikomi-infra` のみ）→「Linux 全 green」報告は **CI 観測スコープの錯覚** | `justfile`、`.github/workflows/test-infra.yml`、`unit-core.yml` |
-| **Bug-F-004** | BLOCKER | Sub-F の IPC V2 移行で既存 IPC integration / e2e テスト 36 件が破壊（`it_server_connection` 10/11 失敗、`it_ipc_vault_repository_phase15` 10/10 全壊、`e2e_daemon_phase15` 6/7 失敗）。client side が V1 のまま `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` | `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs`、`crates/shikomi-daemon/tests/it_server_connection.rs` 他 |
+| **Bug-F-004** | BLOCKER | Sub-F の IPC V2 移行で既存 IPC integration / e2e テスト **29 件**（§15.16.1 実測 SSoT、Sub-F 工程5 articulate 時点の概算「36 件」を訂正）が破壊（`it_server_connection` / `it_ipc_vault_repository_phase15` / `e2e_daemon_phase15` / `e2e_daemon_phase15_pty`）。client side が V1 のまま `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` | `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs`、`crates/shikomi-daemon/tests/it_server_connection.rs` 他（実 TC ID 全列挙は §15.16.1）|
 | **Bug-F-005** | HIGH | Encrypted vault fixture が壊れている（"wrapped_vek ciphertext is too short"）+ TC-E2E-040 で exit code 3 (VaultLocked) 期待 vs 実装 exit code 2 (BackoffActive) のドリフト | `crates/shikomi-cli/tests/common/fixtures.rs` 想定 |
 | **Bug-F-006** | MEDIUM | `vault encrypt --help` の `--output` Possible values 説明文に「Phase 5 で実装」が残存、Phase 6/7 完了主張と矛盾 | `crates/shikomi-cli/src/cli.rs:171-175` |
 | **Bug-F-007** | MEDIUM | vault サブコマンドで `--vault-dir` flag が完全に無視される。実際必要なのは XDG_RUNTIME_DIR / HOME だが、エラー文言は誤って SHIKOMI_VAULT_DIR を案内 | `crates/shikomi-cli/src/lib.rs::run_vault`、`crates/shikomi-cli/src/io/ipc_vault_repository.rs::unix_default_socket_path` |
@@ -328,3 +334,4 @@ cargo test -p shikomi-daemon --test ipc_integration
 | 8 | ペテルギウス指摘6 | TC-F-A03 録音判定 scope 過大 | env サニタイズ + dictation prefs 確認のみに scope 縮小、録音可能アプリ検出は MSG-S18 受容前提 |
 | 9 | ペテルギウス指摘7 | C-37 grep gate 脆弱（特定文字列不在検証）| `mode_banner::display` 必須呼出経路の cross-crate grep に再設計、TC-F-S02 で `usecase::list` から `presenter::mode_banner::display` への呼出存在を機械検証 |
 | 10 | 服部致命1〜6 | CLI 攻撃面追補 + stdin 拒否 + 一時ファイル umask + env サニタイズ + liblouis FFI 監査 + core dump 抑制 | C-38（TC-F-U13/I12 stdin 拒否）+ C-41（TC-F-U10 core dump）+ TC-F-A05（umask 077）+ TC-F-S06（env allowlist）+ liblouis 不採用方針（自前 wordlist テーブル）凍結 |
+
