@@ -125,3 +125,18 @@
 *- **症状報告ベース調査の限界**: Bug-G-006 articulate 時、symptom-driven に integration ファイル群のみ列挙し property test を見落とした。v8.5 は **全 integration test ファイル走査**（涅マユリ実施）で取りこぼしを補正。今後は CI 環境固有問題への対応では「全ファイル走査 → 影響範囲確定」を articulate チェックリストとする（Boy Scout / 構造的調査の励行）*
 *- v8.5 では `index.md`（TC 本体）と `changelog.md`（本ファイル、改訂履歴）への分割（ペガサス指摘）を併せて適用し、本体 535 行・履歴 90 行+ の混在を解消。reviewer の認知負荷を半減させる構造改革（Boy Scout / 単一ファイル肥大の回避）*
 *- 設計責務分離の articulate（ペテルギウス指摘 1〜5 反映）: ① `RetryOutcome` enum 化（`security.md` §retry 監査ログ + `detailed-design/data.md` §`Audit` / §`RetryOutcome`）で文字列 switch を排除、② `RENAME_JITTER_RANGE` を `HALF_RANGE_MS * 2 + 1` で導出（マジックナンバー解消、実装側で適用）、③ helpers の retry loop 共通化（DRY、実装側で適用）、④ 本 v8.5 で「articulated in test-design」整合性回復、⑤ 版番号一貫化（reason 文字列に「v8.5」明記、integration 5 件 + property 1 件 + TC-I29 系で同フォーマット）*
+
+***Bug-G-008 articulate（v8.5 に追補、wire format SSoT 整合）**:*
+
+*v8.5 で導入した `RetryOutcome` enum + `Display` 実装は、tracing マクロ側で `outcome = %outcome`（`%` = `Display`）として記録される設計。実 CI で確認された結果、tracing の wire format は **`outcome=pending` / `outcome=succeeded` / `outcome=exhausted` のクォート無し key=value**（旧 `&'static str` 値経由の `outcome="..."` クォート付きフォーマットから変更）となる。これは `Display` 経由（`%`）と `Debug` 経由（`?`）で tracing が出力差を持つ tracing の素直な仕様であり、SSoT を Display 一本化した v8.5 設計の必然的な帰結である。*
+
+*影響を受けた箇所（Bug-G-008、`93fec1c` 直前で発覚し全件修正済）:*
+
+*- **設計書 SSoT**: `basic-design/security.md` §retry 監査ログ §1（wire format クォート無し明記） / §監査ログ規約テーブル `outcome:` 列の `%outcome` 表記 / §脅威モデル `outcome=exhausted` で fail fast 記述 / `test-design/index.md` §3 マトリクス TC-I29 / TC-I29-A / TC-I29-B 行 / `test-design/integration/index.md` TC-I29-A / TC-I29-B（見出し・背景・期待結果）の合計 7 箇所で `outcome="..."` → `outcome=...` に統一*
+*- **テストアサーション**（坂田銀時、別コミット）: `integration_windows_retry.rs` の `logs_contain` 7 箇所すべて raw string `r#"outcome="..."#"` → 通常 string `"outcome=..."` に統一。`helpers/mod.rs` の doc コメント / panic 文言 / インラインコメントも同期*
+
+*Boy Scout / 教訓（Bug-G-008 由来）:*
+
+*- **`#![cfg(windows)]` テストは Linux で skip されるため、tracing wire format 変更を含むリファクタは CI 経由で必ず確認する**チェックリスト項目を追加（坂田が implementing checklist 化）。ローカル `cargo test` だけで「等価」と断言してはならない*
+*- **`Display` vs `Debug` の wire format 差**は tracing の仕様。`%expr` (Display) はクォート無し `key=value`、`?expr` (Debug) や値直接（`outcome = some_str`）はクォート付き `key="value"` になる。設計書 SSoT は **`%` 経路でのクォート無し**を契約として固定し、subscriber 側は `outcome=exhausted` 文字列（クォート無し）でマッチさせる前提で実装する*
+*- **設計書側 SSoT 整合の徹底**: コード側で wire format を変更する PR は、設計書側の SSoT 記述（`outcome="..."` 等の wire format 例示）も同 PR で更新する責務を負う。今回は v8.5 反映時点で `%outcome` 契約は明記したが wire format クォート無しの実例を見落としており、subscriber 開発者が古い記述で grep を書く罠を残しかけた（ペガサス指摘 + ペテルギウス指摘で発見）。今後は **wire format 変更 = 設計書全 grep + 同期更新**を articulate チェックリスト化*

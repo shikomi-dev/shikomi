@@ -475,9 +475,9 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 
 ---
 
-## TC-I29-A: retry 5 回全敗で `outcome="exhausted"` が **error レベル**で発火する（Windows、Issue #65 DoS 兆候）
+## TC-I29-A: retry 5 回全敗で `outcome=exhausted` が **error レベル**で発火する（Windows、Issue #65 DoS 兆候）
 
-> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**保持し、retry を 5 回全敗に追い込む。`Audit::retry_event` の `outcome="exhausted"` 経路 (error レベル) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
+> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**保持し、retry を 5 回全敗に追い込む。`Audit::retry_event` の `outcome=exhausted` 経路 (error レベル、`%outcome` Display 経由のクォート無し wire format、`../../basic-design/security.md` §retry 監査ログ) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
 
 | 項目 | 内容 |
 |------|------|
@@ -487,7 +487,7 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 種別 | 異常系（fail fast の意図確認 + 監査ログ error 経路の発火確認） |
 | 前提条件 | `#[cfg(windows)]` ガード。`tempfile::TempDir`。初期 `vault.db` を save 済。`tracing_test::traced_test` でログ収集 |
 | 操作 | 1. 初期 vault を save 完了 2. 補助スレッドが `share_mode(0)` で `vault.db` を **2500ms 保持**（v8 で 800ms から拡張、`>1675ms` で retry を 5 回全敗させる、Bug-G-001 反映後の指数バックオフ拡張に追従） 3. 補助スレッド ready 直後に `repo.save(&new_vault)` 4. save 戻り値とトレーシングログを検証 |
-| 期待結果 | `repo.save()` が `Err(AtomicWriteFailed { stage: Rename, source: code:5/32/33 })` を返す。監査ログに `"rename retry exhausted"`（error レベル）+ `outcome="exhausted"` が emit される。`outcome="pending"` も併発するが `outcome="succeeded"` は emit されない（fail 経路）|
+| 期待結果 | `repo.save()` が `Err(AtomicWriteFailed { stage: Rename, source: code:5/32/33 })` を返す。監査ログに `"rename retry exhausted"`（error レベル）+ `outcome=exhausted`（`%outcome` Display 経由のクォート無し wire format）が emit される。`outcome=pending` も併発するが `outcome=succeeded` は emit されない（fail 経路）|
 
 **実装上の注意**:
 - `tracing_test::traced_test` は **DEBUG 以上**の events を捕捉する。`Audit::retry_event` の error 分岐は `tracing::error!` を発行するため `logs_contain("rename retry exhausted")` で観測可能
@@ -507,7 +507,7 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 種別 | 正常系（race 無し経路の sanity check） |
 | 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir`。`tracing_test::traced_test` |
 | 操作 | 1. race 無しで `repo.save(&vault)` を呼ぶ（初回作成）2. race 無しで `repo.save(&updated)` を呼ぶ（置換）3. CI 環境の偶発失敗時は 200ms 待機 + 1 回再試行で吸収 4. トレーシングログを検証 |
-| 期待結果 | 最終的に置換 save が `Ok(())`。監査ログに `"rename retry exhausted"` / `outcome="exhausted"` が **emit されていない**。`pending` / `succeeded` 経路の emit は**許容**（CI 環境の Defender 介入で偶発 retry が起こり得るため、retry 経路自体は NG にしない）|
+| 期待結果 | 最終的に置換 save が `Ok(())`。監査ログに `"rename retry exhausted"` / `outcome=exhausted`（クォート無し wire format）が **emit されていない**。`outcome=pending` / `outcome=succeeded` 経路の emit は**許容**（CI 環境の Defender 介入で偶発 retry が起こり得るため、retry 経路自体は NG にしない）|
 
 ---
 

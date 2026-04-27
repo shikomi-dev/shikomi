@@ -48,7 +48,7 @@
 | `exists` 呼出 | `debug` | 戻り値直前 | `vault_dir`, `found: bool` | — |
 | `PersistenceError` 全バリアント | `warn`（`InvalidPermission` / `OrphanNewFile` / `Locked` / `UnsupportedYet`）／ `error`（`Sqlite` / `Corrupted` / `AtomicWriteFailed` / `SchemaMismatch` / `Io` / `InvalidVaultDir` / `CannotResolveVaultDir`） | return の直前 | エラーバリアント名、`path`（秘密でない）、`stage`（atomic write 時）、`table`（Corrupted 時）、`reason`（列挙の variant 名のみ） | 下位 `#[source]` の `Debug` 文字列全体（`SecretString` の `Debug` は `"[REDACTED]"` 固定だが、SQLite エラーメッセージにパラメータ値が混入する可能性があるため、`source` は `display_redacted()` ヘルパ経由で記録し、SQL パラメータは `?` 化して記録） |
 | atomic write 中間段階 | `debug` | 各 stage（`PrepareNew` / `WriteTemp` / `FsyncTemp` / `FsyncDir` / `Rename` / `CleanupOrphan`）遷移時 | `stage` 名、`elapsed_ms` | ファイル内容 |
-| **rename retry 発火**（Issue #65） | `warn` | `cfg(windows)` rename 段で一過性エラー（`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION`）検知時、各 retry 試行直前 / 完了直後 | `stage = Rename`、`attempt: u32`（1〜5）、`raw_os_error: i32`、`elapsed_ms`、`outcome: RetryOutcome`（型安全 enum、バリアント `Pending` / `Succeeded` / `Exhausted`、tracing には `Display` 由来の文字列 `"pending"` / `"succeeded"` / `"exhausted"` で出力） | path のシンボリックリンク先実体・ファイル内容 |
+| **rename retry 発火**（Issue #65） | `warn` | `cfg(windows)` rename 段で一過性エラー（`ERROR_ACCESS_DENIED` / `SHARING_VIOLATION` / `LOCK_VIOLATION`）検知時、各 retry 試行直前 / 完了直後 | `stage = Rename`、`attempt: u32`（1〜5）、`raw_os_error: i32`、`elapsed_ms`、`outcome: RetryOutcome`（型安全 enum、バリアント `Pending` / `Succeeded` / `Exhausted`、tracing 出力は `%outcome`（Display）経由で **wire format は `outcome=pending` / `outcome=succeeded` / `outcome=exhausted` のクォート無し key=value**、SSoT）| path のシンボリックリンク先実体・ファイル内容 |
 | **rename retry 全敗**（Issue #65） | `error` | retry 5 回全敗で `AtomicWriteFailed { stage: Rename }` 返却直前 | `total_attempts: 5`、`total_elapsed_ms`、`final_raw_os_error: i32` | 同上。daemon 側はこのイベントを **DoS 兆候** として上位通報候補（OWASP A09 連携）|
 
 **秘密値マスクの型保証**:
@@ -140,7 +140,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 **対策**:
 
-1. **`audit::retry_event(stage, attempt, raw_os_error, elapsed_ms, outcome)` 関数を新設**: `audit.rs` の公開関数を 5 → 6 に拡張。シグネチャは `&'static str` / `u32` / `i32` / `u64` / `RetryOutcome` のみ（秘密値を含まない型、`§監査ログ規約` §秘密値マスクの型保証 §防衛線 と整合）。`outcome` は **型安全な `enum RetryOutcome { Pending, Succeeded, Exhausted }`** で表現し、文字列 switch（`if outcome == "exhausted"` 等）を排除する（タイポ即バグの防止、Tell, Don't Ask、`../detailed-design/data.md` §Audit §`RetryOutcome` 参照）。tracing イベントへの出力は `Display` 実装で `"pending"` / `"succeeded"` / `"exhausted"` の文字列となるため、subscriber 側のフィールド grep / 集計ロジックは従来と同じ語彙で機能する（後方互換）。
+1. **`audit::retry_event(stage, attempt, raw_os_error, elapsed_ms, outcome)` 関数を新設**: `audit.rs` の公開関数を 5 → 6 に拡張。シグネチャは `&'static str` / `u32` / `i32` / `u64` / `RetryOutcome` のみ（秘密値を含まない型、`§監査ログ規約` §秘密値マスクの型保証 §防衛線 と整合）。`outcome` は **型安全な `enum RetryOutcome { Pending, Succeeded, Exhausted }`** で表現し、文字列 switch（`if outcome == "exhausted"` 等）を排除する（タイポ即バグの防止、Tell, Don't Ask、`../detailed-design/data.md` §Audit §`RetryOutcome` 参照）。tracing イベントへの出力は **`Display` 実装由来**で行われ、各バリアントは `Display` で `pending` / `succeeded` / `exhausted` を返す。tracing マクロ側は **`outcome = %outcome`（`%` = Display）** の形式で記録するため、**実 wire format は `outcome=pending` / `outcome=succeeded` / `outcome=exhausted` の素のキー=値（クォート無し、SSoT）**となる（旧 `outcome: &'static str` 経由で出力されていた `outcome="..."` クォート付きフォーマットは廃止、Bug-G-008 articulate で test 側 `logs_contain` も同 wire format に統一）。subscriber 側 grep / 集計ロジックは値部分が `pending` / `succeeded` / `exhausted` の固定語彙であることに依存し、クォート有無に依存させてはならない。
 2. **発火ポイント**: 各 retry 試行直前に `RetryOutcome::Pending`、成功時に `RetryOutcome::Succeeded`、5 回全敗時に `RetryOutcome::Exhausted`（後者は `error` レベル）。`§監査ログ規約` テーブルに 2 行追加済。発行レベル分岐は **enum の `match` で網羅性検査** され、新バリアント追加時にコンパイラが分岐漏れを検出する（Fail Safe by type）
 3. **daemon 側 DoS 検知**: 別 Issue（daemon Issue）で「同一 vault_dir に対し 1 分間に `retry_event` が 10 回以上 = 異常頻度」の閾値ロジックを追加し、`tracing` subscriber 経由で上位通報。本 Issue では監査ログの **emit 側責務のみ**を実装
 
@@ -166,7 +166,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 4. **指数バックオフ採否根拠**:
    - **線形 50ms × 5 では Defender / Search Indexer (~250ms+ 保持) を吸収不可**（Bug-G-001 §3 CI 観測）
    - **Defender 解放までの待機を attempt 3 (~350ms 累積) で完了**でき、典型 race を救う
-   - 攻撃者制御の長期 lock（>1675ms）に対しては `outcome="exhausted"` で fail fast し DoS 兆候を上位通報（責務分離、KISS）
+   - 攻撃者制御の長期 lock（>1675ms）に対しては `outcome=exhausted` で fail fast し DoS 兆候を上位通報（責務分離、KISS）
    - Phase 8 リファクタで envelope encryption / I/O 統計連携が入る時に retry policy も `RetryPolicy` trait に切り出す予定（YAGNI、本 Issue では定数 + 指数固定で十分）
 
 #### `Connection::close()` 失敗時の `.new` クリーンアップ
