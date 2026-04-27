@@ -445,7 +445,7 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する受入基準ID | AC-18（Issue #65 受入、新規） |
 | 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::write_new` クローズ順序契約 / `fsync_and_rename` Win 限定 retry、`../detailed-design/flows.md` §`save` step 6.10〜6.13 / step 7.3 / `../detailed-design/classes.md` §設計判断 §3.1） |
 | 種別 | 異常系の green 化（修正前は Windows で `AtomicWriteFailed { stage: Rename, source: code:5 PermissionDenied }`、修正後は PASS） |
-| 前提条件 | `feature/issue-65-windows-atomic-rename` ブランチ。`AtomicWriter::write_new` に `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()` 明示呼出が実装されている。`AtomicWriter::fsync_and_rename` に `cfg(windows)` 限定の rename retry（50ms × 5 回）が実装されている。raw fixture `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` がベースライン保存されている |
+| 前提条件 | `feature/issue-65-windows-atomic-rename` ブランチ。`AtomicWriter::write_new` に `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()` 明示呼出が実装されている。`AtomicWriter::fsync_and_rename` に `cfg(windows)` 限定の指数バックオフ rename retry（`50ms × 2^(n-1)` ± `25ms` jitter × 5、最悪 ~1675ms、Bug-G-001 反映後）が実装されている。raw fixture `tests/fixtures/characterization/raw/issue65/pr64_failure_log.txt` がベースライン保存されている |
 | 操作 | Windows CI ランナー上で `cargo test -p shikomi-infra --test vault_migration_integration` を実行（テスト関数: `tc_d_i01_encrypt_then_unlock_password_roundtrip` / `tc_d_i02_encrypt_then_decrypt_roundtrip` / `tc_d_i03_rekey_then_unlock_with_same_password_observation` / `tc_d_i04_rekey_then_decrypt_vault_all_records_succeed` / `tc_d_i05_req_p11_v1_accepted_via_vault_migration` の 5 件） |
 | 期待結果 | 5 件全て PASS（exit code == 0、`test result: ok. 5 passed; 0 failed`）。Linux / macOS でも引き続き PASS。raw fixture（PR #64 失敗ログ）と CI ログ diff を比較し「`AtomicWriteFailed { stage: Rename, code: 5 }` パターンが消えた」ことを証跡として記録する。**`#[cfg(windows)] #[ignore]` で 5 件を回避する PR は問答無用で却下**（防衛線、本ファイル冒頭注記参照） |
 
@@ -462,18 +462,74 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 | 対応する工程 | 詳細設計（REQ-P04、`AtomicWriter::fsync_and_rename` step 7.3 Windows 分岐、`../detailed-design/flows.md`） |
 | 種別 | 異常系（race 状態下での正常完了検証） |
 | 前提条件 | `#[cfg(windows)]` ガード付き。`tempfile::TempDir` を使用。初期 `vault.db` を save 済（記録済レコード 1 件）。`std::thread::spawn` で補助スレッドを起動できる |
-| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、**150ms 保持**（1〜2 回目 retry で吸収される設計、jitter 込み最悪 375ms の内側）してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
-| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜3 回目で rename が成功する）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: **約 375ms 超過なら fail**（jitter 込みの retry 上限契約違反、`../basic-design/security.md` §atomic write の二次防衛線 §jitter — 50ms × 5 + jitter ±25ms × 5 = 最悪 375ms / 平均 ~250ms）|
+| 操作 | 1. メインスレッドで初期 vault を save 完了 2. 補助スレッドを起動し、`std::fs::OpenOptions::new().read(true).share_mode(0)` 相当（`FILE_SHARE_NONE`）で `vault.db` を open し、**短時間保持**（指数バックオフ込み最悪 ~1675ms の内側、典型 200ms で retry 3 回目（累積 ~350ms）までに吸収される設計）してから drop する 3. 補助スレッドの open 直後にメインスレッドで別内容の vault を `repo.save(&new_vault)` する 4. save の戻り値と `vault.db` 内容を確認 |
+| 期待結果 | `repo.save()` が `Ok(())` を返す（補助スレッドが drop した後、retry の 1〜4 回目で rename が成功する。CI Defender 介入時は 4〜5 回目で吸収）。`repo.load()` で復元した vault が新内容と一致する（最終的に `.new` から `vault.db` への置換が完了している）。**retry が機能していなければ `Err(AtomicWriteFailed { stage: Rename, source: code:5 })` で fail する**（修正前の挙動）。タイムアウト記録: **約 1675ms 超過なら fail**（指数バックオフの retry 上限契約違反、`../basic-design/security.md` §atomic write の二次防衛線 §jitter — `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 最悪 ~1675ms / 平均 ~1550ms、Bug-G-001 反映後）|
 
 **実装上の注意（Win API 直叩き、unsafe）**:
 - `std::fs::OpenOptions` は標準では `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` を立てるため race 再現にならない。`std::os::windows::fs::OpenOptionsExt::share_mode(0)` で **share_mode = 0**（排他 open）を指定する必要がある
-- 補助スレッドの保持時間（150ms）が **jitter 込み最悪 375ms の内側**（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）であることが本 TC の決定性を担保する条件。150ms 保持は **1〜2 回目 retry（経過 ~50〜150ms）で吸収される設計**であり、CI ランナーの遅延を考慮しても 3 回目 retry（~225ms）までには確実に rename 成功する。許容窓は ±50ms
-- 並行スレッドが jitter 込み最悪 375ms を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）が、本 TC では正常 retry 経路の検証なので 150ms に固定する
+- 補助スレッドの保持時間は **典型 200ms 程度**（指数バックオフ後の SSoT に追従、Bug-G-001 反映後）。retry 3 回目（累積中央値 ~350ms）までに吸収される設計。CI ランナー (windows-latest) で `drop(File)` の close 遅延 + Defender/Indexer の追加 lock を考慮しても retry 4 回目（累積 ~750ms）までには確実に吸収される
+- 経過時間 deadline は **3000ms 程度**（指数バックオフ最悪 ~1675ms × 1.8 buffer + write_new + thread spawn / channel 同期の余裕を考慮）。これを超えるなら指数バックオフ SSoT 上限契約違反
+- 並行スレッドが指数バックオフ込み最悪 ~1675ms を超えて保持し続けると `Err(AtomicWriteFailed { stage: Rename })` が返る（**意図通りの fail fast**）。これを直接検証するのが TC-I29-A
+- 3 ケース（TC-I29 / TC-I29-A / TC-I29-B）は `#[serial_test::serial(windows_atomic_rename_retry)]` で直列化。並列実行時に補助スレッドの share_mode(0) ロックが他テスト (別 TempDir) の Defender scan 経路を経由して干渉する可能性を排除
+- `tracing_test` は **integration テスト crate では既定で対象 crate のログを env filter で弾く**ため、workspace `Cargo.toml` で `features = ["no-env-filter"]` を有効化する。これがないと `Audit::retry_event` の emit が `logs_contain` で観測できない（公式注記）
 
 ---
 
-*対応 Issue: #10, #14, #65 / 親ドキュメント: `test-design/index.md`*
+## TC-I29-A: retry 5 回全敗で `outcome=exhausted` が **error レベル**で発火する（Windows、Issue #65 DoS 兆候）
 
-*改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① §0 「Issue #65 由来の外部 I/O 依存マップ」を新規追加（`rusqlite` / `std::fs::rename` / `MoveFileExW` の境界明示、PR #64 失敗ログを raw fixture として要起票化、assumed mock 禁止の reviewer 却下基準明記）② TC-I28 追加（Sub-D `vault_migration_integration` 5 件 green 化を Issue #65 受入条件として明示、AC-18）③ TC-I29 追加（並行 read open 中の rename race を retry が吸収することを `share_mode(0)` で決定的に再現、AC-19）④ ツール選択根拠に `#[cfg(windows)] #[ignore]` 回避禁止注記を追加（Bug-F-003 再演防止）*
+> **背景**: Issue #65 retry 補強の **DoS 兆候側 emit 経路**を直接検証する。補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**保持し、retry を 5 回全敗に追い込む。`Audit::retry_event` の `outcome=exhausted` 経路 (error レベル、`%outcome` Display 経由のクォート無し wire format、`../../basic-design/security.md` §retry 監査ログ) が発火し、daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報できる起点を担保する。
 
-*改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映（`security.md` §atomic write の二次防衛線 §jitter ±25ms 追加に伴う test-design 同期漏れ修正）。① TC-I29 期待結果のタイムアウト閾値を「250ms 超過なら fail」→「**約 375ms 超過なら fail**」に更新、`security.md §jitter` への参照追加 ② TC-I29 実装上の注意を「retry 上限（250ms）の内側」→「**jitter 込み最悪 375ms の内側**、補助スレッド保持 150ms は 1〜2 回目 retry（経過 ~50〜150ms）で吸収される設計」に明確化 ③ `index.md` 側 AC-19 とマトリクス TC-I29 行も同期更新（v6.1）*
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-A |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、DoS 兆候側） |
+| 対応する工程 | 基本設計（`../basic-design/security.md` §atomic write の二次防衛線 §retry 監査ログ §rename retry 全敗 / 詳細設計 `../detailed-design/flows.md` §`save` step 7.3） |
+| 種別 | 異常系（fail fast の意図確認 + 監査ログ error 経路の発火確認） |
+| 前提条件 | `#[cfg(windows)]` ガード。`tempfile::TempDir`。初期 `vault.db` を save 済。`tracing_test::traced_test` でログ収集 |
+| 操作 | 1. 初期 vault を save 完了 2. 補助スレッドが `share_mode(0)` で `vault.db` を **2500ms 保持**（v8 で 800ms から拡張、`>1675ms` で retry を 5 回全敗させる、Bug-G-001 反映後の指数バックオフ拡張に追従） 3. 補助スレッド ready 直後に `repo.save(&new_vault)` 4. save 戻り値とトレーシングログを検証 |
+| 期待結果 | `repo.save()` が `Err(AtomicWriteFailed { stage: Rename, source: code:5/32/33 })` を返す。監査ログに `"rename retry exhausted"`（error レベル）+ `outcome=exhausted`（`%outcome` Display 経由のクォート無し wire format）が emit される。`outcome=pending` も併発するが `outcome=succeeded` は emit されない（fail 経路）|
+
+**実装上の注意**:
+- `tracing_test::traced_test` は **DEBUG 以上**の events を捕捉する。`Audit::retry_event` の error 分岐は `tracing::error!` を発行するため `logs_contain("rename retry exhausted")` で観測可能
+- 補助スレッドの 2500ms は指数バックオフ最悪 `~1675ms` に対して `+50%` 余裕（Bug-G-001 反映後）。CI ランナーの sleep 精度揺らぎ (±50ms) と Defender 介入による追加待機を吸収する
+
+---
+
+## TC-I29-B: race 不在の通常 save では retry が exhaust まで到達しない（Windows、回帰防止）
+
+> **背景**: `windows_rename_retry` の 5 回 retry が race 無し時に exhaust 経路まで到達する**異常を検出する sanity check**。CI ランナー (windows-latest) では Defender / Indexer 介入で通常 save でも一過性 race が発生し得る (Issue #65 の根源そのもの) ため、retry 経路自体は許容する。**本 TC の責務は「exhausted まで到達しない = 正常吸収範疇」の確認**であり、retry 経路への偽 emit の厳密検証は unit test 側に委譲する（v7.1 で「retry 経路自体を NG」から緩和、CI 実測の Defender 介入を反映）。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-B |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、回帰防止） |
+| 対応する工程 | 詳細設計（`../detailed-design/flows.md` §`save` step 7、`../detailed-design/classes.md` §`AtomicWriter::rename_atomic` 制御フロー） |
+| 種別 | 正常系（race 無し経路の sanity check） |
+| 前提条件 | `#[cfg(windows)]`。`tempfile::TempDir`。`tracing_test::traced_test` |
+| 操作 | 1. race 無しで `repo.save(&vault)` を呼ぶ（初回作成）2. race 無しで `repo.save(&updated)` を呼ぶ（置換）3. CI 環境の偶発失敗時は 200ms 待機 + 1 回再試行で吸収 4. トレーシングログを検証 |
+| 期待結果 | 最終的に置換 save が `Ok(())`。監査ログに `"rename retry exhausted"` / `outcome=exhausted`（クォート無し wire format）が **emit されていない**。`outcome=pending` / `outcome=succeeded` 経路の emit は**許容**（CI 環境の Defender 介入で偶発 retry が起こり得るため、retry 経路自体は NG にしない）|
+
+---
+
+## TC-I29-D (unit): `reverify_no_reparse_point` の TOCTOU 判定単体検証（Windows、`atomic.rs` 内 `#[cfg(test)]`）
+
+> **背景**: Issue #65 retry 補強の二次防衛線 §`Win retry 中 TOCTOU` を担保する `reverify_no_reparse_point` を**ユニットレベルで決定的に検証**する。retry sleep 窓中に junction を差し替える race は非決定的で flaky になりやすいため、判定単体を直接呼び出して 4 経路（通常ファイル / 未存在 / junction / dir symlink）を網羅する。
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-I29-D-1 〜 TC-I29-D-4 |
+| 対応する受入基準ID | AC-19（Issue #65 retry 補強、TOCTOU 二次防衛線） |
+| 対応する工程 | 基本設計（`../basic-design/security.md` §atomic write の二次防衛線 §Win retry 中 TOCTOU）/ 詳細設計（`AtomicWriter::reverify_no_reparse_point`） |
+| 種別 | 正常系 (D-1, D-2) / 異常系 (D-3, D-4) |
+| 配置 | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` の `#[cfg(test)] mod tests` 内 `#[cfg(windows)]` ガード（関数が `pub(crate)` 未満で integration 不可） |
+| 操作 | D-1: 通常ファイル → `Ok` / D-2: 未存在パス → `Ok`（初回 save の `final_path` 経路）/ D-3: `mklink /J` で junction → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` / D-4: `symlink_dir` で dir symlink → 同上 |
+| 期待結果 | 上記 4 経路すべて期待値通り。D-3 / D-4 は `mklink /J` / `symlink_dir` が失敗する制約付きランナー（権限不足）では skip（`stderr` に skip 理由を出力）|
+
+**実装上の注意**:
+- D-3 (junction) は **管理者権限不要** で作成可能（`FILE_ATTRIBUTE_REPARSE_POINT (0x400)` ビット検出経路）
+- D-4 (dir symlink) は **Developer Mode 有効または管理者権限**が必要（`is_symlink()` 検出経路、`windows-latest` GA runner は Developer Mode 有効）
+- D-3 と D-4 で **検出経路が異なる**（reparse point ビット vs symlink フラグ）ため両方検証が必要
+
+---
+
+*対応 Issue: #10, #14, #65 / 親ドキュメント: `../index.md` / 改訂履歴: `./changelog.md`*
