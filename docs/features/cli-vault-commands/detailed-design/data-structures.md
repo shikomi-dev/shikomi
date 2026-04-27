@@ -120,6 +120,62 @@ CLI 層で使う定数を以下で固定する。
 - test helper 関数は `crates/shikomi-infra/tests/` 配下に配置（`shikomi-cli/tests/` からも使える pub module 化）。具体名は `test-design.md` で確定
 - **本番コードには一切影響しない**。`#[cfg(test)]` 配下の test-only API
 
+## テスト fixture モジュール / `windows_dacl_fixture`（Issue #86 対応）
+
+Windows GitHub Actions runner (`windows-latest`) では `tempfile::TempDir` が生成するディレクトリの DACL が親フォルダから継承された状態で渡され、`SE_DACL_PROTECTED` が立っていない。Issue #65 で導入した owner-only DACL 検証（本番要件、`PersistenceError::InvalidPermission`）は継承 DACL を Fail Fast で弾くため、暗号化 vault fixture を使う結合テスト群（`test-design/integration.md` §5 参照）が `EncryptionUnsupported` 期待と不一致になり Windows runner 限定で FAIL する。
+
+これを **本番側の検証ロジックを緩めずに** 解決するため、テスト fixture 側で TempDir 生成直後に owner-only DACL を強制適用する**テスト専用モジュール**を新設する。本モジュールは **`tests/` 配下のテスト共通モジュール**であり、本番コード（`src/`）には一切含まれない。
+
+### モジュール配置
+
+| 項目 | 仕様 |
+|-----|------|
+| パス | `crates/shikomi-cli/tests/common/windows_dacl_fixture.rs` |
+| 親モジュール | `crates/shikomi-cli/tests/common/mod.rs`（Issue #86 で初めて新設、`pub mod windows_dacl_fixture;` を宣言） |
+| コンパイル条件 | `#[cfg(target_os = "windows")]` 配下のみコンパイル。Linux / macOS では本モジュール自体が**存在しない**（`mod.rs` 側で `#[cfg(target_os = "windows")] pub mod windows_dacl_fixture;` と分岐） |
+| 公開範囲 | `pub`（同一クレートの統合テストファイル群から `use crate::common::windows_dacl_fixture::*;` で参照可能） |
+| 本番コードからの参照 | **禁止**。`src/` 配下から `tests/common/` へのパス参照は Rust の cargo build target 規約により物理的に不可能（cargo は `tests/` を `[[test]]` ターゲットとしてのみコンパイル） |
+
+### 公開 API 契約
+
+| 項目 | 仕様 |
+|-----|------|
+| 関数名 | `enforce_owner_only_dacl` |
+| シグネチャ | `pub fn enforce_owner_only_dacl(path: &std::path::Path) -> std::io::Result<()>` |
+| 責務 | `path` で示されるディレクトリの DACL を **owner-only** に正規化し、`SE_DACL_PROTECTED` を立てる。Issue #65 の本番側検証が要求する DACL 形と完全同一の形を fixture 側で先に作る |
+| 引数 | `path`: 既存ディレクトリへの絶対パス。存在しない / ディレクトリでない場合は `io::Error` を返す（`ErrorKind::NotFound` / `ErrorKind::InvalidInput`） |
+| 戻り値 | 成功時 `Ok(())` / 失敗時 `Err(io::Error)`。fixture 失敗時はテスト前提が崩れているため、呼び出し側（テストコード）は `expect("...")` で即 panic させる契約 |
+| 副作用 | 渡された `path` の DACL を上書きする。**呼び出し前の DACL は保持しない**（fixture 用途で TempDir 直後にしか呼ばないため、原状復帰責務はない） |
+
+### DACL 構築仕様
+
+| 要素 | 値 |
+|-----|----|
+| 所有者 SID | カレントプロセスのトークン所有者 SID（`OpenProcessToken` → `GetTokenInformation(TokenOwner)` 経由で取得） |
+| ACE エントリ | 1 件のみ。所有者 SID に対する Allow ACE |
+| ACE のアクセスマスク | `FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE`（Issue #65 本番検証が要求する完全同一の組合せ） |
+| 継承フラグ | `OBJECT_INHERIT_ACE \| CONTAINER_INHERIT_ACE`（配下のファイル / サブディレクトリにも owner-only DACL が継承される） |
+| `SetSecurityInfo` 呼び出し | `SE_FILE_OBJECT` をオブジェクト型、`PROTECTED_DACL_SECURITY_INFORMATION \| DACL_SECURITY_INFORMATION` をフラグに指定。`PROTECTED_DACL_SECURITY_INFORMATION` を立てることで親フォルダからの DACL 継承を打ち切り、`SE_DACL_PROTECTED` を ON にする |
+
+### 依存クレート（dev-dependencies のみ）
+
+| クレート | 用途 |
+|---------|------|
+| `windows-sys` | Win32 Security API バインディング（`SetSecurityInfo` / `OpenProcessToken` / `GetTokenInformation` 等）。`crates/shikomi-cli/Cargo.toml` の `[target.'cfg(target_os = "windows")'.dev-dependencies]` セクションに追加 |
+| 既存の `windows-sys`（本番側） | `src/io/windows_sid.rs` で既に依存済。**dev-dependencies 側は同一バージョンに揃える**（バージョン乖離防止のため `Cargo.toml` の `[workspace.dependencies]` で一元管理） |
+
+### 使用契約（呼び出しタイミング）
+
+- `tests/common/mod.rs::fresh_repo()` の内部で、`TempDir::new()` 直後・`SqliteVaultRepository::from_directory(dir.path())` 呼び出し**前**に Windows のみ呼ぶ
+- 暗号化 vault fixture（`tests/common/fixtures.rs::create_encrypted_vault`）も同様に、SQLite DB を生成する直前に呼ぶ
+- Linux / macOS 経路では `enforce_owner_only_dacl` 自体がコンパイル対象外のため、呼び出しコードを `#[cfg(target_os = "windows")]` で条件コンパイルする
+
+### 本契約のスコープ外
+
+- **ファイル単位**の DACL 強制は本契約の射程外。Issue #65 の本番検証はディレクトリ単位の DACL を見るため、TempDir ディレクトリ単位での強制で十分（配下ファイルは継承で自動 owner-only 化）
+- **DACL 検証関数（読み取り側）の自前実装**は不要。本番の `shikomi-infra` 側 owner-only 検証ロジックがそのまま走り、fixture が正しい DACL を作っていれば検証は通る。fixture と本番検証は**同一の DACL 形**を共有する設計
+- **non-Windows 環境向けの DACL 模倣**は不要。Issue #65 owner-only 検証は `#[cfg(target_os = "windows")]` 配下にのみ存在するため、Linux / macOS では fixture も検証も走らない
+
 ## テスト観点の注記（テスト設計担当向けメモ）
 
 以下はテスト設計担当（涅マユリ）への引き継ぎメモ。テスト設計書は `test-design.md` で作成される。

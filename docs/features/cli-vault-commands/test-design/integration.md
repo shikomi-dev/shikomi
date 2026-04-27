@@ -93,7 +93,54 @@ fn fresh_repo() -> (TempDir, SqliteVaultRepository) {
 
 ---
 
-## 5. 暗号化 vault フィクスチャヘルパー
+## 5. Windows DACL fixture helper（Issue #86 対応）
+
+**経緯**: GitHub Actions `windows-latest` runner 上で `tempfile::TempDir` が生成するディレクトリの DACL は親フォルダ（`C:\Users\runneradmin\AppData\Local\Temp`）から**継承**された状態（`SE_DACL_PROTECTED` 未設定）で渡される。Issue #65 で導入した owner-only DACL 検証（`PersistenceError::InvalidPermission`）はこの継承 DACL を Fail Fast で弾くため、暗号化 vault フィクスチャを使う TC-IT-012 / 023 / 033 / 040 や同経路の E2E テスト群が Windows runner 限定で `Persistence(InvalidPermission { actual: "inherited DACL (SE_DACL_PROTECTED not set)" })` を返し、`EncryptionUnsupported` 期待と不一致になって FAIL する。本契約は **Issue #65 owner-only DACL 検証は本番要件として維持**したまま、テスト fixture 側で **TempDir 生成直後に owner-only DACL を強制適用**することで Windows CI を緑化する設計を確定する。
+
+**責務範囲**:
+
+| 項目 | 仕様 |
+|-----|------|
+| 配置 | `crates/shikomi-cli/tests/common/windows_dacl_fixture.rs`（新規モジュール、`tests/common/mod.rs` から `pub mod windows_dacl_fixture;` で公開） |
+| コンパイル条件 | `#[cfg(target_os = "windows")]` 配下のみ。Linux / macOS では本モジュール自体がコンパイル対象外 |
+| 公開 API | 本モジュールが提供する `enforce_owner_only_dacl(path)` 関数（責務：渡されたパスの DACL を `SE_DACL_PROTECTED` 立てて owner-only に正規化）。詳細シグネチャ・エラー型は `../detailed-design/data-structures.md §テスト fixture モジュール / windows_dacl_fixture` を参照 |
+| 内部実装 | Win32 Security API `SetSecurityInfo` を `PROTECTED_DACL_SECURITY_INFORMATION \| DACL_SECURITY_INFORMATION` 指定で呼び、所有者 SID（カレントプロセストークンから取得）に `FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE` の ACE のみを持つ DACL を構築・適用する。Issue #65 の本番側検証ロジックと**完全同一の DACL 形を fixture 側で先に作る** |
+| 失敗時挙動 | `Result<(), io::Error>` を返し、呼び出し側（テストコード）は `expect("...")` で即 panic させて Fail Fast。fixture が失敗した時点でテストの前提が崩れているため、握り潰しは禁止 |
+
+**呼び出し契約**（共通セットアップ §3 への追記）:
+
+- `fresh_repo()` ヘルパーは `TempDir::new()` 直後・`SqliteVaultRepository::from_directory(dir.path())` 呼び出し**前**に Windows のみ `windows_dacl_fixture::enforce_owner_only_dacl(dir.path())` を呼ぶ
+- `#[cfg(target_os = "windows")]` 経路でのみ呼び出し、他 OS では呼び出しコード自体がコンパイル対象外（条件コンパイルで分岐）
+- 暗号化 vault fixture（`fixtures::create_encrypted_vault`）も同様に、SQLite DB を生成する直前に DACL を強制する。`create_encrypted_vault(dir)` の内部で TempDir パスを受け取った直後に `enforce_owner_only_dacl(dir)` を呼ぶ
+
+**影響を受けるテスト**（Windows runner で fixture 適用が必要な TC）:
+
+| TC-ID | 適用箇所 | 期待結果 |
+|-------|---------|---------|
+| TC-IT-012 | `add_record` × 暗号化 vault | DACL 正規化後、`Err(EncryptionUnsupported)` を返す（`InvalidPermission` で早期失敗しない） |
+| TC-IT-023 | `edit_record` × 暗号化 vault | 同上 |
+| TC-IT-033 | `remove_record` × 暗号化 vault | 同上 |
+| TC-IT-040 | 4 UseCase 横断 × 暗号化 vault | 全 4 経路で `Err(EncryptionUnsupported)` |
+| TC-IT-001〜003 / 010〜011 / 013 / 020〜022 / 024 / 030〜031 | 平文 vault 系 | DACL 正規化後、本来の期待結果通り（`InvalidPermission` で早期失敗しない） |
+| `e2e_edit` / `e2e_encrypted` 系（`e2e.md` 側で詳細） | E2E バイナリ呼び出し | 同上、E2E の `--vault-dir <tempdir>` 指定 fixture 内でも同じ DACL 強制を行う |
+
+**設計判断**:
+
+| 案 | 概要 | 採否 | 根拠 |
+|----|------|------|------|
+| A | テスト fixture 側で `SetSecurityInfo` + `PROTECTED_DACL_SECURITY_INFORMATION` を呼び owner-only DACL を強制 | **採用** | Issue #65 の owner-only DACL 検証（**本番要件**）を緩めずに、Windows runner 環境差異のみを吸収する最小変更。本番コード（`src/`）には一切触らない |
+| B | 本番側の DACL 検証から Windows tempdir パスを除外する | 不採用 | 本番側のセキュリティ検証ロジックに「テスト環境特有の例外」を持ち込むのは脅威モデル退行。Issue #65 が解決した owner-only Fail Fast 契約を侵食する |
+| C | テストを Windows でのみ `#[ignore]` する | 不採用 | Windows 経路の DACL 検証 / 暗号化 vault Fail Fast 経路がカバレッジ穴になる。CI で 3 OS matrix を維持している以上、Windows 緑化は要件 |
+| D | `tempfile::Builder::new().permissions(...)` 等の上流ライブラリ機能で DACL 設定 | 不採用 | `tempfile` クレートは Windows DACL の owner-only 強制 API を提供していない（Unix mode bits は対応するが Windows DACL は範囲外、公式 README 確認済）。自前 fixture が必要 |
+
+**Boy Scout 観点**:
+
+- 本 fixture モジュール追加に伴い、`tests/common/mod.rs` を**初めて作成**する（既存の `crates/shikomi-cli/tests/` 配下に共通モジュールがなかった、各テストファイルがバラバラに setup していた）。DRY 原則に従い、`fresh_repo()` / `fixed_time()` / `windows_dacl_fixture` を共通モジュールに集約する
+- 既存テストが各々で `TempDir::new()` していた箇所も、本機会に `common::fresh_repo()` 経由に置換する（複数 PR に分割せず、Issue #86 の修正 PR 内で一括）
+
+---
+
+## 6. 暗号化 vault フィクスチャヘルパー
 
 `tests/common/fixtures.rs` に配置:
 
@@ -111,7 +158,7 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 6. 結合テストでの時刻注入と決定性
+## 7. 結合テストでの時刻注入と決定性
 
 - UseCase は `now: OffsetDateTime` を引数で受ける（詳細設計 §public-api.md）ため、テスト側で固定時刻を注入可能
 - 例: `let now = OffsetDateTime::UNIX_EPOCH + Duration::hours(1);` を `add_record(repo, input, now)` に渡し、`list_records` 後の `RecordView` で `updated_at == now` を assert
@@ -119,7 +166,7 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 7. カバレッジ対象
+## 8. カバレッジ対象
 
 本結合テストレイヤでカバーする対応受入基準と REQ:
 
@@ -135,7 +182,7 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 8. 結合テストファイル構成
+## 9. 結合テストファイル構成
 
 ```
 crates/shikomi-cli/tests/
@@ -153,7 +200,7 @@ crates/shikomi-cli/tests/
 
 ---
 
-## 9. 想定外の挙動の取り扱い
+## 10. 想定外の挙動の取り扱い
 
 バグ発見時は `index.md §6 モック方針` の方針ではなく、**バグレポートを作成**する:
 
@@ -162,6 +209,16 @@ crates/shikomi-cli/tests/
 - 再現手順（`cargo test --test it_usecase_xxx -- TC_NAME`）
 
 バグレポートは `/app/shared/attachments/マユリ/cli-vault-commands-bugs.md` に保存し、Discord で共有する（`ci.md §証跡提出方針`）。
+
+---
+
+## 11. 出典・参考
+
+- Issue #65 owner-only DACL 強化（PR #71/#72）: 本 fixture が満たすべき DACL 形（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE` の owner-only ACE、`SE_DACL_PROTECTED` 立て）の根拠
+- Issue #86 (本 PR): Windows runner tempdir DACL 継承による fixture 欠落の再現と解決策
+- Microsoft Learn `SetSecurityInfo`: https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
+- Microsoft Learn `SECURITY_INFORMATION` (`PROTECTED_DACL_SECURITY_INFORMATION`): https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-security_information
+- `tempfile` crate README（Windows DACL に対する責務外を明示）: https://github.com/Stebalien/tempfile
 
 ---
 
