@@ -128,6 +128,26 @@
 - fixture ディレクトリ `tests/fixtures/grep_gate/case_{a..e}/` は本 PR で同時にコミット。`scripts/ci/audit-secret-paths.sh` の検査対象パスを差し替える経路は実装担当が選定（環境変数 `AUDIT_GREP_TARGET_DIR` 案 / 第一引数案）
 - 本サブケースは Issue #85 修正の**回帰防止 SSoT**。今後 `audit-secret-paths.sh` を改修する PR は本 5 サブケース全 PASS が必須（reviewer が機械的に確認）
 
+#### TC-CI-019（daemon 側）への波及 articulate
+
+**ペテルギウス工程2 内部レビュー指摘1 解消**: `detailed-design.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約は **「TC-CI-019 / TC-CI-026 共通仕様」** として章名宣言されており、コメント行除外パイプ（`grep -vE '^[[:space:]]*//'` 1 段）は **TC-CI-019 / TC-CI-026 両ステップで物理的に共有**される実装契約として凍結済 (`detailed-design.md §設計判断の凍結`)。本節 §TC-CI-026 サブケース 5 件（a〜e）は **同一 grep パイプの挙動を fixture レベルで網羅検証**するため、PASS 時には:
+
+| 観点 | TC-CI-026（cli 側） | TC-CI-019（daemon 側）への波及 |
+|---|---|---|
+| 検査対象パス | `crates/shikomi-cli/src/` | `crates/shikomi-daemon/src/`（path 差のみ、grep 経路は共有）|
+| 許可リスト | `io/windows_sid.rs`、`hardening/core_dump.rs` | `permission/{unix,windows,windows_acl}.rs`（許可リスト名集合差のみ）|
+| コメント行除外パイプ | 同一 `grep -vE '^[[:space:]]*//'` を共有 | 同上 |
+| 検出パターン | 同一 `unsafe[[:space:]]*\{` を共有 | 同上 |
+| 出力形式 | 同一 `[TC-CI-***] PASS / FAIL + file:line:content` | 同上 |
+
+つまり **TC-CI-026 サブケース 5/5 PASS が TC-CI-019 経路にも波及して有効性を担保**する。daemon 側専用の重複 fixture (`case_{a..e}` を `crates/shikomi-daemon/src/` 風 path で再生成) を**別途追加するのは YAGNI**:
+
+- `path` / `許可リスト` の差は **`audit-secret-paths.sh` 内部の入力変数** にすぎず、grep パイプ自身の挙動は fixture path と独立
+- 本 5 サブケースは grep パイプの「コメント行除外 × 検出力維持 × 許可リスト効果」3 直交軸を網羅するため、daemon 側 fixture を二重化しても**新規に塞がれる罠はゼロ**
+- 将来 TC-CI-019 / TC-CI-026 が**別実装に分岐**する設計変更が起きた瞬間に本記述を破棄し、各々のサブケース節を立てる Boy Scout を起動する（**今は YAGNI、分岐時に articulate**）。`detailed-design.md` §設計判断の凍結が「Sub-issue 実装側での再判定は行わない」と凍結済なので、当面は分岐想定なし
+
+**SSoT 整合性**: `daemon-ipc/test-design/index.md §unsafe ブロック（daemon 側）行 (TC-CI-019)` から本節へ後方リンクされる契約となる（Boy Scout: TC-CI-019 SSoT を読んだ reviewer が本サブケース 5 件を波及検証として遡及できる構造）。後方リンク追記は本 PR スコープ内で `daemon-ipc` 側にも反映する責務が残るため、Issue #85 実装担当（坂田銀時）の工程3 で同 PR 内同期を Boy Scout で適用する。
+
 ## カバレッジ基準
 
 本 feature は Rust コードを持たないため C0/C1 等の伝統的カバレッジ指標は取らない。代わりに以下のトレーサビリティ充足を必須とする:
