@@ -193,7 +193,7 @@ clap の `#[command(subcommand)]` ネスト機構を利用。`OutputTarget` は 
 
 ## 終了コード SSoT（独立節、ペガサス致命指摘 ② 解消）
 
-CLI 全サブコマンドの終了コード割当を本節に**唯一の真実源**として凍結する。`requirements.md` / `processing-flows.md` / `test-design/sub-f-cli-subcommands.md` は本表を**参照**するのみで、個別箇所での再定義を禁止する（ドリフト防止）。
+CLI 全サブコマンドの終了コード割当を本節に**唯一の真実源**として凍結する。`requirements.md` / `processing-flows.md` / `test-design/sub-f-cli-subcommands/index.md` は本表を**参照**するのみで、個別箇所での再定義を禁止する（ドリフト防止）。
 
 | 終了コード | 名称 | 該当 MSG / 状態 | 該当フロー |
 |------|---|--------|--------|
@@ -368,7 +368,7 @@ Sub-0 `sub-0-threat-model.md` の L1〜L4 capability matrix に **CLI 攻撃面 
 
 ### テスト担当（涅マユリ）への引継ぎ
 
-本 Rev1 修正で **test-design/sub-f-cli-subcommands.md** の以下 7 箇所を同期修正必要:
+本 Rev1 修正で **test-design/sub-f-cli-subcommands/index.md** （旧 `sub-f-cli-subcommands.md`、Issue #75 工程2 内部レビュー [ペガサス指摘] でディレクトリ分割）の以下 7 箇所を同期修正必要:
 
 1. **TC-F-U07**: `ProtectionModeBanner` の cross-crate match で **defensive fail-secure `_` arm を許可**（本書 §`ProtectionModeBanner` enum 凍結方針と整合）
 2. **TC-F-U12**: 引数を **`Vec<SerializableSecretBytes>`** に統一（型不整合解消、`[String; 24]` ではない）
