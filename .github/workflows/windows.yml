@@ -72,6 +72,36 @@ jobs:
             Write-Warning "Failed to enumerate Defender exclusions: $_"
           }
 
+      # Bug-G-003 (Option G 採用): Defender exclusion 投入後も TC-I29 主 / TC-I29-B が
+      # Win CI で `~1.5 秒+` の `outcome="exhausted"` で fail し続ける事象 (CI run 24973364989) は
+      # **Defender ではなく Windows Search Indexer (`WSearch`) や SysMain (旧 SuperFetch) が
+      # `vault.db` ハンドルを連続スキャンロックしている**可能性が高いと判明
+      # (Bug-G-003 §真犯人候補 §B / §C)。Defender exclusion とは別系統のため、本ステップで
+      # 両サービスを停止してスキャナ全体を抑制する。
+      #
+      # 適用範囲: **CI 環境のみのワークアラウンド** (本番ユーザーは WSearch / SysMain 動作前提)。
+      # サービス停止失敗 (権限不足 / 既停止 / サービス無し) は `Write-Warning` のみで継続し、
+      # ジョブ全体は fail させない (Fail Secure の degrade 動作、Defender exclusion と同方針)。
+      - name: Stop Windows Search / SysMain services (CI scan suppression)
+        run: |
+          $services = @("WSearch", "SysMain")
+          foreach ($svc in $services) {
+            try {
+              Stop-Service -Name $svc -Force -ErrorAction Stop
+              Write-Host "[OK] Service stopped: $svc"
+            } catch {
+              Write-Warning "Failed to stop service '$svc': $_"
+            }
+          }
+          try {
+            Write-Host "--- current relevant service status ---"
+            Get-Service -Name $services -ErrorAction SilentlyContinue |
+              Select-Object Name, Status |
+              Format-Table | Out-String | Write-Host
+          } catch {
+            Write-Warning "Failed to enumerate service status: $_"
+          }
+
       - name: just test-infra
         run: just test-infra
 
