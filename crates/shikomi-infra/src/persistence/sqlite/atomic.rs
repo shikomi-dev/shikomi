@@ -25,7 +25,7 @@ use shikomi_core::Vault;
 // `Audit::retry_event` は cfg(windows) rename retry でのみ呼出される。
 // 非 Windows ビルドの unused import 警告を避けるため import 自体を cfg gate する。
 #[cfg(windows)]
-use crate::persistence::audit::Audit;
+use crate::persistence::audit::{Audit, RetryOutcome};
 use crate::persistence::error::{AtomicWriteStage, PersistenceError};
 use crate::persistence::paths::VaultPaths;
 use crate::persistence::permission::PermissionGuard;
@@ -73,8 +73,13 @@ const RENAME_BASE_DELAY_MS: u64 = 50;
 const RENAME_JITTER_HALF_RANGE_MS: u64 = 25;
 
 /// jitter 抽選範囲（`OsRng` 1 byte の `% N` 値、`0..=2*HALF_RANGE` を網羅）。
+///
+/// `HALF_RANGE_MS` から導出する（マジックナンバー禁止、Boy Scout）。
+/// `HALF_RANGE_MS = 25` のとき `2 * 25 + 1 = 51`（`0..=50` を一様抽選後 `-25` シフトで `[-25, +25]`）。
+/// `HALF_RANGE_MS` を弄った時に独立進化して整合崩壊する罠を構造的に塞ぐ。
+/// `u8` への as 変換は `HALF_RANGE_MS ≤ 127` の範囲内で安全（u8 max = 255）。
 #[cfg(windows)]
-const RENAME_JITTER_RANGE: u8 = 51;
+const RENAME_JITTER_RANGE: u8 = (RENAME_JITTER_HALF_RANGE_MS * 2 + 1) as u8;
 
 /// 監査ログに記録する rename stage 名（`Audit::retry_event` の `stage` 引数）。
 #[cfg(windows)]
@@ -422,7 +427,7 @@ impl AtomicWriter {
                 attempt,
                 last_raw_os,
                 elapsed_ms_pending,
-                "pending",
+                RetryOutcome::Pending,
             );
 
             std::thread::sleep(Self::jittered_retry_delay(attempt));
@@ -440,7 +445,7 @@ impl AtomicWriter {
                         attempt,
                         last_raw_os,
                         elapsed_ms_ok,
-                        "succeeded",
+                        RetryOutcome::Succeeded,
                     );
                     return Ok(());
                 }
@@ -464,7 +469,7 @@ impl AtomicWriter {
             RENAME_MAX_RETRIES,
             final_raw_os,
             elapsed_ms_exhausted,
-            "exhausted",
+            RetryOutcome::Exhausted,
         );
         Self::cleanup_orphan_best_effort(new_path);
         Err(PersistenceError::AtomicWriteFailed {

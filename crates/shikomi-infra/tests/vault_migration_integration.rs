@@ -66,14 +66,14 @@ fn seed_plaintext_vault(repo: &shikomi_infra::persistence::SqliteVaultRepository
     }
     // Bug-G-005 Option K: 初回 save は CI runner 固有のハンドル遅延 (~1570ms 一定) で
     // flaky に rename retry exhausted する事象をテスト側 retry で吸収する
-    // (実装側 SSoT `security.md` §jitter ~1675ms は据置)。詳細は test-design v8.3。
+    // (実装側 SSoT `security.md` §jitter ~1675ms は据置)。詳細は test-design v8.5。
     save_with_test_rename_retry(repo, &vault);
 }
 
 /// TC-D-I01: encrypt_vault → unlock_with_password で同 plaintext records 復元.
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
-            test-design v8.4, run with --ignored locally. \
+            test-design v8.5, run with --ignored locally. \
             5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
             Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
             5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
@@ -119,7 +119,7 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
 /// 全 records `decrypt_one_record` → 平文 vault 構築 → atomic write を実行。
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
-            test-design v8.4, run with --ignored locally. \
+            test-design v8.5, run with --ignored locally. \
             5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
             Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
             5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
@@ -179,7 +179,7 @@ fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
 ///   が Bug-D-002 の中核観察ポイント
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
-            test-design v8.4, run with --ignored locally. \
+            test-design v8.5, run with --ignored locally. \
             5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
             Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
             5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
@@ -239,7 +239,7 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
 /// するなら新 VEK 経路が完全に通っていることを意味する。
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
-            test-design v8.4, run with --ignored locally. \
+            test-design v8.5, run with --ignored locally. \
             5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
             Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
             5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\
@@ -302,7 +302,7 @@ fn tc_d_i04_rekey_then_decrypt_vault_all_records_succeed() {
 /// 経由で v1 暗号化 vault が正しく load されることを補助確認する。
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
-            test-design v8.4, run with --ignored locally. \
+            test-design v8.5, run with --ignored locally. \
             5 ラウンドの実験 (G-002 線形 retry / G-003 Defender exclusion / G-004 \
             Stop-Service WSearch+SysMain / G-005 #[ignore] 検討 / G-006 Option K test-side retry \
             5 attempts ~13s) すべてで `outcome=\"exhausted\"` 継続観測。\

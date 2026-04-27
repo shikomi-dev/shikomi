@@ -9,6 +9,48 @@ use super::error::PersistenceError;
 use super::paths::VaultPaths;
 
 // -------------------------------------------------------------------
+// RetryOutcome (Issue #65、Tell-Don't-Ask 化)
+// -------------------------------------------------------------------
+
+/// rename retry 監査イベントの結末を型レベルで表現する列挙（`Audit::retry_event` の `outcome` 引数）。
+///
+/// 設計根拠:
+/// - `docs/features/vault-persistence/basic-design/security.md`
+///   §atomic write の二次防衛線 §retry 監査ログ
+///
+/// 当初は `outcome: &'static str` で `"pending" / "succeeded" / "exhausted"` を渡す API
+/// だったが、文字列 switch のタイポ即バグの罠を構造的に塞ぐため列挙化した
+/// （ペテルギウス再レビュー指摘 §Tell-Don't-Ask）。`as_str()` で tracing 出力時の
+/// wire format（`outcome="pending"` 等）は既存テスト (`integration_windows_retry.rs`
+/// `logs_contain(r#"outcome=\"pending\""#)` 等) と bit-exact 互換を保つ。
+///
+/// 秘密値非含有: 全 variant が unit variant で値を持たないため、
+/// `§監査ログ規約 §秘密値マスクの型保証` は維持される。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) enum RetryOutcome {
+    /// 各 retry 試行直前（sleep + 再 rename の前）。`warn` レベルで emit。
+    Pending,
+    /// retry の rename 成功直後。`warn` レベルで emit。
+    Succeeded,
+    /// `MAX_RETRIES` 回全敗で `AtomicWriteFailed` 返却直前。`error` レベルで emit。
+    /// daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報する起点。
+    Exhausted,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl RetryOutcome {
+    /// tracing 出力用の `&'static str` 表現（`logs_contain` での文字列マッチ互換）。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Succeeded => "succeeded",
+            Self::Exhausted => "exhausted",
+        }
+    }
+}
+
+// -------------------------------------------------------------------
 // Audit
 // -------------------------------------------------------------------
 
@@ -70,17 +112,23 @@ impl Audit {
     ///   §atomic write の二次防衛線 §retry 監査ログ
     /// - 同 §監査ログ規約 §rename retry 発火 / §rename retry 全敗
     ///
-    /// `outcome` の意味と発行レベル:
+    /// `outcome` は `RetryOutcome` 列挙で型レベルに昇格済（タイポ即バグ防止、Tell-Don't-Ask）。
+    /// 発行レベルは `match outcome` で網羅判定し、新 variant 追加時に compile error で気付ける構造。
     ///
-    /// | `outcome`     | レベル  | 発行タイミング                                |
-    /// |---------------|--------|---------------------------------------------|
-    /// | `"pending"`   | `warn` | 各 retry 試行直前（sleep + 再 rename の前）  |
-    /// | `"succeeded"` | `warn` | retry の rename 成功直後                     |
-    /// | `"exhausted"` | `error`| 5 回全敗で `AtomicWriteFailed` 返却直前      |
+    /// | `outcome`              | レベル  | 発行タイミング                                |
+    /// |------------------------|--------|---------------------------------------------|
+    /// | `RetryOutcome::Pending`   | `warn` | 各 retry 試行直前（sleep + 再 rename の前）  |
+    /// | `RetryOutcome::Succeeded` | `warn` | retry の rename 成功直後                     |
+    /// | `RetryOutcome::Exhausted` | `error`| 5 回全敗で `AtomicWriteFailed` 返却直前      |
     ///
-    /// シグネチャは `&'static str` / `u32` / `i32` / `u64` / `&'static str` のみで秘密値を含まない
-    /// （§秘密値マスクの型保証 §防衛線 と整合）。daemon 側 subscriber は本イベント頻度から DoS 兆候を
-    /// 検知し OWASP A09 連携で上位通報する（別 Issue 範疇、本 crate は emit 側責務のみ）。
+    /// シグネチャは `&'static str` / `u32` / `i32` / `u64` / `RetryOutcome` のみで秘密値を含まない
+    /// （§秘密値マスクの型保証 §防衛線 と整合、`RetryOutcome` も unit variant のみで値非保持）。
+    /// daemon 側 subscriber は本イベント頻度から DoS 兆候を検知し OWASP A09 連携で上位通報する
+    /// （別 Issue 範疇、本 crate は emit 側責務のみ）。
+    ///
+    /// tracing 出力の `outcome="..."` 文字列は `RetryOutcome::as_str()` 経由で
+    /// `"pending" / "succeeded" / "exhausted"` を維持（`integration_windows_retry.rs` の
+    /// `logs_contain` アサーション互換）。
     ///
     /// 本関数の実呼出は `cfg(windows)` rename retry 経由のみだが、API としては全プラットフォームで
     /// 公開する（テスト・将来の他経路再利用を想定）。非 Windows ビルドの dead_code 警告を抑制する。
@@ -90,26 +138,30 @@ impl Audit {
         attempt: u32,
         raw_os_error: i32,
         elapsed_ms: u64,
-        outcome: &'static str,
+        outcome: RetryOutcome,
     ) {
-        if outcome == "exhausted" {
-            tracing::error!(
-                stage,
-                attempt,
-                raw_os_error,
-                elapsed_ms,
-                outcome,
-                "persistence: rename retry exhausted"
-            );
-        } else {
-            tracing::warn!(
-                stage,
-                attempt,
-                raw_os_error,
-                elapsed_ms,
-                outcome,
-                "persistence: rename retry event"
-            );
+        let outcome_str = outcome.as_str();
+        match outcome {
+            RetryOutcome::Exhausted => {
+                tracing::error!(
+                    stage,
+                    attempt,
+                    raw_os_error,
+                    elapsed_ms,
+                    outcome = outcome_str,
+                    "persistence: rename retry exhausted"
+                );
+            }
+            RetryOutcome::Pending | RetryOutcome::Succeeded => {
+                tracing::warn!(
+                    stage,
+                    attempt,
+                    raw_os_error,
+                    elapsed_ms,
+                    outcome = outcome_str,
+                    "persistence: rename retry event"
+                );
+            }
         }
     }
 }

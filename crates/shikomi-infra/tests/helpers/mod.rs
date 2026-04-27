@@ -99,6 +99,51 @@ const TEST_RETRY_MAX_ATTEMPTS: u32 = 5;
 /// CI 実測の 1570ms 一定遅延を attempt 2〜4 (累積 500+1000+1500=3000ms) で確実に超える設定。
 const TEST_RETRY_BACKOFF_UNIT_MS: u64 = 500;
 
+/// rename retry 共通の retry loop コア（DRY、Bug-G-005 Option K）。
+///
+/// `save_with_test_rename_retry` / `migration_op_with_test_rename_retry` の重複していた
+/// retry loop / 線形バックオフ計算 / panic 文言を本関数に集約する
+/// （ペテルギウス再レビュー指摘 §DRY違反）。
+///
+/// 引数:
+/// - `label`: 失敗時 panic / `eprintln!` 文言に挿入する操作識別子
+/// - `op`: 試行する操作。`Ok(T)` で即返却、`Err(E)` で is_retryable に委譲
+/// - `is_retryable`: `Err(E)` が rename retry exhausted 経路（再試行価値あり）か判定する述語
+///
+/// retry 戦略:
+/// - 最大 `TEST_RETRY_MAX_ATTEMPTS` 回試行
+/// - 線形バックオフ `TEST_RETRY_BACKOFF_UNIT_MS × attempt` ms
+/// - `is_retryable` が false のエラー / 最終 attempt 失敗 → 即 panic（Fail Fast）
+///
+/// # Panics
+///
+/// - 全 attempt で retry 失敗: panic で test fail
+/// - `is_retryable` が false のエラー: 即 panic で test fail
+fn retry_with_backoff<T, E: std::fmt::Debug>(
+    label: &str,
+    mut op: impl FnMut() -> Result<T, E>,
+    is_retryable: impl Fn(&E) -> bool,
+) -> T {
+    for attempt in 1..=TEST_RETRY_MAX_ATTEMPTS {
+        match op() {
+            Ok(v) => return v,
+            Err(ref e) if attempt < TEST_RETRY_MAX_ATTEMPTS && is_retryable(e) => {
+                let backoff =
+                    Duration::from_millis(TEST_RETRY_BACKOFF_UNIT_MS * u64::from(attempt));
+                eprintln!(
+                    "[Bug-G-005 Option K test-retry] {label} attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS} \
+                     hit rename retry exhausted ({e:?}); sleeping {backoff:?} before retry"
+                );
+                std::thread::sleep(backoff);
+            }
+            Err(e) => panic!(
+                "[Bug-G-005 Option K test-retry] {label} failed (non-retryable or final attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS}): {e:?}"
+            ),
+        }
+    }
+    unreachable!("loop guarantees return on Ok or panic on Err with attempt >= MAX")
+}
+
 /// `repo.save()` をテスト側 retry でラップする。
 ///
 /// `PersistenceError::AtomicWriteFailed { stage: Rename, .. }` のみ retry し、
@@ -109,28 +154,19 @@ const TEST_RETRY_BACKOFF_UNIT_MS: u64 = 500;
 /// - 全 attempt で rename retry exhausted: panic で test fail
 /// - 非 rename エラー: 即 panic で test fail
 pub fn save_with_test_rename_retry(repo: &SqliteVaultRepository, vault: &Vault) {
-    for attempt in 1..=TEST_RETRY_MAX_ATTEMPTS {
-        match repo.save(vault) {
-            Ok(()) => return,
-            Err(PersistenceError::AtomicWriteFailed {
-                stage: AtomicWriteStage::Rename,
-                ref source,
-            }) if attempt < TEST_RETRY_MAX_ATTEMPTS => {
-                let backoff = Duration::from_millis(TEST_RETRY_BACKOFF_UNIT_MS * u64::from(attempt));
-                eprintln!(
-                    "[Bug-G-005 Option K test-retry] save attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS} \
-                     hit rename (raw_os_error={:?}); sleeping {:?} before retry",
-                    source.raw_os_error(),
-                    backoff,
-                );
-                std::thread::sleep(backoff);
-            }
-            Err(e) => panic!(
-                "[Bug-G-005 Option K test-retry] save failed (non-rename or final attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS}): {e:?}"
-            ),
-        }
-    }
-    unreachable!("loop guarantees return on Ok or panic on Err with attempt >= MAX")
+    retry_with_backoff(
+        "save",
+        || repo.save(vault),
+        |e| {
+            matches!(
+                e,
+                PersistenceError::AtomicWriteFailed {
+                    stage: AtomicWriteStage::Rename,
+                    ..
+                }
+            )
+        },
+    );
 }
 
 /// `MigrationError` を返す `VaultMigration` 系メソッドをテスト側 retry でラップする。
@@ -146,33 +182,16 @@ pub fn save_with_test_rename_retry(repo: &SqliteVaultRepository, vault: &Vault) 
 /// - 非 rename エラー: 即 panic で test fail
 pub fn migration_op_with_test_rename_retry<T>(
     label: &str,
-    mut op: impl FnMut() -> Result<T, MigrationError>,
+    op: impl FnMut() -> Result<T, MigrationError>,
 ) -> T {
-    for attempt in 1..=TEST_RETRY_MAX_ATTEMPTS {
-        match op() {
-            Ok(v) => return v,
-            Err(ref e) if attempt < TEST_RETRY_MAX_ATTEMPTS && is_rename_retry_exhausted(e) => {
-                let backoff = Duration::from_millis(TEST_RETRY_BACKOFF_UNIT_MS * u64::from(attempt));
-                eprintln!(
-                    "[Bug-G-005 Option K test-retry] {label} attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS} \
-                     hit rename retry exhausted; sleeping {:?} before retry",
-                    backoff,
-                );
-                std::thread::sleep(backoff);
-            }
-            Err(e) => panic!(
-                "[Bug-G-005 Option K test-retry] {label} failed (non-rename or final attempt {attempt}/{TEST_RETRY_MAX_ATTEMPTS}): {e:?}"
-            ),
-        }
-    }
-    unreachable!("loop guarantees return on Ok or panic on Err with attempt >= MAX")
+    retry_with_backoff(label, op, is_migration_rename_retry_exhausted)
 }
 
 /// `MigrationError` が rename retry exhausted 経路かを判定する。
 ///
 /// `vault_migration` 内で `?` 経由で来る場合は `Persistence(PersistenceError::AtomicWriteFailed)`、
 /// 直接構築される場合は `AtomicWriteFailed { ... }` と異なる variant を経由するため、双方を網羅する。
-fn is_rename_retry_exhausted(err: &MigrationError) -> bool {
+fn is_migration_rename_retry_exhausted(err: &MigrationError) -> bool {
     matches!(
         err,
         MigrationError::AtomicWriteFailed {

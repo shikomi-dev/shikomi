@@ -114,7 +114,7 @@ fn spawn_exclusive_holder(
 /// 設計書: docs/features/vault-persistence/test-design/integration.md §TC-I29
 /// AC-19 (Issue #65 retry 補強) 対応。
 #[test]
-#[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.2, \
+#[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.5, \
             run with --ignored locally. \
             Bug-G-002〜004 で Defender exclusion / Stop-Service WSearch+SysMain を試行したが \
             すべて再現性 ±35ms で `outcome=\"exhausted\"` が継続 (rusqlite handle / MDE / AMSI / \
@@ -305,7 +305,7 @@ fn tc_i29_a_aux_thread_long_hold_save_fails_with_rename_exhausted() {
 ///
 /// 設計書: docs/features/vault-persistence/detailed-design/flows.md §`save` step 7
 #[test]
-#[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.2, \
+#[ignore = "CI runner unknown handle delay (~1570ms) — articulated in test-design v8.5, \
             run with --ignored locally. \
             Bug-G-002〜004 で Defender exclusion / Stop-Service WSearch+SysMain を試行したが \
             すべて再現性 ±35ms で `outcome=\"exhausted\"` が継続 (race 無し通常 save でも \
