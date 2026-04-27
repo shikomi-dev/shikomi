@@ -23,7 +23,7 @@
 | **Bug-F-004** | BLOCKER | IPC V2 移行で破壊された既存テスト **29 件**（§15.16.1 実測 SSoT、§15.13 表中および Issue body 概算「36 件」を訂正）の追従、client 側 V2 アップグレード | **#75 (#74-A) 工程3** | ⏳ 工程3 待機（実装側の機械的追従、設計書影響は最小、`vault-encryption/detailed-design/vek-cache-and-ipc.md` の handshake 仕様 SSoT を維持） |
 | **Bug-F-005** | HIGH | encrypted vault fixture 修復（`crates/shikomi-cli/tests/common/fixtures.rs`）、TC-E2E-040 exit code 整合（VaultLocked=3 / BackoffActive=2、cli-subcommands.md §終了コード SSoT） | **#75 (#74-A) 工程3** | ⏳ 工程3 待機 |
 | **Bug-F-006** | MEDIUM | `vault encrypt --help` 等の Phase 5 残存削除、`Phase\s+\d+` grep gate (TC-F-S05) で再演防止 | **#75 (#74-A) 工程3** + **#74-E** | ⏳ 工程2 設計 articulate 完了（`cli-subcommands.md` §Bug-F-006 解消）、grep gate は #74-E |
-| **Bug-F-007** | MEDIUM | `--vault-dir` flag を daemon socket 解決順序のヒントとして functional 化、エラー文言 `XDG_RUNTIME_DIR` / `HOME` 案内に SSoT 訂正 | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-007 解消）、工程3 待機 |
+| **Bug-F-007** | MEDIUM | `--vault-dir` flag を daemon socket 解決順序のヒント (`<DIR>/shikomi.sock` 最優先 + Windows pipe 名 `<DIR>` ハッシュ契約) として functional 化、エラー文言を **`--vault-dir <DIR>` 案内**に SSoT 訂正（`cli-subcommands.md` §Bug-F-007 MSG-S09(b) SSoT、ユーザ認知モデル「vault.db の所在ディレクトリ」と一致） | **#75 (#74-A) 工程3** | ⏳ 工程2 設計 articulate 完了（同上 §Bug-F-007 解消）、工程3 待機 |
 | **Bug-F-008** | LOW | daemon 起動時 vault.db auto-create / 案内 | **#80**（別 Issue として正式起票済、#74 範囲外、#75 でも非対応） | 📌 #80 で trackable 化、優先度 LOW、別 PR で対応（ペテルギウス Issue #75 工程5 review 指摘 4「推奨と書いて起票しないのは Boy Scout 踏み倒し」解消） |
 
 #### Sub-F 専用テスト 37 TC 実装ステータス
@@ -204,22 +204,24 @@ TEST_DIR=$(mktemp -d)
 ./target/release/shikomi --vault-dir "$TEST_DIR" vault status
 echo "exit=$?"  # 期待: 0 または 3、SHIKOMI_VAULT_DIR 案内エラー (現状) は出ない
 
-# 2. エラー文言が XDG_RUNTIME_DIR / HOME を案内
-unset XDG_RUNTIME_DIR
-unset HOME
+# 2. エラー文言が --vault-dir <DIR> を案内 (cli-subcommands.md §Bug-F-007 MSG-S09(b) SSoT)
+# daemon 未起動状態で vault status を叩き、エラー文言に "--vault-dir" / "pass --vault-dir" 等の
+# 新文言が含まれることを確認。古い "SHIKOMI_VAULT_DIR" 案内および "XDG_RUNTIME_DIR" / "HOME" の
+# 直接案内は出ないこと (ユーザ認知モデル「vault.db の所在ディレクトリ」と一致、Phase 2 規定に整合)。
 ./target/release/shikomi vault status 2>&1 | grep -E "SHIKOMI_VAULT_DIR"
 echo "→ 0 件 expected (古い文言の残存無し)"
-./target/release/shikomi vault status 2>&1 | grep -E "XDG_RUNTIME_DIR|HOME"
-echo "→ 1 件以上 expected (新文言)"
+./target/release/shikomi vault status 2>&1 | grep -E "\-\-vault-dir"
+echo "→ 1 件以上 expected (MSG-S09(b) 新文言、--vault-dir <DIR> 案内)"
 
-# 3. 解決順序 SSoT grep（unix_default_socket_path の優先順位 + Windows pipe 名 <DIR> ハッシュ契約）
-grep -nE "vault_dir|XDG_RUNTIME_DIR|HOME|fallback|shikomi\\.sock|windows_pipe_name_from_dir" crates/shikomi-cli/src/io/ipc_vault_repository.rs
+# 3. 解決順序 + 文言 SSoT grep
+# (unix_default_socket_path / windows_pipe_name_from_dir の優先順位 + MSG-S09(b) 文言キーへの参照)
+grep -nE "vault_dir|fallback|shikomi\\.sock|windows_pipe_name_from_dir|pass --vault-dir|MSG-S09" crates/shikomi-cli/src/io/ipc_vault_repository.rs
 ```
 
 **解消判定基準**:
 - `--vault-dir` 指定時に `<DIR>/shikomi.sock` (Unix) / `\\.\pipe\shikomi-<H>` (Windows) が socket 解決の最優先候補となり、daemon と一致
-- エラー文言から `SHIKOMI_VAULT_DIR` 案内が消滅、`XDG_RUNTIME_DIR` / `HOME` 案内に統一
-- TC-F-S04 等の grep gate が #74-E で文言を機械検証する経路を articulate
+- エラー文言から `SHIKOMI_VAULT_DIR` 案内が消滅、**`--vault-dir <DIR>` 案内に統一**（vault.db ディレクトリを示すユーザ認知モデルと一致、`cli-subcommands.md` §Bug-F-007 MSG-S09(b) SSoT）。`XDG_RUNTIME_DIR` / `HOME` の直接案内は出さない（Phase 2 規定: CLI は IPC 経由のみ、vault.db 直接操作禁止）
+- TC-F-S04 等の grep gate が #74-E で MSG-S09(b) 文言を機械検証する経路を articulate
 
 #### 15.16.7 Bug-F-003 CI スコープ拡張の baseline 観測
 
