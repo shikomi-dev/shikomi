@@ -372,3 +372,221 @@ cargo test -p shikomi-daemon --test ipc_integration
 - **「Linux 全 green」報告の構造的錯覚**（Bug-F-003）は **CI スコープを設計書 SSoT として明示し、必須 check 化する**ことで構造的に再演防止できる。本 Issue で確立する `test-cli` / `test-daemon` ジョブ + `justfile` 同期 + grep gate (TC-F-S01〜S06) の三位一体経路を、後続 Issue で新 crate を追加する際の**チェックリスト**として継承する（`cli-vault-commands/test-design/ci.md` §7.6 articulate）
 - **Phase X 暫定文言の温床**（Bug-F-002 / Bug-F-006）は doc / panic / 通常出力経路の `Phase\s+\d+` grep gate で構造的に再演防止する。Phase 番号は実装中に頻繁に変動するため、設計書側に明示しないか、明示する場合は本節 §15.15 のような **改訂日付付き履歴 articulate** に限定する Boy Scout 規律を確立
 - **Sub-issue 分割（#74-A〜E）による依存関係 articulate**: BLOCKER 系 Bug を #74-A 単独に集約し、TC 実装 (#74-B〜E) を並列着手可能にする構造は、Issue #65 の Bug-G-001〜G-008 7 ラウンド実験で確立された「対症療法と本質要件の責務分離」と同型。今後の大規模 Sub-issue 起票テンプレートとして本構造を継承可能
+
+### 15.16 Issue #75 工程4 検証手順 SSoT — テスト担当（涅マユリ）視点（2026-04-27）
+
+§15.15 で Bug-F-001〜007 の解消経路（誰が・どの工程で・どのファイル/設計書を変更するか）は articulate 済。本節 §15.16 は **Issue #75 工程4（テスト担当による検証）の SSoT** として、各 Bug 解消後にテスト担当（涅マユリ）が CI / 手動 smoke で何を観測すれば「解消完了」と判定できるかを項目別に articulate する。
+
+> **本節の位置付け**: §15.15 は「解消経路の計画」、§15.16 は「解消完了の検証手順」。実装担当（坂田銀時）が #75 工程3 完了報告した直後、テスト担当が本節を SSoT として CI / 手動 smoke を回し、`docs/features/vault-encryption/test-design/sub-f-cli-subcommands.md §15.16` 各項目の `[ ]` を埋めて完了判定する。
+
+#### 15.16.1 Bug-F-004 既存テスト 36 件追従の baseline 固定
+
+**実 TC 件数: 29 件**（Issue body の "36 件" は #74-A 計画時の概算、実テスト関数を `grep -nE "^\s*(async\s+)?fn\s+tc_"` で実数値固定）。
+
+| ファイル | 件数 | TC-ID | 解消後 expected |
+|---|---|---|---|
+| `crates/shikomi-cli/tests/it_ipc_vault_repository_phase15.rs` | 10 | TC-IT-080 〜 TC-IT-089 | 10/10 pass |
+| `crates/shikomi-daemon/tests/it_server_connection.rs` | 11 | TC-IT-010〜013, 015, 016, 020, 021, 023, 025, 030 | 11/11 pass |
+| `crates/shikomi-daemon/tests/e2e_daemon_phase15.rs` | 7 | TC-E2E-011, 012, 013, 014, 015, 016, 018 | 7/7 pass |
+| `crates/shikomi-daemon/tests/e2e_daemon_phase15_pty.rs` | 1 | TC-E2E-017 | 1/1 pass（PTY 必要、CI runner 制約時は `#[ignore]` 後 `--ignored` 手動） |
+| **合計** | **29** | — | **29/29 pass を baseline として固定** |
+
+**検証 SSoT コマンド**（テスト担当が #75 工程4 で実行）:
+
+```bash
+cargo test -p shikomi-cli --test it_ipc_vault_repository_phase15 -- --nocapture
+cargo test -p shikomi-daemon --test it_server_connection -- --nocapture
+cargo test -p shikomi-daemon --test e2e_daemon_phase15 -- --nocapture
+cargo test -p shikomi-daemon --test e2e_daemon_phase15_pty -- --nocapture  # CI 制約時は --ignored
+```
+
+**解消判定基準**:
+- 29 件全てに `unexpected handshake response` / `ProtocolVersionMismatch { server: V2, client: V1 }` が観測されない（V1 残存 0 件）
+- `cargo test ... --test-threads=1` 強制不要（IPC socket 競合は `serial_test` で局所的吸収）
+- 既存 OK だった他テストへの回帰なし（`cargo test -p shikomi-cli --all-targets` / `cargo test -p shikomi-daemon --all-targets` 全 green）
+
+#### 15.16.2 Bug-F-001 `vault unlock --recovery` smoke 検証
+
+新 TC は #74-C TC-F-I03b で網羅されるが、Issue #75 工程4 では**最低限の手動 smoke** で「Phase 5 stub が解消され、recovery 経路が通る」ことを確認する（#74-C 着手前提のため）。
+
+**手動 smoke 手順**:
+
+```bash
+# 1. encrypted vault を fixture から準備
+cargo build -p shikomi-cli --release
+EXPORT_DIR=$(mktemp -d)
+# fixture 経由で BIP-39 wrapped encrypted vault を作成
+cargo test -p shikomi-cli --features "shikomi-infra/test-fixtures" --test '*' \
+    -- create_encrypted_vault_with_bip39 --nocapture --ignored
+
+# 2. password 経路の排他確認（C-F1 SSoT、Bug-F-001 §EC-F3）
+./target/release/shikomi --vault-dir "$EXPORT_DIR" vault unlock --recovery <bip39_phrase>
+echo "exit=$?"  # 期待: 0 (成功) または 2 (recovery passphrase 不一致)、3 ではない（VaultLocked は別経路）
+
+# 3. password 系と --recovery の同時指定 → UsageError exit=2
+./target/release/shikomi --vault-dir "$EXPORT_DIR" vault unlock --password "x" --recovery <bip39>
+echo "exit=$?"  # 期待: 2 (UsageError)
+
+# 4. Phase 5 stub 残存 0 件 grep（Boy Scout）
+grep -nrE "Phase\s*5|not yet wired" crates/shikomi-cli/src/usecase/vault/unlock.rs
+echo "→ 0 件 expected"
+```
+
+**解消判定基準**:
+- exit code が `cli-subcommands.md` §終了コード表と整合
+- recovery passphrase 不一致時の MSG-* が password 経路と同型（C-F1 排他関係 SSoT 準拠）
+- `grep` Phase 5 残存 0 件
+
+#### 15.16.3 Bug-F-002 `success::*_with_fallback_notice` 経路復活検証
+
+**設計確定**: §15.15 / `cli-subcommands.md §Bug-F-002 解消` で「経路復活（削除ではなく C-31/C-36 に正式接続）」が決定。テスト担当は経路通過を**手動 smoke + ユニット assert** で確認する（unit の正式 TC は #74-B TC-F-U07 で網羅予定）。
+
+**検証手順**:
+
+```bash
+# 1. 経路通過確認（手動 smoke、cache_relocked: false 経路）
+# daemon を起動し、unlock 後に vault relock せずに lock コマンドで cache が relocked: false 状態を観測
+./target/release/shikomi-daemon &
+DAEMON_PID=$!
+sleep 2
+./target/release/shikomi vault unlock --password "test"
+./target/release/shikomi vault lock  # → success::*_with_fallback_notice の C-31 / C-36 経路が走る想定
+kill $DAEMON_PID
+
+# 2. Phase 5 文言残存 0 件 grep
+grep -nrE "is not yet wired|Phase\s*5" crates/shikomi-cli/src/presenter/success.rs
+echo "→ 0 件 expected"
+
+# 3. 経路がデッドコードでないこと（callsite 確認）
+grep -rn "success::.*_with_fallback_notice" crates/shikomi-cli/src/usecase/
+echo "→ 1 件以上 expected（C-31 / C-36 経由）"
+```
+
+**解消判定基準**:
+- Phase 5 残存 0 件
+- callsite が `usecase::vault::*` 内に少なくとも 1 件存在（経路復活の証拠）
+
+#### 15.16.4 Bug-F-005 fixture + TC-E2E-040 exit code 整合検証
+
+**設計確定**: TC-E2E-040 の期待 exit code は **3 (VaultLocked)**（`cli-subcommands.md` §終了コード SSoT と整合）。実装側で 2 (BackoffActive) を返している現状を 3 に統一する。
+
+**検証手順**:
+
+```bash
+# 1. fixture 修復後、test-fixtures feature で encrypted vault が生成可能
+cargo test -p shikomi-cli --features "shikomi-infra/test-fixtures" --test e2e_encrypted -- --nocapture
+# 期待: TC-E2E-040 が exit code 3 で pass
+
+# 2. fixture 生成のスキーマ整合確認
+cat <<'PY' | python3
+import sqlite3, sys
+# 生成された fixture が wrapped_vek の長さ要件を満たすか確認
+# (詳細は shikomi-infra::persistence::test_fixtures::create_encrypted_vault のスキーマ参照)
+PY
+
+# 3. exit code SSoT grep（cli-subcommands.md と実装の整合）
+grep -nE "ExitCode::(VaultLocked|BackoffActive)" crates/shikomi-cli/src/error.rs
+grep -nE "VaultLocked.*=.*3|BackoffActive.*=.*2" crates/shikomi-cli/src/error.rs
+echo "→ VaultLocked = 3 / BackoffActive = 2 の対応 expected"
+```
+
+**解消判定基準**:
+- TC-E2E-040 が exit code 3 で pass
+- `wrapped_vek ciphertext is too short` エラーが fixture 読込時に出ない
+- `cli-subcommands.md` §終了コード表と `error.rs` の `ExitCode` enum 値が完全一致
+
+#### 15.16.5 Bug-F-006 `vault encrypt --help` Phase 5 残存削除検証
+
+**検証手順**:
+
+```bash
+# 1. --help 出力に Phase 5 残存無し
+./target/release/shikomi vault encrypt --help | grep -E "Phase\s*5"
+echo "→ 0 件 expected"
+
+# 2. 全 CLI コマンドで Phase 番号残存 0 件（Boy Scout）
+for cmd in "list" "add" "edit" "remove" "vault encrypt" "vault unlock" "vault lock" "vault status"; do
+    echo "=== $cmd --help ==="
+    ./target/release/shikomi $cmd --help 2>&1 | grep -nE "Phase\s+\d+" || echo "  (clean)"
+done
+```
+
+**解消判定基準**:
+- `--help` 出力で `Phase\s+\d+` パターン 0 件
+- ソースコード `crates/shikomi-cli/src/cli.rs` の `Possible values:` 説明文に Phase 残存 0 件
+- TC-F-S05（#74-E `Phase\s+\d+` grep gate）の事前 smoke が通る（gate 自体は #74-E で実装、本 Issue では grep 手動確認のみ）
+
+#### 15.16.6 Bug-F-007 `--vault-dir` daemon socket 解決検証
+
+**検証手順**:
+
+```bash
+# 1. --vault-dir 経由の socket 解決が機能
+TEST_DIR=$(mktemp -d)
+./target/release/shikomi --vault-dir "$TEST_DIR" vault status
+echo "exit=$?"  # 期待: 0 または 3、SHIKOMI_VAULT_DIR 案内エラー (現状) は出ない
+
+# 2. エラー文言が XDG_RUNTIME_DIR / HOME を案内
+unset XDG_RUNTIME_DIR
+unset HOME
+./target/release/shikomi vault status 2>&1 | grep -E "SHIKOMI_VAULT_DIR"
+echo "→ 0 件 expected (古い文言の残存無し)"
+./target/release/shikomi vault status 2>&1 | grep -E "XDG_RUNTIME_DIR|HOME"
+echo "→ 1 件以上 expected (新文言)"
+
+# 3. 解決順序 SSoT grep（unix_default_socket_path の優先順位）
+grep -nE "vault_dir|XDG_RUNTIME_DIR|HOME|fallback" crates/shikomi-cli/src/io/ipc_vault_repository.rs
+```
+
+**解消判定基準**:
+- `--vault-dir` 指定時に socket 解決が daemon と一致
+- エラー文言から `SHIKOMI_VAULT_DIR` 案内が消滅、`XDG_RUNTIME_DIR` / `HOME` 案内に統一
+- TC-F-S04 等の grep gate が #74-E で文言を機械検証する経路を articulate
+
+#### 15.16.7 Bug-F-003 CI スコープ拡張の baseline 観測
+
+**検証 SSoT**: `cli-vault-commands/test-design/ci.md §7.2 / §7.3`。本 Issue でブランチ protection に `test-cli` / `test-daemon` を必須 check 追加した後、テスト担当は以下を観測する。
+
+**検証手順**:
+
+```bash
+# 1. PR #75 の CI 結果で test-cli / test-daemon ジョブが必須 check として表示
+gh pr checks <PR番号> --repo shikomi-dev/shikomi | grep -E "test-cli|test-daemon"
+# 期待: 両ジョブが pass + 必須 check マーク
+
+# 2. branch protection の観測
+gh api repos/shikomi-dev/shikomi/branches/develop/protection \
+    --jq '.required_status_checks.contexts[]' | sort
+# 期待: "test-cli", "test-daemon" を含む
+
+# 3. justfile 同期確認
+grep -nE "test-cli|test-daemon" justfile
+# 期待: ターゲット定義あり
+
+# 4. ローカル `just test` で CI と同等のスコープ実行
+just test
+# 期待: shikomi-cli + shikomi-daemon を含む全 4 crate が走る
+```
+
+**解消判定基準**:
+- CI green + branch protection 必須 check に登録済
+- justfile が CI スコープと一致
+
+#### 15.16.8 Issue #75 工程4 完了 DoD（テスト担当チェックリスト）
+
+§15.16.1〜15.16.7 の全項目を CI / 手動 smoke で確認後、テスト担当が以下を埋めて完了報告する:
+
+- [ ] §15.16.1 既存 29 件 baseline 全 pass（CI green ベースライン固定）
+- [ ] §15.16.2 Bug-F-001 `--recovery` smoke 通過
+- [ ] §15.16.3 Bug-F-002 経路復活確認 + Phase 5 残存 0
+- [ ] §15.16.4 Bug-F-005 fixture + TC-E2E-040 exit 3
+- [ ] §15.16.5 Bug-F-006 `--help` Phase 残存 0
+- [ ] §15.16.6 Bug-F-007 `--vault-dir` 経路 + エラー文言訂正
+- [ ] §15.16.7 Bug-F-003 CI 必須 check 観測 + justfile 同期
+
+**全埋め後**、§15.15 の Bug-F-001〜007 ステータスを `⏳` → `✅ 解消済` に更新し、テスト担当証跡を `/app/shared/attachments/マユリ/issue-75-verification-*.{md,log}` に保存して Discord 添付する。
+
+#### 15.16.9 Boy Scout / 教訓 articulate（Issue #75 工程4 視点）
+
+- **「実装完了 = 検証完了」ではない**: §15.15 が解消経路（誰が・何を）の articulate、§15.16 が解消完了判定（何を観測したら完了か）の articulate。Issue #65 で Bug-G-005 の偶発 PASS を「対策効果」と誤認した教訓（私自身の誤り）の再演防止。実装後に**観測 SSoT 手順**で機械検証する責務をテスト担当が引き受ける構造を articulate
+- **既存テスト追従の baseline 固定の重要性**: Bug-F-004 の "36 件" 概算と実 29 件のドリフトのように、計画時の概算と実数値はずれる。テスト担当は **実テスト関数の grep で実数値を SSoT 化** する責務を負う。本節 §15.16.1 の表が後続レビュアー（ペテルギウス・ペガサス・服部）の照合可能な reference になる

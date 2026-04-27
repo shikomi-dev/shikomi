@@ -334,3 +334,19 @@ cli-vault-commands feature の §1 / §2 / §5 SSoT は当初から `cargo test 
 - **本節 §7.1〜7.6 が SSoT として確定**したことで、#75 工程3（実装担当）は workflow YAML / `justfile` 改修を本節の表通りに実装する
 - 各 TC の機械検証経路（TC-F-S01〜S06 等）は #74-E（静的検査）で実装、本節は **CI スコープ設計の意図**を articulate するのみ
 - 後続レビュー（#75 工程5）はペテルギウス・ペガサス・服部 + Bug-F-003 が CI 観測経路で実体的に解消されたことを green ベースラインで確認することがマージブロッカ
+
+### 7.8 Issue #75 工程4 検証手順 — テスト担当 cross-ref（2026-04-27 追加）
+
+§7.1〜7.7 が **CI スコープ設計の意図**（誰が・何を CI に組み込むか）の SSoT である一方、Issue #75 工程4 で**テスト担当（涅マユリ）が CI / 手動 smoke で何を観測すれば「Bug-F-* 解消完了」と判定できるか**の SSoT は **`vault-encryption/test-design/sub-f-cli-subcommands.md §15.16` に articulate** する（責務分離: ci.md = CI 設計、sub-f §15.16 = 検証手順）。
+
+| 検証対象 | 工程4 検証 SSoT |
+|---|---|
+| Bug-F-003 CI 拡張 baseline 観測 | `sub-f-cli-subcommands.md §15.16.7`（`gh pr checks` + branch protection 観測 + `justfile` 同期） |
+| Bug-F-001 `--recovery` smoke | `sub-f-cli-subcommands.md §15.16.2` |
+| Bug-F-002 経路復活 + Phase 5 残存 0 | `sub-f-cli-subcommands.md §15.16.3` |
+| Bug-F-004 既存 29 件 baseline 固定 | `sub-f-cli-subcommands.md §15.16.1`（実 TC 件数を grep 実測で SSoT 化） |
+| Bug-F-005 fixture + TC-E2E-040 exit 3 | `sub-f-cli-subcommands.md §15.16.4` |
+| Bug-F-006 `--help` Phase 5 残存削除 | `sub-f-cli-subcommands.md §15.16.5` |
+| Bug-F-007 `--vault-dir` + エラー文言訂正 | `sub-f-cli-subcommands.md §15.16.6` |
+
+**reviewer 照合 SSoT**: 工程5 レビュー時、ペテルギウス・ペガサス・服部は **§15.16 各項目の `[ ]` チェックリスト埋め込み状況**と**本書 §7.3 必須 check ポリシー表** の双方を SSoT として照合する。`[ ]` 未埋めのまま PR 提出は **却下対象**（テスト担当の検証責務不履行、Bug-G-005 偶発 PASS 誤認の Boy Scout 規律と同型）。
