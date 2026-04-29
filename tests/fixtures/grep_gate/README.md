@@ -28,7 +28,3 @@ bash tests/unit/test_audit_secret_paths_grep_gate.sh
 
 - Issue #85 — Audit grep gate がコメント文字列の `unsafe` を誤検出する（PR #82 / #84 で `--admin` 連発を誘発した実害の構造的終止符）
 - Bug-CI-031 — 許可リスト substring 過剰許可による silent bypass（path 偽装攻撃面、本 PR で構造修正）
-
-## ファイル名 typo 履歴
-
-`case_a/realy_unsafe.rs` → `case_a/really_unsafe.rs` (ペガサス工程5 typo 指摘で rename、3 箇所 SSoT 同期更新済)。
