@@ -98,8 +98,8 @@
 | `expose_secret` 呼出 | `crates/shikomi-cli/src/io/` | 0 件（既存 TC-CI-013 を踏襲・拡張） | TC-CI-016 |
 | `expose_secret` 呼出 | `crates/shikomi-daemon/src/` | 0 件 | TC-CI-017 |
 | `rmp_serde::Raw` / `RawRef` | `crates/shikomi-core/src/ipc/` | 0 件（RUSTSEC-2022-0092） | TC-CI-018 |
-| `unsafe` ブロック（daemon 側） | `crates/shikomi-daemon/src/` | `permission/{unix,windows}.rs` 以外 0 件 | TC-CI-019 |
-| `unsafe` ブロック（CLI 側） | `crates/shikomi-cli/src/` | `io/windows_sid.rs` 以外 0 件（服部 re-review ① 対応、新設） | **TC-CI-026** |
+| `unsafe` ブロック（daemon 側） | `crates/shikomi-daemon/src/` | `permission/{unix,windows,windows_acl}.rs` 以外 0 件。grep gate のコメント行除外契約は `../../dev-workflow/detailed-design/scripts.md §audit-secret-paths.sh の unsafe ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）` で凍結、回帰防止サブケース 5 件は `../../dev-workflow/test-design.md §TC-CI-026 サブケース` で網羅検証され**本 TC-CI-019 にも波及して有効性担保**（Issue #85） | TC-CI-019 |
+| `unsafe` ブロック（CLI 側） | `crates/shikomi-cli/src/` | `io/windows_sid.rs` + `hardening/core_dump.rs` 以外 0 件（服部 re-review ① 対応、Issue #75 で `hardening/core_dump.rs` 追加）。grep gate コメント行除外契約 + 回帰防止サブケース 5 件は同上 | **TC-CI-026** |
 | panic hook 内 `tracing::*` | `crates/shikomi-daemon/src/{main,lib,panic_hook}.rs` | 0 件 | TC-CI-023 |
 | panic hook 内 `info.payload()` / `message()` / `location()` | 同上 | 0 件 | TC-CI-024 |
 | `SHIKOMI_DAEMON_SKIP_*` env 読取 | `crates/shikomi-{daemon,cli}/src/` | 0 件（trait 注入一本化契約、服部 re-review ② 対応、新設） | **TC-CI-027** |
