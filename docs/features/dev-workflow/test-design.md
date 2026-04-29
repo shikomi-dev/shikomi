@@ -178,13 +178,15 @@ tests/
         gitleaks_default_rules_v8.30.1.json         # 要起票 TBD-4
       schema/
         (raw の型 + 統計。factory 設計ソース)
-    grep_gate/                                       # Issue #85 TC-CI-026 fixture
-      case_a/realy_unsafe.rs                         # 実 unsafe ブロック (許可リスト外)
+    grep_gate/                                       # Issue #85 + Bug-CI-031 TC-CI-026 fixture
+      case_a/really_unsafe.rs                        # 実 unsafe ブロック (許可リスト外)
       case_b/doc_comment_only.rs                     # `/// unsafe { ... }` のみ (PR #82 実例の最小再現)
-      case_c/regular_comment_only.rs                 # `// unsafe { ... }` 5 パターン
-      case_d/inline_comment_realy_unsafe.rs          # `unsafe { ... } // SAFETY:` 行内コメント
+      case_c/comment_variants.rs                     # `//` / `///` / `//!` 5 パターン網羅
+      case_d/inline_comment.rs                       # `unsafe { ... } // SAFETY:` 行内コメント sentinel
       case_e/io/windows_sid.rs                       # 許可リスト i (FFI)
       case_e/hardening/core_dump.rs                  # 許可リスト ii (Issue #75 で追加)
+      case_f/io/windows_sid.rs                       # 本物 path (許可リスト登録)
+      case_f/io/windows_sid.rs.bypass/evil.rs        # path 偽装 silent bypass sentinel (Bug-CI-031)
   factories/
     secret_sample.py / platform_stub.sh / powershell_version.py  # 要起票
   e2e/
@@ -192,7 +194,7 @@ tests/
   integration/
     (TC-IT-001〜010。rawfixture を使用)
   unit/
-    (TC-UT-001〜017 + TC-CI-026-a〜e。factory / grep_gate fixture を使用)
+    (TC-UT-001〜017 + TC-CI-026-a〜f。factory / grep_gate fixture を使用)
     test_audit_secret_paths_grep_gate.sh             # TC-CI-026 サブケース 6 件連続実行 (a〜f)
 ```
 
