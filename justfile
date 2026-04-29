@@ -80,9 +80,13 @@ bench-kdf:
 # ------------------------------------------------------------------ audit
 
 # cargo deny + secret 経路監査 (確定 B: cargo-deny-action 廃止、統一経路)
+# Issue #85: audit-secret-paths.sh の grep gate コメント行除外契約は
+# tests/unit/test_audit_secret_paths_grep_gate.sh で 5/5 PASS をゲート条件とする
+# (設計根拠: docs/features/dev-workflow/test-design.md §TC-CI-026 サブケース運用契約)
 audit:
     cargo deny check advisories licenses bans sources
     bash scripts/ci/audit-secret-paths.sh
+    bash tests/unit/test_audit_secret_paths_grep_gate.sh
 
 # pre-commit 用の軽量 secret スキャン (staged 差分のみ)
 # gitleaks が未導入なら即失敗 (Fail Fast)。scripts/setup.sh が導入を保証する
