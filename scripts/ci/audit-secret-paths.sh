@@ -27,6 +27,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# `unsafe` ブロック検出 grep gate（TC-CI-019 / TC-CI-026 共通契約）を本ライブラリに集約。
+# Issue #85: doc コメント内 `unsafe { ... }` 文字列の誤検出を構造的に塞ぐコメント行除外
+# パイプを含む。設計根拠: docs/features/dev-workflow/detailed-design/scripts.md
+# shellcheck source=lib/audit_unsafe_blocks.sh
+source "$REPO_ROOT/scripts/ci/lib/audit_unsafe_blocks.sh"
+
 fail() {
     echo "::error::$1"
     exit 1
@@ -133,17 +139,16 @@ fi
 echo "[TC-CI-018] PASS"
 
 # --- TC-CI-019 ------------------------------------------------------
+# 設計根拠: docs/features/dev-workflow/detailed-design/scripts.md
+#   §`audit-secret-paths.sh` の `unsafe` ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）
+# Issue #85 コメント行除外契約: doc/通常/モジュール doc コメント内の `unsafe { ... }`
+# 文字列が誤検出されないことを構造的に保証する。
 echo "[TC-CI-019] unsafe blocks outside permission/ (shikomi-daemon)"
-if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-daemon/src/ \
-    --include='*.rs' \
-    | grep -v 'crates/shikomi-daemon/src/permission/unix.rs' \
-    | grep -v 'crates/shikomi-daemon/src/permission/windows.rs' \
-    | grep -v 'crates/shikomi-daemon/src/permission/windows_acl.rs' \
-    || true)"; then
-    if [[ -n "$matches" ]]; then
-        echo "$matches"
-        fail "TC-CI-019 FAIL: crates/shikomi-daemon/src/permission/{unix,windows,windows_acl}.rs 以外で unsafe ブロックが存在します"
-    fi
+if ! audit_unsafe_blocks "crates/shikomi-daemon/src/" \
+    "crates/shikomi-daemon/src/permission/unix.rs" \
+    "crates/shikomi-daemon/src/permission/windows.rs" \
+    "crates/shikomi-daemon/src/permission/windows_acl.rs"; then
+    fail "TC-CI-019 FAIL: crates/shikomi-daemon/src/permission/{unix,windows,windows_acl}.rs 以外で unsafe ブロックが存在します"
 fi
 echo "[TC-CI-019] PASS"
 
@@ -166,21 +171,19 @@ fi
 echo "[TC-CI-023/024] PASS"
 
 # --- TC-CI-026 ------------------------------------------------------
-# 例外:
+# 設計根拠: docs/features/dev-workflow/detailed-design/scripts.md
+#   §`audit-secret-paths.sh` の `unsafe` ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）
+# 許可リスト:
 # - crates/shikomi-cli/src/io/windows_sid.rs: Windows Win32 Security FFI (Phase 1)
 # - crates/shikomi-cli/src/hardening/core_dump.rs: C-41 core dump 抑制 (Sub-F Phase 5)
 #   `libc::prctl(PR_SET_DUMPABLE, 0)` / `libc::setrlimit(RLIMIT_CORE, 0)` の FFI
 #   呼出に必要な最小 unsafe。ファイル単位で `#![allow(unsafe_code)]` を明示。
+# Issue #85 コメント行除外契約は audit_unsafe_blocks ライブラリ側に集約。
 echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs and hardening/core_dump.rs (shikomi-cli)"
-if matches="$(grep -rnE 'unsafe[[:space:]]*\{' crates/shikomi-cli/src/ \
-    --include='*.rs' \
-    | grep -v 'crates/shikomi-cli/src/io/windows_sid.rs' \
-    | grep -v 'crates/shikomi-cli/src/hardening/core_dump.rs' \
-    || true)"; then
-    if [[ -n "$matches" ]]; then
-        echo "$matches"
-        fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs) 以外で unsafe ブロックが存在します"
-    fi
+if ! audit_unsafe_blocks "crates/shikomi-cli/src/" \
+    "crates/shikomi-cli/src/io/windows_sid.rs" \
+    "crates/shikomi-cli/src/hardening/core_dump.rs"; then
+    fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs) 以外で unsafe ブロックが存在します"
 fi
 echo "[TC-CI-026] PASS"
 

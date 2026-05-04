@@ -30,7 +30,7 @@
 | REQ-DW-018 | `lefthook.yml::commit-msg.no-ai-footer` + `justfile::commit-msg-no-ai-footer` | TC-IT-010, TC-UT-014〜016 | 結合/ユニット | 異常系/正常系 | 17 |
 | REQ-DW-006（追加契約） | `scripts/ci/audit-pin-sync.sh` | TC-UT-008, TC-UT-009 | ユニット | 正常系/異常系 | — |
 | T9 補助 | ピン定数 upstream 同期 | TC-UT-017 | ユニット | 正常系 | — |
-| REQ-DW-013（追加契約、Issue #85）| `scripts/ci/audit-secret-paths.sh` の `unsafe` ブロック検出 grep gate（コメント行除外）| TC-CI-026-a, b, c, d, e | ユニット | 異常系/正常系/正常系/異常系/正常系 | 12 |
+| REQ-DW-013（追加契約、Issue #85 + Bug-CI-031）| `scripts/ci/audit-secret-paths.sh` の `unsafe` ブロック検出 grep gate（コメント行除外 + 許可リスト path 完全一致）| TC-CI-026-a, b, c, d, e, f | ユニット | 異常系/正常系/正常系/異常系/正常系/異常系 | 12 |
 
 ## 外部I/O依存マップ
 
@@ -110,27 +110,28 @@
 
 **設計根拠**: `docs/features/dev-workflow/detailed-design/scripts.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約（TC-CI-019 / TC-CI-026 共通仕様）。
 
-**経緯**: Issue #75 (PR #82) で `crates/shikomi-cli/src/io/ipc_vault_repository.rs` の doc コメントに「`` `unsafe { std::env::remove_var(...) }` は Rust 2024 edition の env 操作 unsafe 化 ``」という解説文字列が導入された。当時の grep gate（`grep -rnE 'unsafe[[:space:]]*\{' ... --include='*.rs'`）はソース行とコメント行を区別しないため、**doc コメント内の `unsafe { ... }` 解説文字列を実 `unsafe` ブロックと誤検出**して TC-CI-026 が FAIL し、PR #82 / #84 で連続して `--admin` バイパスを誘発した。本 5 サブケースは、**コメント行除外契約（行頭から最初の非空白文字が `//` で始まる行を一律除外）の有効性と、実 `unsafe` 検出力の維持を同時に保証する** 回帰防止 SSoT。
+**経緯**: Issue #75 (PR #82) で `crates/shikomi-cli/src/io/ipc_vault_repository.rs` の doc コメントに「`` `unsafe { std::env::remove_var(...) }` は Rust 2024 edition の env 操作 unsafe 化 ``」という解説文字列が導入された。当時の grep gate（`grep -rnE 'unsafe[[:space:]]*\{' ... --include='*.rs'`）はソース行とコメント行を区別しないため、**doc コメント内の `unsafe { ... }` 解説文字列を実 `unsafe` ブロックと誤検出**して TC-CI-026 が FAIL し、PR #82 / #84 で連続して `--admin` バイパスを誘発した。本 6 サブケース（a〜f）は、**コメント行除外契約（行頭から最初の非空白文字が `//` で始まる行を一律除外）の有効性 + 実 `unsafe` 検出力の維持 + 許可リスト path 完全一致による silent bypass 防御（Bug-CI-031 解消）** を同時に保証する回帰防止 SSoT。
 
 **fixture 配置**: `tests/fixtures/grep_gate/` 配下に各サブケース固有の最小 `.rs` fixture を 1 ファイルずつ作成し、`audit-secret-paths.sh` の検査対象パスを fixture ディレクトリへ差し替えて呼び出す（環境変数 or 引数経由、実装担当が `audit-secret-paths.sh` の Issue #85 修正時に決定）。本流 `crates/shikomi-cli/src/` を直接いじらないため**回帰サンドボックス**として独立性を保つ。
 
 | テストID | 種別 | 入力（fixture / scope）| 期待結果 |
 |---------|------|------|---------|
-| **TC-CI-026-a** | 異常系（**実 unsafe 検出力の保証**）| 許可リスト外ファイル（例: `tests/fixtures/grep_gate/case_a/realy_unsafe.rs`）に `unsafe { /* body */ }` ブロックを 1 件含む fixture | exit 非 0、stderr に `case_a/realy_unsafe.rs:<line>:<content>` を file:line:content 形式で出力（`[TC-CI-026] FAIL` プレフィクス）。**コメント行除外パイプを挟んでも実コードの `unsafe` ブロックは正しくヒットする**ことを確認 |
+| **TC-CI-026-a** | 異常系（**実 unsafe 検出力の保証**）| 許可リスト外ファイル（`tests/fixtures/grep_gate/case_a/really_unsafe.rs`）に `unsafe { /* body */ }` ブロックを 1 件含む fixture | exit 非 0、stderr に `case_a/really_unsafe.rs:<line>:<content>` を file:line:content 形式で出力（`[TC-CI-026] FAIL` プレフィクス）。**コメント行除外パイプを挟んでも実コードの `unsafe` ブロックは正しくヒットする**ことを確認 |
 | **TC-CI-026-b** | 正常系（**doc コメント誤検出の構造的封鎖**、PR #82 の実例再現）| 許可リスト外ファイル（例: `tests/fixtures/grep_gate/case_b/doc_comment_only.rs`）に **doc コメント**（`/// unsafe { std::env::remove_var(...) } は Rust 2024 edition...` のような解説文字列）のみ存在し、**実 `unsafe` ブロックは無し**の fixture。`Issue #75 の `ipc_vault_repository.rs:725` 相当を最小再現` | exit 0、stdout は `[TC-CI-026] PASS` の 1 行のみ。**コメント行除外パイプにより doc コメント内の `unsafe { ...` 文字列が grep にヒットしない**ことを保証（Issue #85 の根本対策、PR #82 / #84 の `--admin` 連発を構造的に終止符） |
 | **TC-CI-026-c** | 正常系（**通常コメント誤検出の構造的封鎖**）| 許可リスト外ファイルに **通常コメント**（`// unsafe { ... } の説明` や `//unsafe{` の形式）のみ存在し実 `unsafe` ブロック無しの fixture。先頭空白あり / 空白なし / `//!` モジュール doc / `///` doc / 通常 `//` の 5 パターン網羅 | 5 パターン全てで exit 0、`[TC-CI-026] PASS`。**「行頭から最初の非空白文字が `//` で始まる行」一律除外契約**（detailed-design §コメント行の判定規則）が網羅的に有効化される |
 | **TC-CI-026-d** | 異常系（**行内コメントは検出継続、誤陽性化させない**）| 許可リスト外ファイルに **行内コメント形式の実コード**（`unsafe { ptr::read(p) } // SAFETY: ...`）を 1 件含む fixture | exit 非 0、`case_d/<file>:<line>:<content>` 出力。**行内コメントを「コメント行」として除外してしまう実装ミス**（誤陽性化の罠、grep `-vE '^[[:space:]]*//'` の表層仕様だけで担保される）を sentinel として早期検出 |
 | **TC-CI-026-e** | 正常系（**許可リスト効果確認**、Issue #75 拡張追従）| 許可リストファイル相当に実 `unsafe { ... }` ブロックが存在する fixture を 2 ファイル配置: (i) `case_e/io/windows_sid.rs` 模倣（FFI 必須）、(ii) `case_e/hardening/core_dump.rs` 模倣（`#![allow(unsafe_code)]` を伴う、Issue #75 で追加された TC-F-U10 対象）。`audit-secret-paths.sh` の許可リスト（detailed-design §検出契約 §許可リスト行）に両ファイルを登録した上で実行 | exit 0、`[TC-CI-026] PASS`。**両ファイルとも検査結果から除外され、検出パターンに合致しても fail に転じない**ことを保証。Issue #75 で `hardening/core_dump.rs` が許可リスト追加された経緯（cli-subcommands.md §C-41 §「`io/windows_sid.rs` と同等扱い」）の回帰防止 |
+| **TC-CI-026-f** | 異常系（**Bug-CI-031 path 偽装 silent bypass の sentinel**、マユリ工程4 発見 / 服部・ペテルギウス工程5 致命指摘）| 許可リスト entry 文字列を path に substring として含む偽装サブディレクトリ fixture（`case_f/io/windows_sid.rs.bypass/evil.rs`）に実 `unsafe { ... }` ブロックを 1 件含む。許可リストに `case_f/io/windows_sid.rs`（本物 path）を登録した上で実行 | exit 非 0、stderr に `case_f/io/windows_sid.rs.bypass/evil.rs:<line>:<content>` を出力。**substring 一致 (`grep -vF`) では `windows_sid.rs` を含む path として silent 許可されてしまう** が、**path 完全一致 (`awk -F: '$1 != p'`) では完全一致しないため検出される**。許可リスト一致を「ファイルパス完全一致」に固定する契約（detailed-design §許可リスト一致方式）の有効性を fixture で永続的に保証 |
 
 **運用契約**:
 
-- 5 サブケース全てを `tests/unit/test_audit_secret_paths_grep_gate.sh`（または `pytest -k tc_ci_026`）の単一テストランナーで連続実行し、5/5 PASS を CI のゲート条件とする
-- fixture ディレクトリ `tests/fixtures/grep_gate/case_{a..e}/` は本 PR で同時にコミット。`scripts/ci/audit-secret-paths.sh` の検査対象パスを差し替える経路は実装担当が選定（環境変数 `AUDIT_GREP_TARGET_DIR` 案 / 第一引数案）
-- 本サブケースは Issue #85 修正の**回帰防止 SSoT**。今後 `audit-secret-paths.sh` を改修する PR は本 5 サブケース全 PASS が必須（reviewer が機械的に確認）
+- 全サブケースを `tests/unit/test_audit_secret_paths_grep_gate.sh`（または `pytest -k tc_ci_026`）の単一テストランナーで連続実行し、全 PASS を CI のゲート条件とする（現状 6/6 = a〜f）
+- fixture ディレクトリ `tests/fixtures/grep_gate/case_{a..f}/` は本 PR で同時にコミット。`audit-secret-paths.sh` 自体は本流の検査対象パス（`crates/shikomi-{daemon,cli}/src/`）を引き続き走査し、test runner は `audit_unsafe_blocks` 関数を直接呼出して fixture path を渡す経路で独立検証する（本番 script に test 用 path 注入経路を持ち込まない、Tell-Don't-Ask 規律）
+- 本サブケースは Issue #85 + Bug-CI-031 修正の**回帰防止 SSoT**。今後 `audit-secret-paths.sh` / `audit_unsafe_blocks.sh` を改修する PR は本サブケース全 PASS が必須（reviewer が機械的に確認）
 
 #### TC-CI-019（daemon 側）への波及 articulate
 
-**ペテルギウス工程2 内部レビュー指摘1 解消**: `detailed-design.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約は **「TC-CI-019 / TC-CI-026 共通仕様」** として章名宣言されており、コメント行除外パイプ（`grep -vE '^[[:space:]]*//'` 1 段）は **TC-CI-019 / TC-CI-026 両ステップで物理的に共有**される実装契約として凍結済 (`detailed-design.md §設計判断の凍結`)。本節 §TC-CI-026 サブケース 5 件（a〜e）は **同一 grep パイプの挙動を fixture レベルで網羅検証**するため、PASS 時には:
+**ペテルギウス工程2 内部レビュー指摘1 解消**: `detailed-design.md` §`audit-secret-paths.sh` の `unsafe` ブロック検出契約は **「TC-CI-019 / TC-CI-026 共通仕様」** として章名宣言されており、コメント行除外パイプ（`grep -vE '^[[:space:]]*//'` 1 段）+ 許可リスト path 完全一致除外（`awk -F: '$1 != p'`）は **TC-CI-019 / TC-CI-026 両ステップで物理的に共有**される実装契約として凍結済 (`detailed-design.md §設計判断の凍結` / `§許可リスト一致方式`)。本節 §TC-CI-026 サブケース 6 件（a〜f）は **同一 grep + awk パイプの挙動を fixture レベルで網羅検証**するため、PASS 時には:
 
 | 観点 | TC-CI-026（cli 側） | TC-CI-019（daemon 側）への波及 |
 |---|---|---|
@@ -140,13 +141,13 @@
 | 検出パターン | 同一 `unsafe[[:space:]]*\{` を共有 | 同上 |
 | 出力形式 | 同一 `[TC-CI-***] PASS / FAIL + file:line:content` | 同上 |
 
-つまり **TC-CI-026 サブケース 5/5 PASS が TC-CI-019 経路にも波及して有効性を担保**する。daemon 側専用の重複 fixture (`case_{a..e}` を `crates/shikomi-daemon/src/` 風 path で再生成) を**別途追加するのは YAGNI**:
+つまり **TC-CI-026 サブケース 6/6 PASS が TC-CI-019 経路にも波及して有効性を担保**する。daemon 側専用の重複 fixture (`case_{a..f}` を `crates/shikomi-daemon/src/` 風 path で再生成) を**別途追加するのは YAGNI**:
 
-- `path` / `許可リスト` の差は **`audit-secret-paths.sh` 内部の入力変数** にすぎず、grep パイプ自身の挙動は fixture path と独立
-- 本 5 サブケースは grep パイプの「コメント行除外 × 検出力維持 × 許可リスト効果」3 直交軸を網羅するため、daemon 側 fixture を二重化しても**新規に塞がれる罠はゼロ**
+- `path` / `許可リスト` の差は **`audit_unsafe_blocks` 関数の引数** にすぎず、grep + awk パイプ自身の挙動は fixture path と独立
+- 本 6 サブケースは grep + awk パイプの「コメント行除外 × 検出力維持 × 許可リスト効果 × path 偽装 silent bypass 防御」4 直交軸を網羅するため、daemon 側 fixture を二重化しても**新規に塞がれる罠はゼロ**
 - 将来 TC-CI-019 / TC-CI-026 が**別実装に分岐**する設計変更が起きた瞬間に本記述を破棄し、各々のサブケース節を立てる Boy Scout を起動する（**今は YAGNI、分岐時に articulate**）。`detailed-design.md` §設計判断の凍結が「Sub-issue 実装側での再判定は行わない」と凍結済なので、当面は分岐想定なし
 
-**SSoT 整合性**: `daemon-ipc/test-design/index.md §unsafe ブロック（daemon 側）行 (TC-CI-019)` から本節へ後方リンクされる契約となる（Boy Scout: TC-CI-019 SSoT を読んだ reviewer が本サブケース 5 件を波及検証として遡及できる構造）。後方リンク追記は本 PR スコープ内で `daemon-ipc` 側にも反映する責務が残るため、Issue #85 実装担当（坂田銀時）の工程3 で同 PR 内同期を Boy Scout で適用する。
+**SSoT 整合性**: `daemon-ipc/test-design/index.md §unsafe ブロック（daemon 側）行 (TC-CI-019)` から本節へ後方リンクされる契約となる（Boy Scout: TC-CI-019 SSoT を読んだ reviewer が本サブケース 6 件を波及検証として遡及できる構造）。後方リンク追記は Issue #85 実装担当（坂田銀時）の工程3 で同 PR 内同期を Boy Scout として既に適用済（`daemon-ipc/test-design/index.md` §4.4 静的監査契約一覧 の TC-CI-019 行 / TC-CI-026 行）。
 
 ## カバレッジ基準
 
@@ -156,7 +157,7 @@
 - MSG-DW-001〜013 の 13 文言が全て静的文字列で照合されている（TC-UT-005 + TC-E2E 各種）
 - 受入基準 1〜17 の各々が最低 1 件の E2E テストケースで検証されている
 - T1〜T9 の各脅威に対する対策が最低 1 件のテストケースで有効性を確認されている
-- **TC-CI-026 サブケース a〜e（Issue #85 回帰防止）**が 5/5 PASS で連続実行され、`audit-secret-paths.sh` のコメント行除外契約と実 `unsafe` 検出力の同時保証が機械検証されている
+- **TC-CI-026 サブケース a〜f（Issue #85 + Bug-CI-031 回帰防止）**が 6/6 PASS で連続実行され、`audit_unsafe_blocks` のコメント行除外契約 + 実 `unsafe` 検出力 + 許可リスト path 完全一致の同時保証が機械検証されている
 
 ## 人間が動作確認できるタイミング
 
@@ -177,13 +178,15 @@ tests/
         gitleaks_default_rules_v8.30.1.json         # 要起票 TBD-4
       schema/
         (raw の型 + 統計。factory 設計ソース)
-    grep_gate/                                       # Issue #85 TC-CI-026 fixture
-      case_a/realy_unsafe.rs                         # 実 unsafe ブロック (許可リスト外)
+    grep_gate/                                       # Issue #85 + Bug-CI-031 TC-CI-026 fixture
+      case_a/really_unsafe.rs                        # 実 unsafe ブロック (許可リスト外)
       case_b/doc_comment_only.rs                     # `/// unsafe { ... }` のみ (PR #82 実例の最小再現)
-      case_c/regular_comment_only.rs                 # `// unsafe { ... }` 5 パターン
-      case_d/inline_comment_realy_unsafe.rs          # `unsafe { ... } // SAFETY:` 行内コメント
+      case_c/comment_variants.rs                     # `//` / `///` / `//!` 5 パターン網羅
+      case_d/inline_comment.rs                       # `unsafe { ... } // SAFETY:` 行内コメント sentinel
       case_e/io/windows_sid.rs                       # 許可リスト i (FFI)
       case_e/hardening/core_dump.rs                  # 許可リスト ii (Issue #75 で追加)
+      case_f/io/windows_sid.rs                       # 本物 path (許可リスト登録)
+      case_f/io/windows_sid.rs.bypass/evil.rs        # path 偽装 silent bypass sentinel (Bug-CI-031)
   factories/
     secret_sample.py / platform_stub.sh / powershell_version.py  # 要起票
   e2e/
@@ -191,8 +194,8 @@ tests/
   integration/
     (TC-IT-001〜010。rawfixture を使用)
   unit/
-    (TC-UT-001〜017 + TC-CI-026-a〜e。factory / grep_gate fixture を使用)
-    test_audit_secret_paths_grep_gate.sh             # TC-CI-026 サブケース 5 件連続実行
+    (TC-UT-001〜017 + TC-CI-026-a〜f。factory / grep_gate fixture を使用)
+    test_audit_secret_paths_grep_gate.sh             # TC-CI-026 サブケース 6 件連続実行 (a〜f)
 ```
 
 **ただし言語慣習**: 本 feature は Rust コードを追加しないため上記は**スクリプトテスト**として扱う。Rust crate 側テストとは独立したディレクトリに置く。
