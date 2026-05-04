@@ -93,54 +93,7 @@ fn fresh_repo() -> (TempDir, SqliteVaultRepository) {
 
 ---
 
-## 5. Windows DACL fixture helper（Issue #86 対応）
-
-**経緯**: GitHub Actions `windows-latest` runner 上で `tempfile::TempDir` が生成するディレクトリの DACL は親フォルダ（`C:\Users\runneradmin\AppData\Local\Temp`）から**継承**された状態（`SE_DACL_PROTECTED` 未設定）で渡される。Issue #65 で導入した owner-only DACL 検証（`PersistenceError::InvalidPermission`）はこの継承 DACL を Fail Fast で弾くため、暗号化 vault フィクスチャを使う TC-IT-012 / 023 / 033 / 040 や同経路の E2E テスト群が Windows runner 限定で `Persistence(InvalidPermission { actual: "inherited DACL (SE_DACL_PROTECTED not set)" })` を返し、`EncryptionUnsupported` 期待と不一致になって FAIL する。本契約は **Issue #65 owner-only DACL 検証は本番要件として維持**したまま、テスト fixture 側で **TempDir 生成直後に owner-only DACL を強制適用**することで Windows CI を緑化する設計を確定する。
-
-**責務範囲**:
-
-| 項目 | 仕様 |
-|-----|------|
-| 配置 | `crates/shikomi-cli/tests/common/windows_dacl_fixture.rs`（新規モジュール、`tests/common/mod.rs` から `pub mod windows_dacl_fixture;` で公開） |
-| コンパイル条件 | `#[cfg(target_os = "windows")]` 配下のみ。Linux / macOS では本モジュール自体がコンパイル対象外 |
-| 公開 API | 本モジュールが提供する `enforce_owner_only_dacl(path)` 関数（責務：渡されたパスの DACL を `SE_DACL_PROTECTED` 立てて owner-only に正規化）。詳細シグネチャ・エラー型は `../detailed-design/data-structures.md §テスト fixture モジュール / windows_dacl_fixture` を参照 |
-| 内部実装 | Win32 Security API `SetSecurityInfo` を `PROTECTED_DACL_SECURITY_INFORMATION \| DACL_SECURITY_INFORMATION` 指定で呼び、所有者 SID（カレントプロセストークンから取得）に `FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE` の ACE のみを持つ DACL を構築・適用する。Issue #65 の本番側検証ロジックと**完全同一の DACL 形を fixture 側で先に作る** |
-| 失敗時挙動 | `Result<(), io::Error>` を返し、呼び出し側（テストコード）は `expect("...")` で即 panic させて Fail Fast。fixture が失敗した時点でテストの前提が崩れているため、握り潰しは禁止 |
-
-**呼び出し契約**（共通セットアップ §3 への追記）:
-
-- `fresh_repo()` ヘルパーは `TempDir::new()` 直後・`SqliteVaultRepository::from_directory(dir.path())` 呼び出し**前**に Windows のみ `windows_dacl_fixture::enforce_owner_only_dacl(dir.path())` を呼ぶ
-- `#[cfg(target_os = "windows")]` 経路でのみ呼び出し、他 OS では呼び出しコード自体がコンパイル対象外（条件コンパイルで分岐）
-- 暗号化 vault fixture（`fixtures::create_encrypted_vault`）も同様に、SQLite DB を生成する直前に DACL を強制する。`create_encrypted_vault(dir)` の内部で TempDir パスを受け取った直後に `enforce_owner_only_dacl(dir)` を呼ぶ
-
-**影響を受けるテスト**（Windows runner で fixture 適用が必要な TC）:
-
-| TC-ID | 適用箇所 | 期待結果 |
-|-------|---------|---------|
-| TC-IT-012 | `add_record` × 暗号化 vault | DACL 正規化後、`Err(EncryptionUnsupported)` を返す（`InvalidPermission` で早期失敗しない） |
-| TC-IT-023 | `edit_record` × 暗号化 vault | 同上 |
-| TC-IT-033 | `remove_record` × 暗号化 vault | 同上 |
-| TC-IT-040 | 4 UseCase 横断 × 暗号化 vault | 全 4 経路で `Err(EncryptionUnsupported)` |
-| TC-IT-001〜003 / 010〜011 / 013 / 020〜022 / 024 / 030〜031 | 平文 vault 系 | DACL 正規化後、本来の期待結果通り（`InvalidPermission` で早期失敗しない） |
-| `e2e_edit` / `e2e_encrypted` 系（`e2e.md` 側で詳細） | E2E バイナリ呼び出し | 同上、E2E の `--vault-dir <tempdir>` 指定 fixture 内でも同じ DACL 強制を行う |
-
-**設計判断**:
-
-| 案 | 概要 | 採否 | 根拠 |
-|----|------|------|------|
-| A | テスト fixture 側で `SetSecurityInfo` + `PROTECTED_DACL_SECURITY_INFORMATION` を呼び owner-only DACL を強制 | **採用** | Issue #65 の owner-only DACL 検証（**本番要件**）を緩めずに、Windows runner 環境差異のみを吸収する最小変更。本番コード（`src/`）には一切触らない |
-| B | 本番側の DACL 検証から Windows tempdir パスを除外する | 不採用 | 本番側のセキュリティ検証ロジックに「テスト環境特有の例外」を持ち込むのは脅威モデル退行。Issue #65 が解決した owner-only Fail Fast 契約を侵食する |
-| C | テストを Windows でのみ `#[ignore]` する | 不採用 | Windows 経路の DACL 検証 / 暗号化 vault Fail Fast 経路がカバレッジ穴になる。CI で 3 OS matrix を維持している以上、Windows 緑化は要件 |
-| D | `tempfile::Builder::new().permissions(...)` 等の上流ライブラリ機能で DACL 設定 | 不採用 | `tempfile` クレートは Windows DACL の owner-only 強制 API を提供していない（Unix mode bits は対応するが Windows DACL は範囲外、公式 README 確認済）。自前 fixture が必要 |
-
-**Boy Scout 観点**:
-
-- 本 fixture モジュール追加に伴い、`tests/common/mod.rs` を**初めて作成**する（既存の `crates/shikomi-cli/tests/` 配下に共通モジュールがなかった、各テストファイルがバラバラに setup していた）。DRY 原則に従い、`fresh_repo()` / `fixed_time()` / `windows_dacl_fixture` を共通モジュールに集約する
-- 既存テストが各々で `TempDir::new()` していた箇所も、本機会に `common::fresh_repo()` 経由に置換する（複数 PR に分割せず、Issue #86 の修正 PR 内で一括）
-
----
-
-## 6. 暗号化 vault フィクスチャヘルパー
+## 5. 暗号化 vault フィクスチャヘルパー
 
 `tests/common/fixtures.rs` に配置:
 
@@ -158,7 +111,7 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 7. 結合テストでの時刻注入と決定性
+## 6. 結合テストでの時刻注入と決定性
 
 - UseCase は `now: OffsetDateTime` を引数で受ける（詳細設計 §public-api.md）ため、テスト側で固定時刻を注入可能
 - 例: `let now = OffsetDateTime::UNIX_EPOCH + Duration::hours(1);` を `add_record(repo, input, now)` に渡し、`list_records` 後の `RecordView` で `updated_at == now` を assert
@@ -166,7 +119,7 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 8. カバレッジ対象
+## 7. カバレッジ対象
 
 本結合テストレイヤでカバーする対応受入基準と REQ:
 
@@ -182,25 +135,28 @@ pub fn create_encrypted_vault(dir: &Path) -> Result<(), anyhow::Error>;
 
 ---
 
-## 9. 結合テストファイル構成
+## 8. 結合テストファイル構成
 
 ```
 crates/shikomi-cli/tests/
 ├── common/
-│   ├── mod.rs               # fresh_repo(), fixed_time() ヘルパー
-│   └── fixtures.rs          # create_encrypted_vault()
-├── it_usecase_list.rs       # TC-IT-001〜003
-├── it_usecase_add.rs        # TC-IT-010〜013
-├── it_usecase_edit.rs       # TC-IT-020〜024
-├── it_usecase_remove.rs     # TC-IT-030, 031, 033
-└── it_usecase_cross.rs      # TC-IT-040, 050（横断パラメタライズ）
+│   ├── mod.rs                  # fresh_repo(), fixed_time(), build_cli() ヘルパー
+│   ├── fixtures.rs             # create_encrypted_vault()
+│   └── ipc_harness.rs          # DaemonHarness（Sub-F 新規追加 — §10.2 参照）
+├── it_usecase_list.rs          # TC-IT-001〜003
+├── it_usecase_add.rs           # TC-IT-010〜013
+├── it_usecase_edit.rs          # TC-IT-020〜024
+├── it_usecase_remove.rs        # TC-IT-030, 031, 033
+├── it_usecase_cross.rs         # TC-IT-040, 050（横断パラメタライズ）
+├── vault_subcommands.rs        # TC-F-I01〜I09, I11, I12（Sub-F 新規）
+└── mode_banner_integration.rs  # TC-F-I10（Sub-F 新規）
 ```
 
-各ファイルの docstring に対応 REQ-ID と Issue 番号を書く（テスト戦略ガイド準拠）。
+各ファイルの docstring に対応 REQ-ID / Issue 番号を書く（テスト戦略ガイド準拠）。
 
 ---
 
-## 10. 想定外の挙動の取り扱い
+## 9. 想定外の挙動の取り扱い
 
 バグ発見時は `index.md §6 モック方針` の方針ではなく、**バグレポートを作成**する:
 
@@ -212,13 +168,200 @@ crates/shikomi-cli/tests/
 
 ---
 
-## 11. 出典・参考
+## 10. Sub-F vault サブコマンド 結合テスト（TC-F-I01〜I12）
 
-- Issue #65 owner-only DACL 強化（PR #71/#72）: 本 fixture が満たすべき DACL 形（`FILE_GENERIC_READ \| FILE_GENERIC_WRITE \| FILE_TRAVERSE` の owner-only ACE、`SE_DACL_PROTECTED` 立て）の根拠
-- Issue #86 (本 PR): Windows runner tempdir DACL 継承による fixture 欠落の再現と解決策
-- Microsoft Learn `SetSecurityInfo`: https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo
-- Microsoft Learn `SECURITY_INFORMATION` (`PROTECTED_DACL_SECURITY_INFORMATION`): https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-security_information
-- `tempfile` crate README（Windows DACL に対する責務外を明示）: https://github.com/Stebalien/tempfile
+> Issue #77 / #74-C。  
+> SSoT: `vault-encryption/test-design/sub-e-vek-cache-ipc.md §14.12 後続 Sub-F への引継ぎ`（`sub-f-cli-subcommands.md` は未作成のため本 §10 が代替 SSoT として機能する。`sub-f-cli-subcommands.md` 作成後はそちらを正本に切り替えること）。
+
+### 10.1 設計方針
+
+- **テスト対象**: `shikomi vault {unlock,lock,encrypt,decrypt,change-password,rotate-recovery,rekey,recovery-show}` CLI サブコマンドの CLI → IPC V2 結合経路
+- **エントリポイント**: `assert_cmd::Command::cargo_bin("shikomi")` で実バイナリ呼び出し（§1〜§4 の UseCase 直接呼び出しとは異なり、clap パースを含む）
+- **daemon 依存の取り扱い**: `tests/common/ipc_harness.rs` の `DaemonHarness`（in-process daemon + temp Unix ソケット）を使用。実プロセス spawn は TC-F-E01（E2E）に委譲
+- **vault 状態**: `TempDir` + `SqliteVaultRepository::from_directory` 実接続（§3 と同一）。暗号化 vault は §5 `create_encrypted_vault()` ヘルパー経由
+- **IPC ソケット**: `SHIKOMI_IPC_SOCKET` env var にテンポラリパスを注入し `DaemonHarness` ソケットへ向ける
+- **検証スタイル**: stdout / stderr / exit code を `assert_cmd` の `predicate` で assert（半ブラックボックス、契約検証）。vault 内部状態の確認は別 CLI コマンド（`shikomi list` 等）経由ラウンドトリップで行い、DB 直接 assert は禁止
+
+### 10.2 daemon 子プロセス spawn / IPC V2 handshake 戦略
+
+**方式**: in-process `DaemonHarness`（`tests/common/ipc_harness.rs`）
+
+```rust
+// tests/common/ipc_harness.rs 想定シグネチャ
+pub struct DaemonHarness {
+    socket_path: PathBuf,
+    _vault_dir: TempDir,
+    daemon_handle: tokio::task::JoinHandle<()>,
+}
+
+impl DaemonHarness {
+    /// vault_dir に対して in-process daemon サーバーを起動し、
+    /// _vault_dir/shikomi-test-<uuid>.sock に Unix ソケットをバインドする
+    pub async fn new(vault_dir: &Path) -> anyhow::Result<Self> { ... }
+
+    /// `SHIKOMI_IPC_SOCKET` に設定すべきパス文字列を返す
+    pub fn socket_path_str(&self) -> &str { ... }
+}
+
+impl Drop for DaemonHarness {
+    fn drop(&mut self) { self.daemon_handle.abort(); }
+}
+```
+
+**テスト共通セットアップパターン**:
+
+```rust
+// vault_subcommands.rs 内の想定
+fn cli() -> assert_cmd::Command {
+    assert_cmd::Command::cargo_bin("shikomi").unwrap()
+}
+
+async fn setup_encrypted_harness() -> (TempDir, DaemonHarness) {
+    let dir = TempDir::new().unwrap();
+    create_encrypted_vault(dir.path()).unwrap();
+    let harness = DaemonHarness::new(dir.path()).await.unwrap();
+    (dir, harness)
+}
+```
+
+**IPC V2 handshake 戦略**:
+
+1. CLI 起動時に `IpcRequest::Handshake { client_version: V2 }` を送信
+2. daemon が `IpcResponse::Handshake { server_version: V2 }` で応答
+3. 以降 V2 専用 variant（`Unlock` / `Lock` / `ChangePassword` / `RotateRecovery` / `Rekey`）を使用
+4. V1 クライアントが V2 専用 variant を送信した場合: `IpcResponse::Error(IpcErrorCode::ProtocolDowngrade)` — TC-F-I11f で検証
+
+**非 TTY passphrase 注入**:
+
+```bash
+SHIKOMI_MASTER_PASSWORD=<passphrase>  # env var 注入（非 TTY テスト用）
+# または
+echo "<passphrase>" | shikomi vault unlock --password-stdin
+```
+
+### 10.3 外部 I/O 依存マップ
+
+| 外部I/O | 方針 | characterization 状態 |
+|---|---|---|
+| **Unix ソケット（IPC）** | `DaemonHarness` が TempDir 内に temp socket を生成。テスト後 `Drop` で自動削除 | 不要（テスト専用ソケット）|
+| **shikomi-daemon プロセス** | in-process `DaemonHarness` で代替。実プロセス spawn は TC-F-E01（E2E）に委譲 | 不要（in-process）|
+| **vault.db（SQLite）** | §3 と同一: `TempDir` + `SqliteVaultRepository::from_directory` 実接続 | 不要（既存パターン）|
+| **暗号化 vault フィクスチャ** | §5 `create_encrypted_vault()` ヘルパー経由（`shikomi-infra` test-only API）| 既存（§5 参照）|
+| **passphrase 入力（TTY）** | `SHIKOMI_MASTER_PASSWORD` env var または `--password-stdin` で stdin mock | 不要（env var 注入）|
+| **時刻** | §6 と同一: `OffsetDateTime::UNIX_EPOCH + Duration::hours(N)` 注入 | 不要（既存パターン）|
+
+**未対応時のフォールバック**: `DaemonHarness` 実装（shikomi-daemon の in-process 起動 API）が未整備の場合、TC-F-I01〜I12 全件を `#[ignore]` フォールバックし、リーダーに起票を要請する。
+
+### 10.4 テストケース一覧（TC-F-I01〜I12）
+
+#### 10.4.1 vault unlock（TC-F-I01 / I03a / I03b）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I01 | 正常系 | 暗号化 vault + `DaemonHarness` 起動済み | `shikomi vault unlock`（`SHIKOMI_MASTER_PASSWORD` 経由）| exit 0、stdout に MSG-S03「vault をアンロックしました」含有、後続 `shikomi list` が exit 0 かつ `[encrypted]` バナー含有（Unlocked 状態のラウンドトリップ確認）|
+| TC-F-I03a | 正常系 + 異常系 | 暗号化 vault + `DaemonHarness` | (a) 正しい passphrase、(b) 誤り passphrase 5 回連続、(c) `MigrationError::RecoveryRequired` を返す daemon mock | (a) exit 0 + MSG-S03、(b) exit 1 + stderr に「N 秒後に再試行可能」含有（`BackoffActive`）、(c) exit 1 + stderr に「`vault unlock --recovery` も可能」含有（MSG-S09 (a)）|
+| TC-F-I03b | 正常系 | 暗号化 vault（リカバリニーモニック有り）+ `DaemonHarness` | `shikomi vault unlock --recovery`（24 語を stdin 経由）| exit 0、stdout に MSG-S03 含有、後続 `shikomi list` が exit 0（Unlocked 状態のラウンドトリップ確認）|
+
+#### 10.4.2 vault lock（TC-F-I02）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I02 | 正常系 | 暗号化 vault（Unlocked 状態）+ `DaemonHarness` | `shikomi vault lock` | exit 0、stdout に MSG-S04「vault をロックしました」+「VEK はメモリから消去」含有、後続 `shikomi list` が exit 3（Locked → `EncryptionUnsupported` 系エラー）でラウンドトリップ確認|
+
+#### 10.4.3 vault encrypt / decrypt（TC-F-I04 / I05）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I04 | 正常系 | plaintext vault（レコード 1 件以上）+ `DaemonHarness` | `shikomi vault encrypt`（`SHIKOMI_MASTER_PASSWORD` 経由）| exit 0、後続 `shikomi list` の stdout 1 行目に `[encrypted]` バナー含有（vault が暗号化状態に遷移したことをラウンドトリップ確認）|
+| TC-F-I05 | 正常系 | 暗号化 vault（Unlocked）+ `DaemonHarness` | `shikomi vault decrypt`（DECRYPT 確認入力を `--password-stdin` 経由）| exit 0、後続 `shikomi list` の stdout 1 行目に `[plaintext]` バナー含有、MSG-S14 の二段確認（大文字 `DECRYPT` 入力要求）が機能することを assert_cmd stdin で検証 |
+
+#### 10.4.4 vault change-password / rekey / rotate-recovery（TC-F-I06 / I07 / I08）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I06 | 正常系 | 暗号化 vault（Unlocked）+ `DaemonHarness` | `shikomi vault change-password`（旧・新 passphrase stdin 経由）| exit 0、stdout に MSG-S05「VEK は不変のため再 unlock は不要」+「daemon キャッシュも維持」含有、後続 `shikomi list` が再 unlock なしに exit 0（Unlocked cache 維持のラウンドトリップ確認）|
+| TC-F-I07 | 正常系 | 暗号化 vault（Unlocked、レコード N 件）+ `DaemonHarness` | `shikomi vault rekey` | exit 0、stdout に MSG-S07「N 件のレコードを新 VEK で再暗号化しました」含有（`Rekeyed { records_count: N }`）、後続 `shikomi list` で N 件が正常取得できる（旧 VEK → 新 VEK 再暗号化後のラウンドトリップ確認）|
+| TC-F-I08 | 正常系 | 暗号化 vault（Unlocked）+ リカバリニーモニック有り + `DaemonHarness` | `shikomi vault rotate-recovery`（passphrase stdin 経由）| exit 0、stdout に新 24 語ニーモニック含有 + MSG-S18 含有（アクセシビリティ案内）、旧ニーモニックで `vault unlock --recovery` が exit 1、新ニーモニックで exit 0（ラウンドトリップ確認）|
+
+#### 10.4.5 vault recovery-show 不在確認（TC-F-I09）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I09 | 異常系 | `vault rotate-recovery` 完了後（初回表示済み）の vault + `DaemonHarness` | `shikomi vault recovery-show` 2 回目実行 | exit 1、stderr に §C-37「リカバリニーモニックは初回表示のみ利用可能です」含有（所有権消費後の再表示禁止）|
+
+#### 10.4.6 mode banner 表示（TC-F-I10）
+
+> `mode_banner_integration.rs` に実装。`unit.md §5 TC-UT-050〜053`（`render_list` pure 関数テスト）との棲み分けは §10.5 参照。
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I10a | 正常系 | plaintext vault（`DaemonHarness` 不要）| `shikomi list` | stdout 1 行目に `[plaintext]` バナー含有 |
+| TC-F-I10b | 正常系 | 暗号化 vault（Unlocked）+ `DaemonHarness` | `shikomi list` | stdout 1 行目に `[encrypted]` バナー含有 |
+| TC-F-I10c | 異常系 | 暗号化 vault（Locked）+ `DaemonHarness` | `shikomi list` | exit 3、stderr に MSG-S16「vault はロック中」+「`shikomi vault unlock` でアンロック」含有 |
+| TC-F-I10d | 正常系（NO_COLOR）| plaintext vault + `NO_COLOR=1` env var | `shikomi list` | `[plaintext]` バナー含有かつ ANSI エスケープシーケンス（`\x1b[` 等）不含 |
+
+#### 10.4.7 exit code 整合（TC-F-I11）
+
+| TC-ID | 種別 | 操作 | 期待 exit code |
+|-------|------|------|--------------|
+| TC-F-I11a | 正常系 | `shikomi vault unlock`（正しい passphrase）| 0 |
+| TC-F-I11b | 異常系 | `shikomi vault unlock`（誤り passphrase、BackoffActive 未発動）| 1（ユーザー入力エラー）|
+| TC-F-I11c | 異常系 | `shikomi vault unlock`（BackoffActive 発動後 N 秒待ち中）| 1 |
+| TC-F-I11d | 異常系 | plaintext vault 状態で `shikomi vault encrypt` 実施済みの後に再度 `shikomi vault encrypt` | 1（`AlreadyEncrypted`）|
+| TC-F-I11e | 異常系 | `shikomi vault decrypt`（確認入力 `DECRYPT` を誤って入力）| 1 |
+| TC-F-I11f | 異常系 | daemon 未起動状態（`SHIKOMI_IPC_SOCKET` が存在しないパス）で `shikomi vault unlock` | 2（システムエラー）|
+
+#### 10.4.8 env allowlist 結合経路（TC-F-I12）
+
+| TC-ID | 種別 | 前提条件 | 操作 | 期待結果 |
+|-------|------|---------|------|---------|
+| TC-F-I12a | 正常系 | `SHIKOMI_VAULT_DIR` + `SHIKOMI_IPC_SOCKET` を `DaemonHarness` のパスに設定 | `shikomi vault unlock` | env var が優先され、指定 vault dir / socket path を使用。exit 0 |
+| TC-F-I12b | 異常系 | `SHIKOMI_VAULT_DIR` が存在しないパス | `shikomi vault unlock` | exit 2 + stderr にパス不在エラー含有（`VaultNotInitialized` or `Io` 系）|
+| TC-F-I12c | 正常系 | `SHIKOMI_MASTER_PASSWORD` 設定（非 TTY テスト用）| `shikomi vault unlock` | passphrase が env var から読み込まれ stdin prompt スキップ。exit 0 |
+
+### 10.5 unit.md §5 との棲み分け表
+
+`unit.md §5（TC-UT-050〜053）` は `presenter::list::render_list` の **pure function ユニットテスト**（副作用なし、入力 DTO → 文字列変換）。本 §10 は CLI バイナリ全体の結合経路テスト。
+
+| 検証観点 | unit.md §5（TC-UT-050〜053）| integration.md §10（TC-F-I10）|
+|---------|---------------------------|-------------------------------|
+| テスト対象 | `presenter::list::render_list(records, mode: VaultMode)` | `shikomi list` CLI バイナリ（assert_cmd）|
+| バナー文字列生成ロジック | ✅ `[plaintext]` / `[encrypted]` / `[locked]` 文字列の構築を詳細検証 | ❌ 生成ロジックには立ち入らない（出力文字列の含有のみ確認）|
+| 実際の CLI 出力 | ❌ CLI を経由しない（pure 関数直呼び出し）| ✅ stdout / stderr / exit code を assert |
+| vault 状態の実物 | ❌ 入力 DTO をテスト側で直接構築 | ✅ `TempDir` + 実 vault ファイル |
+| IPC 経路 | ❌ IPC なし | ✅ `DaemonHarness` 経由で実 IPC V2（encrypted / locked 状態）|
+| NO_COLOR 対応 | ✅ 入力フラグで生成ロジック検証 | ✅ env var `NO_COLOR=1` で CLI 出力検証（重複は意図的）|
+
+**棲み分け原則**: unit.md §5 は「バナー文字列が正しく構築されるか」を検証し、integration.md §10 は「CLI から IPC までの結合経路でバナーが正しく表示されるか」を検証する。両層とも必要で、どちらか一方では担保できない。
+
+### 10.6 `vault_subcommands.rs` / `mode_banner_integration.rs` 責務分割
+
+| テストファイル | TC | 責務 |
+|-------------|-----|------|
+| `tests/vault_subcommands.rs` | TC-F-I01, I02, I03a, I03b, I04〜I09, I11, I12 | vault 管理サブコマンド（unlock / lock / encrypt / decrypt / change-password / rotate-recovery / rekey / recovery-show）の CLI → IPC V2 結合経路。`DaemonHarness` を使用 |
+| `tests/mode_banner_integration.rs` | TC-F-I10a〜d | `shikomi list` 等の既存コマンド出力に mode banner（`[plaintext]` / `[encrypted]` / `[locked]`）が正しく含まれることを検証。plaintext vault は `DaemonHarness` 不要、encrypted / locked 状態は `DaemonHarness` 使用 |
+
+**共通インフラ**（`tests/common/` に集約）:
+
+| ファイル | 提供するもの |
+|---------|------------|
+| `mod.rs` | `fresh_repo()`, `fixed_time()`, `build_cli()` |
+| `fixtures.rs` | `create_encrypted_vault()` — §5 既存 |
+| `ipc_harness.rs` | `DaemonHarness` — Sub-F 新規追加 |
+
+### 10.7 カバレッジ対象（Sub-F）
+
+| 受入基準 / 契約 | カバー TC |
+|--------------|----------|
+| Sub-E C-22〜C-28 の CLI 側 IPC V2 経路検証 | TC-F-I01, I02, I03a, I03b |
+| REQ-S16 mode banner（`[plaintext]` / `[encrypted]` / `[locked]`）| TC-F-I10a〜d |
+| Sub-E EC-3 ChangePassword VEK 不変 + daemon cache 維持 | TC-F-I06 |
+| Sub-E EC-4 RotateRecovery 初回 1 度のみ + §C-37 所有権消費 | TC-F-I08, I09 |
+| Sub-E EC-5 Rekey 全レコード再暗号化 + records_count 検証 | TC-F-I07 |
+| `vault encrypt` plaintext → encrypted 遷移 | TC-F-I04 |
+| `vault decrypt` encrypted → plaintext 遷移 + 二段確認 | TC-F-I05 |
+| REQ-CLI-006 exit code 契約（vault サブコマンド範囲）| TC-F-I11a〜f |
+| REQ-CLI-005 env var 単一化（IPC ソケット + vault dir）| TC-F-I12a〜c |
 
 ---
 
