@@ -191,13 +191,20 @@ tests/helpers/
 // tests/helpers/daemon_spawn.rs 想定シグネチャ（Sub-F 工程3 で銀時実装）
 pub struct DaemonSpawn {
     vault_dir: TempDir,          // Drop で tempdir 自動削除
-    socket_path: PathBuf,
+    socket_path: PathBuf,        // socket 親ディレクトリは必ず 0700 で作成
     process: std::process::Child,
 }
 
 impl DaemonSpawn {
     /// vault_dir を TempDir に作成し、shikomi-daemon を実子プロセスとして起動
     /// env: SHIKOMI_VAULT_DIR=<vault_dir> + SHIKOMI_DAEMON_* C-40 allowlist
+    ///
+    /// **セキュリティ契約（daemon-ipc/security.md §シングルインスタンス準拠）**:
+    /// 1. socket 親ディレクトリを `std::fs::set_permissions(dir, PermissionsExt::from_mode(0o700))`
+    ///    で **0700** に強制設定してから daemon を起動する
+    /// 2. daemon 起動後、`std::fs::metadata(socket_parent).mode() & 0o777 == 0o700` を
+    ///    `stat` で検証。不一致なら `anyhow::bail!("socket parent dir is not 0700")` で fail fast
+    /// 3. 上記 2 ステップが失敗した場合はテスト全体を error（panic ではなく `?` 伝播）にする
     pub fn new(vault_dir: &Path) -> anyhow::Result<Self> { ... }
 
     /// C-40 allowlist 経由で idle 短縮を有効化（debug build 限定）
@@ -237,7 +244,7 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 
 | 外部I/O | 方針 | characterization 状態 |
 |---|---|---|
-| **`shikomi-daemon` プロセス** | `DaemonSpawn`（`tests/helpers/daemon_spawn.rs`）経由で実子プロセス起動。`SHIKOMI_VAULT_DIR` env + tempdir socket 自動設定。`Drop` で `kill()` | **既存資産拡張**（Sub-F 工程3 で銀時実装）|
+| **`shikomi-daemon` プロセス** | `DaemonSpawn`（`tests/helpers/daemon_spawn.rs`）経由で実子プロセス起動。`SHIKOMI_VAULT_DIR` env + **tempdir socket 親ディレクトリを `0700` 強制（起動前 chmod + 起動後 stat 検証 fail fast）** + `Drop` で `kill()` | **既存資産拡張**（Sub-F 工程3 で銀時実装）|
 | **TTY（password / mnemonic / DECRYPT 確認）** | `expectrl`（Unix 限定 dev-dep、Sub-D `e2e_daemon_phase15_pty.rs` で既導入）で PTY 擬似制御。stdin パイプ拒否確認（TC-F-I12）は `assert_cmd::Command::write_stdin` で非 TTY 経路 | **既存資産再利用** |
 | **vault.db（SQLite）** | §3 と同一: `TempDir` + `create_encrypted_vault()` ヘルパー経由 | 不要（既存パターン）|
 | **env seam（C-40 allowlist）** | `DaemonSpawn::with_idle_threshold` / `with_force_relock_fail` 経由で `#[cfg(debug_assertions)]` 限定 env 注入 | 不要（local env）|
@@ -245,6 +252,8 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 **`#[ignore]` ゲート管理**: TC-F-I07c は `SHIKOMI_DAEMON_FORCE_RELOCK_FAIL=1` が `#[cfg(debug_assertions)]` 限定のため、`#[cfg_attr(not(debug_assertions), ignore = "requires debug build")]` でゲート。**無声 skip 禁止** —— CI ログに `IGNORED: requires debug build` を明示して監査経路に含める。
 
 ### 10.4 テストケース一覧（TC-F-I01〜I12 / SSoT §15.6 1:1 対応）
+
+> **TC-F-I 全件の共通前提条件（セキュリティ契約）**: `DaemonSpawn::new()` は socket 親ディレクトリを `0700` で作成し、起動後 `stat` で mode を検証して fail fast する（`daemon-ipc/security.md §シングルインスタンス準拠`）。この検証が通過しないとテスト自体が error になる設計であり、各テストケースは「socket 親 `0700` 強制が有効」な状態でのみ実行される。
 
 #### 10.4.1 vault encrypt / decrypt（TC-F-I01 / I02 / I02b）
 
