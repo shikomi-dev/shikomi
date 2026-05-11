@@ -5,7 +5,7 @@
 mod common;
 
 use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest, IpcResponse};
-use shikomi_gui::ipc_client::{error::GUIError, exec_with_client, AppState, GuiIpcClient};
+use shikomi_gui::ipc_client::{error::GUIError, round_trip_checked, AppState, GuiIpcClient};
 use tokio::sync::Mutex;
 
 // ---------------------------------------------------------------------------
@@ -34,8 +34,7 @@ async fn it01_connect_no_socket_returns_daemon_not_running() {
 #[cfg(unix)]
 #[tokio::test]
 async fn it02_connect_v2_handshake_success() {
-    let daemon =
-        common::mock_daemon::MockDaemon::spawn(IpcResponse::Decrypted).await;
+    let daemon = common::mock_daemon::MockDaemon::spawn(IpcResponse::Decrypted).await;
     let result = GuiIpcClient::connect(&daemon.socket_path).await;
     assert!(
         result.is_ok(),
@@ -68,7 +67,7 @@ async fn it03_connect_version_mismatch_returns_error() {
 // ---------------------------------------------------------------------------
 
 /// MockDaemon が Handshake 後に接続を強制切断した場合、`ConnectionFailed` が返り
-/// `exec_with_client` が `AppState` を `None` にリセットする（REQ-IPC-12 §5）。
+/// `round_trip_checked` が `AppState` を `None` にリセットする（REQ-IPC-12 §5）。
 #[cfg(unix)]
 #[tokio::test]
 async fn it18_disconnect_resets_app_state_to_none() {
@@ -81,12 +80,7 @@ async fn it18_disconnect_resets_app_state_to_none() {
     let app_state: AppState = Mutex::new(Some(client));
 
     // round_trip で切断 → ConnectionFailed
-    let result = exec_with_client(&app_state, |client| async move {
-        client
-            .round_trip(&IpcRequest::ListRecords)
-            .await
-    })
-    .await;
+    let result = round_trip_checked(&app_state, &IpcRequest::ListRecords).await;
 
     assert!(
         matches!(result, Err(GUIError::ConnectionFailed(_))),

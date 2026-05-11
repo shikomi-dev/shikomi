@@ -23,6 +23,7 @@ use ipc_client::{
     AppState, GuiIpcClient,
 };
 use shikomi_infra::ipc::IpcEndpoint;
+use tauri::Manager as _;
 
 /// Tauri アプリケーションを起動する。
 ///
@@ -47,7 +48,6 @@ pub fn run() -> tauri::Result<()> {
                     }
                     Ok(socket_path) => match GuiIpcClient::connect(&socket_path).await {
                         Ok(client) => {
-                            use tauri::Manager as _;
                             let state = app_handle.state::<AppState>();
                             *state.lock().await = Some(client);
                             tracing::info!("connected to daemon at {}", socket_path.display());

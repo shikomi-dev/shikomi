@@ -129,8 +129,7 @@ async fn it07_add_entry_success() {
     let record_id = new_valid_record_id();
     let expected_id = record_id.to_string();
 
-    let daemon =
-        common::mock_daemon::MockDaemon::spawn(IpcResponse::Added { id: record_id }).await;
+    let daemon = common::mock_daemon::MockDaemon::spawn(IpcResponse::Added { id: record_id }).await;
     let app = build_connected_app(&daemon.socket_path).await;
     let state = app.state::<AppState>();
     let result = add_entry(
@@ -154,12 +153,11 @@ async fn it07_add_entry_success() {
 #[cfg(unix)]
 #[tokio::test]
 async fn it08_add_entry_hotkey_conflict() {
-    let daemon = common::mock_daemon::MockDaemon::spawn(IpcResponse::Error(
-        IpcErrorCode::HotkeyConflict {
+    let daemon =
+        common::mock_daemon::MockDaemon::spawn(IpcResponse::Error(IpcErrorCode::HotkeyConflict {
             reason: "hotkey conflict".to_owned(),
-        },
-    ))
-    .await;
+        }))
+        .await;
     let app = build_connected_app(&daemon.socket_path).await;
     let state = app.state::<AppState>();
     let result = add_entry(
@@ -172,7 +170,10 @@ async fn it08_add_entry_hotkey_conflict() {
     .await;
 
     assert!(
-        matches!(result, Err(GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. }))),
+        matches!(
+            result,
+            Err(GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. }))
+        ),
         "Expected Ipc(HotkeyConflict), got: {result:?}"
     );
 }
@@ -208,7 +209,14 @@ async fn it09_update_entry_all_none_sends_ipc_b_plan() {
         .await
         .expect("MockDaemon should have received a request");
     assert!(
-        matches!(received, IpcRequest::EditRecord { label: None, value: None, .. }),
+        matches!(
+            received,
+            IpcRequest::EditRecord {
+                label: None,
+                value: None,
+                ..
+            }
+        ),
         "EditRecord with label=None, value=None should be sent: {received:?}"
     );
 }
@@ -256,7 +264,10 @@ async fn it11_assign_hotkey_success_and_verify_request() {
     assert_eq!(output.id, expected_id);
 
     // daemon が受信したリクエストの内容を検証（REQ-IPC-05: hotkey=Some("Ctrl+Alt+3"), clear_hotkey=false）
-    let received = daemon.received_request.await.expect("should receive request");
+    let received = daemon
+        .received_request
+        .await
+        .expect("should receive request");
     assert!(
         matches!(
             &received,
@@ -280,18 +291,20 @@ async fn it12_assign_hotkey_conflict() {
     let record_id = new_valid_record_id();
     let uuid_str = record_id.to_string();
 
-    let daemon = common::mock_daemon::MockDaemon::spawn(IpcResponse::Error(
-        IpcErrorCode::HotkeyConflict {
+    let daemon =
+        common::mock_daemon::MockDaemon::spawn(IpcResponse::Error(IpcErrorCode::HotkeyConflict {
             reason: "hotkey conflict".to_owned(),
-        },
-    ))
-    .await;
+        }))
+        .await;
     let app = build_connected_app(&daemon.socket_path).await;
     let state = app.state::<AppState>();
     let result = assign_hotkey(state, uuid_str, "Ctrl+Alt+5".to_owned()).await;
 
     assert!(
-        matches!(result, Err(GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. }))),
+        matches!(
+            result,
+            Err(GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. }))
+        ),
         "Expected Ipc(HotkeyConflict), got: {result:?}"
     );
 }
@@ -317,9 +330,18 @@ async fn it13_remove_hotkey_success_and_verify_clear_hotkey() {
     assert_eq!(output.id, expected_id);
 
     // daemon 送信リクエストの clear_hotkey=true を確認（REQ-IPC-06）
-    let received = daemon.received_request.await.expect("should receive request");
+    let received = daemon
+        .received_request
+        .await
+        .expect("should receive request");
     assert!(
-        matches!(received, IpcRequest::EditRecord { clear_hotkey: true, .. }),
+        matches!(
+            received,
+            IpcRequest::EditRecord {
+                clear_hotkey: true,
+                ..
+            }
+        ),
         "EditRecord must have clear_hotkey=true: {received:?}"
     );
 }
@@ -421,7 +443,10 @@ async fn it17_unlock_vault_success_and_verify_recovery_none() {
     result.expect("unlock_vault should succeed");
 
     // daemon 送信リクエストの recovery=None を確認（REQ-IPC-10: password 経路のみ）
-    let received = daemon.received_request.await.expect("should receive request");
+    let received = daemon
+        .received_request
+        .await
+        .expect("should receive request");
     assert!(
         matches!(received, IpcRequest::Unlock { recovery: None, .. }),
         "Unlock request must have recovery=None: {received:?}"

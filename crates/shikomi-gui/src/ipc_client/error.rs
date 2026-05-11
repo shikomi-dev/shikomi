@@ -82,9 +82,7 @@ impl Serialize for GUIError {
     {
         let mut map = serializer.serialize_map(Some(2))?;
         let (kind, message): (&str, String) = match self {
-            Self::DaemonNotRunning => {
-                ("daemon_not_running", "daemon is not running".to_owned())
-            }
+            Self::DaemonNotRunning => ("daemon_not_running", "daemon is not running".to_owned()),
             Self::ConnectionFailed(msg) => ("connection_failed", msg.clone()),
             Self::ProtocolVersionMismatch { server, client } => (
                 "protocol_version_mismatch",
@@ -95,9 +93,7 @@ impl Serialize for GUIError {
             Self::Decode(msg) => ("decode_error", msg.clone()),
             Self::UnexpectedResponse(msg) => ("unexpected_response", msg.clone()),
             Self::InvalidInput(msg) => ("invalid_input", msg.clone()),
-            Self::NotConnected => {
-                ("not_connected", "not connected to daemon".to_owned())
-            }
+            Self::NotConnected => ("not_connected", "not connected to daemon".to_owned()),
         };
         map.serialize_entry("kind", kind)?;
         map.serialize_entry("message", &message)?;
@@ -138,8 +134,14 @@ mod tests {
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], "protocol_version_mismatch");
         let msg = v["message"].as_str().unwrap();
-        assert!(msg.contains("v1"), "message should contain server version: {msg}");
-        assert!(msg.contains("v2"), "message should contain client version: {msg}");
+        assert!(
+            msg.contains("v1"),
+            "message should contain server version: {msg}"
+        );
+        assert!(
+            msg.contains("v2"),
+            "message should contain client version: {msg}"
+        );
     }
 
     // TC-GUI-IPC-UT13
@@ -150,7 +152,10 @@ mod tests {
         assert_eq!(v["kind"], "ipc_error");
         let msg = v["message"].as_str().unwrap();
         let expected = IpcErrorCode::VaultLocked.to_string();
-        assert_eq!(msg, expected, "message must match IpcErrorCode::VaultLocked Display");
+        assert_eq!(
+            msg, expected,
+            "message must match IpcErrorCode::VaultLocked Display"
+        );
     }
 
     // TC-GUI-IPC-UT14

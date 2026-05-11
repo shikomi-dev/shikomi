@@ -16,7 +16,7 @@ use shikomi_core::SecretBytes;
 use tauri::State;
 
 use crate::ipc_client::error::GUIError;
-use crate::ipc_client::{exec_with_client, AppState};
+use crate::ipc_client::{round_trip_checked, AppState};
 
 // ---------------------------------------------------------------------------
 // 出力型
@@ -52,21 +52,18 @@ pub struct EmptyOutput {}
 /// `GUIError::NotConnected` / `GUIError::ConnectionFailed` / `GUIError::Decode` 等。
 #[tauri::command]
 pub async fn get_vault_status(state: State<'_, AppState>) -> Result<VaultStatusOutput, GUIError> {
-    exec_with_client(&state, |client| async move {
-        match client.round_trip(&IpcRequest::ListRecords).await? {
-            IpcResponse::Records {
-                protection_mode, ..
-            } => Ok(VaultStatusOutput {
-                vault_status: protection_mode,
-            }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Records, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    match round_trip_checked(&state, &IpcRequest::ListRecords).await? {
+        IpcResponse::Records {
+            protection_mode, ..
+        } => Ok(VaultStatusOutput {
+            vault_status: protection_mode,
+        }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Records, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,28 +92,25 @@ pub async fn encrypt_vault(
     // 機密値: String → SerializableSecretBytes に即変換してドロップ（§4.1）
     let secret = SerializableSecretBytes::new(SecretBytes::from_vec(master_password.into_bytes()));
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::Encrypt {
-            master_password: secret,
-            accept_limits: false,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Encrypted { disclosure } => {
-                // SerializableSecretBytes → String に変換（R1-GUI-11）
-                let words: Vec<String> = disclosure
-                    .into_iter()
-                    .map(|w| w.to_lossy_string_for_handler())
-                    .collect();
-                Ok(EncryptOutput { disclosure: words })
-            }
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Encrypted, got {}",
-                other.variant_name()
-            ))),
+    let request = IpcRequest::Encrypt {
+        master_password: secret,
+        accept_limits: false,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Encrypted { disclosure } => {
+            // SerializableSecretBytes → String に変換（R1-GUI-11）
+            let words: Vec<String> = disclosure
+                .into_iter()
+                .map(|w| w.to_lossy_string_for_handler())
+                .collect();
+            Ok(EncryptOutput { disclosure: words })
         }
-    })
-    .await
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Encrypted, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,21 +150,18 @@ pub async fn decrypt_vault(
     // 機密値: String → SerializableSecretBytes に即変換してドロップ（§4.1）
     let secret = SerializableSecretBytes::new(SecretBytes::from_vec(master_password.into_bytes()));
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::Decrypt {
-            master_password: secret,
-            confirmed: true,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Decrypted => Ok(EmptyOutput {}),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Decrypted, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::Decrypt {
+        master_password: secret,
+        confirmed: true,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Decrypted => Ok(EmptyOutput {}),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Decrypted, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,21 +194,18 @@ pub async fn unlock_vault(
     // 機密値: String → SerializableSecretBytes に即変換してドロップ（§4.1）
     let secret = SerializableSecretBytes::new(SecretBytes::from_vec(master_password.into_bytes()));
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::Unlock {
-            master_password: secret,
-            recovery: None,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Unlocked => Ok(EmptyOutput {}),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Unlocked, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::Unlock {
+        master_password: secret,
+        recovery: None,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Unlocked => Ok(EmptyOutput {}),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Unlocked, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 #[cfg(test)]

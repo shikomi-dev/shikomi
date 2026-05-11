@@ -19,7 +19,7 @@ use tauri::State;
 use time::OffsetDateTime;
 
 use crate::ipc_client::error::GUIError;
-use crate::ipc_client::{exec_with_client, AppState};
+use crate::ipc_client::{round_trip_checked, AppState};
 
 // ---------------------------------------------------------------------------
 // 出力型
@@ -51,23 +51,20 @@ pub struct EntryIdOutput {
 /// `GUIError::NotConnected` / `GUIError::ConnectionFailed` / `GUIError::Decode` 等。
 #[tauri::command]
 pub async fn list_entries(state: State<'_, AppState>) -> Result<ListEntriesOutput, GUIError> {
-    exec_with_client(&state, |client| async move {
-        match client.round_trip(&IpcRequest::ListRecords).await? {
-            IpcResponse::Records {
-                records,
-                protection_mode,
-            } => Ok(ListEntriesOutput {
-                entries: records,
-                vault_status: protection_mode,
-            }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Records, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    match round_trip_checked(&state, &IpcRequest::ListRecords).await? {
+        IpcResponse::Records {
+            records,
+            protection_mode,
+        } => Ok(ListEntriesOutput {
+            entries: records,
+            vault_status: protection_mode,
+        }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Records, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -107,24 +104,21 @@ pub async fn add_entry(
 
     let now = OffsetDateTime::now_utc();
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::AddRecord {
-            kind,
-            label: record_label,
-            value: secret_value,
-            now,
-            hotkey,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Added { id } => Ok(EntryIdOutput { id: id.to_string() }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Added, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::AddRecord {
+        kind,
+        label: record_label,
+        value: secret_value,
+        now,
+        hotkey,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Added { id } => Ok(EntryIdOutput { id: id.to_string() }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Added, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,25 +154,22 @@ pub async fn update_entry(
 
     let now = OffsetDateTime::now_utc();
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::EditRecord {
-            id: record_id,
-            label: record_label,
-            value: secret_value,
-            now,
-            hotkey: None,
-            clear_hotkey: false,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Edited { id } => Ok(EntryIdOutput { id: id.to_string() }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Edited, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::EditRecord {
+        id: record_id,
+        label: record_label,
+        value: secret_value,
+        now,
+        hotkey: None,
+        clear_hotkey: false,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Edited { id } => Ok(EntryIdOutput { id: id.to_string() }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Edited, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,18 +188,15 @@ pub async fn delete_entry(
     let record_id = RecordId::try_from_str(&id)
         .map_err(|_| GUIError::InvalidInput("invalid record id format".to_owned()))?;
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::RemoveRecord { id: record_id };
-        match client.round_trip(&request).await? {
-            IpcResponse::Removed { id } => Ok(EntryIdOutput { id: id.to_string() }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Removed, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::RemoveRecord { id: record_id };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Removed { id } => Ok(EntryIdOutput { id: id.to_string() }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Removed, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -230,7 +218,14 @@ mod tests {
     async fn ut01_add_entry_empty_label_returns_invalid_input() {
         let app = build_none_app();
         let state = app.state::<AppState>();
-        let result = add_entry(state, RecordKind::Text, String::new(), "hello".to_owned(), None).await;
+        let result = add_entry(
+            state,
+            RecordKind::Text,
+            String::new(),
+            "hello".to_owned(),
+            None,
+        )
+        .await;
         assert!(
             matches!(&result, Err(GUIError::InvalidInput(m)) if m == "label must not be empty"),
             "Expected InvalidInput(label must not be empty), got: {result:?}"
@@ -242,7 +237,14 @@ mod tests {
     async fn ut02_add_entry_empty_value_returns_invalid_input() {
         let app = build_none_app();
         let state = app.state::<AppState>();
-        let result = add_entry(state, RecordKind::Text, "my-label".to_owned(), String::new(), None).await;
+        let result = add_entry(
+            state,
+            RecordKind::Text,
+            "my-label".to_owned(),
+            String::new(),
+            None,
+        )
+        .await;
         assert!(
             matches!(&result, Err(GUIError::InvalidInput(m)) if m == "value must not be empty"),
             "Expected InvalidInput(value must not be empty), got: {result:?}"

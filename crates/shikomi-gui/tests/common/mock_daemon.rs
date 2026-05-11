@@ -75,7 +75,8 @@ impl MockDaemon {
                 Some(Ok(b)) => b,
                 _ => return,
             };
-            let _: IpcRequest = rmp_serde::from_slice(&raw).expect("handshake deserialization failed");
+            let _: IpcRequest =
+                rmp_serde::from_slice(&raw).expect("handshake deserialization failed");
 
             // Handshake レスポンス送信
             let hs = IpcResponse::Handshake { server_version };

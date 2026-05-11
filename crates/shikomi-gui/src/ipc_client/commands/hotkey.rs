@@ -15,7 +15,7 @@ use tauri::State;
 use time::OffsetDateTime;
 
 use crate::ipc_client::error::GUIError;
-use crate::ipc_client::{exec_with_client, AppState};
+use crate::ipc_client::{round_trip_checked, AppState};
 
 // ---------------------------------------------------------------------------
 // 出力型
@@ -56,25 +56,22 @@ pub async fn assign_hotkey(
 
     let now = OffsetDateTime::now_utc();
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::EditRecord {
-            id: record_id,
-            label: None,
-            value: None,
-            now,
-            hotkey: Some(combo),
-            clear_hotkey: false,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Edited { id } => Ok(HotkeyOutput { id: id.to_string() }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Edited, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::EditRecord {
+        id: record_id,
+        label: None,
+        value: None,
+        now,
+        hotkey: Some(combo),
+        clear_hotkey: false,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Edited { id } => Ok(HotkeyOutput { id: id.to_string() }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Edited, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,25 +93,22 @@ pub async fn remove_hotkey(
 
     let now = OffsetDateTime::now_utc();
 
-    exec_with_client(&state, move |client| async move {
-        let request = IpcRequest::EditRecord {
-            id: record_id,
-            label: None,
-            value: None,
-            now,
-            hotkey: None,
-            clear_hotkey: true,
-        };
-        match client.round_trip(&request).await? {
-            IpcResponse::Edited { id } => Ok(HotkeyOutput { id: id.to_string() }),
-            IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
-            other => Err(GUIError::UnexpectedResponse(format!(
-                "expected Edited, got {}",
-                other.variant_name()
-            ))),
-        }
-    })
-    .await
+    let request = IpcRequest::EditRecord {
+        id: record_id,
+        label: None,
+        value: None,
+        now,
+        hotkey: None,
+        clear_hotkey: true,
+    };
+    match round_trip_checked(&state, &request).await? {
+        IpcResponse::Edited { id } => Ok(HotkeyOutput { id: id.to_string() }),
+        IpcResponse::Error(code) => Err(GUIError::Ipc(code)),
+        other => Err(GUIError::UnexpectedResponse(format!(
+            "expected Edited, got {}",
+            other.variant_name()
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------

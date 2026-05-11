@@ -20,8 +20,8 @@ use self::error::GUIError;
 // Re-exports and sub-modules
 // ---------------------------------------------------------------------------
 
-pub mod error;
 pub mod commands;
+pub mod error;
 
 // ---------------------------------------------------------------------------
 // プラットフォーム別 Stream 型（cfg）
@@ -98,12 +98,10 @@ impl GuiIpcClient {
             {
                 Ok(Self { framed })
             }
-            IpcResponse::Handshake { server_version } => {
-                Err(GUIError::ProtocolVersionMismatch {
-                    server: server_version.to_string(),
-                    client: IpcProtocolVersion::current().to_string(),
-                })
-            }
+            IpcResponse::Handshake { server_version } => Err(GUIError::ProtocolVersionMismatch {
+                server: server_version.to_string(),
+                client: IpcProtocolVersion::current().to_string(),
+            }),
             IpcResponse::ProtocolVersionMismatch { server, client } => {
                 Err(GUIError::ProtocolVersionMismatch {
                     server: server.to_string(),
@@ -183,21 +181,23 @@ fn codec() -> LengthDelimitedCodec {
 // AppState 操作ヘルパ
 // ---------------------------------------------------------------------------
 
-/// AppState から `GuiIpcClient` を取り出して操作し、結果を返す。
+/// AppState 経由で 1 往復 IPC を実行し、生 `IpcResponse` を返す。
 ///
-/// - `None` の場合は `GUIError::NotConnected` を即返却
-/// - `ConnectionFailed` の場合は AppState を `None` にリセット（Fail Fast）
+/// - AppState が `None` の場合は `GUIError::NotConnected` を即返却
+/// - `ConnectionFailed` の場合は AppState を `None` にリセットして返す（Fail Fast §5）
+///
+/// クロージャ版 `exec_with_client` と異なり `&IpcRequest` を受け取ることで
+/// ライフタイム推論問題を回避し、呼び出しコードをシンプルに保つ。
 ///
 /// 設計根拠: docs/features/shikomi-gui/ipc-client/detailed-design.md §5
-pub async fn exec_with_client<F, Fut, T>(state: &AppState, f: F) -> Result<T, GUIError>
-where
-    F: FnOnce(&mut GuiIpcClient) -> Fut,
-    Fut: std::future::Future<Output = Result<T, GUIError>>,
-{
+pub async fn round_trip_checked(
+    state: &AppState,
+    request: &IpcRequest,
+) -> Result<IpcResponse, GUIError> {
     let mut guard = state.lock().await;
     let result = match guard.as_mut() {
         None => return Err(GUIError::NotConnected),
-        Some(client) => f(client).await,
+        Some(client) => client.round_trip(request).await,
     };
     if matches!(result, Err(GUIError::ConnectionFailed(_))) {
         *guard = None;
