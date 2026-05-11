@@ -71,7 +71,7 @@ sequenceDiagram
 |------|------------|--------|------|
 | 1 | `"open_window"` | 「ウィンドウを開く」 | `MenuItem` |
 | 2 | — | （セパレータ） | `PredefinedMenuItem::separator` |
-| 3 | `"restart_daemon"` | 「daemon を再起動する」 | `MenuItem` |
+| 3 | `"restart_daemon"` | 「shikomi のサービスを再起動する」 | `MenuItem` |
 | 4 | — | （セパレータ） | `PredefinedMenuItem::separator` |
 | 5 | `"quit"` | 「終了」 | `MenuItem` |
 
@@ -114,7 +114,7 @@ sequenceDiagram
     Note over App: 再接続成功で AppState = Some(...)
 ```
 
-**`tauri-plugin-shell` スコープ許可**: `tauri.conf.json` の `plugins.shell.scope` に `{ "name": "shikomi", "cmd": "shikomi", "args": [{ "validator": "start|stop" }] }` を追加する。CSP 違反を起こさない最小スコープに限定する（R1-GUI-17）。
+**`tauri-plugin-shell` スコープ許可**: `tauri.conf.json` の `plugins.shell.scope` に `{ "name": "shikomi", "cmd": "shikomi", "args": [{ "validator": "^start$" }] }` を追加する。`validator` は完全一致アンカー（`^start$`）を使用し部分一致・コマンドインジェクションを防止する。daemon 再起動で使用するコマンドは `start` のみのため `stop` は scope に含めない（最小権限）。セキュリティ根拠の詳細は `basic-design.md §6.1` を参照。
 
 #### `"quit"` ハンドラ
 
@@ -123,7 +123,7 @@ sequenceDiagram
 
 ---
 
-## 4. countdown タスク詳細（REQ-TRAY-04, 05, 06）
+## 4. countdown タスク詳細（REQ-TRAY-04, 05）
 
 ### 4.1 ポーリングループ
 
@@ -133,8 +133,6 @@ sequenceDiagram
     participant Cmd as get_clipboard_countdown Command
     participant Daemon as shikomi-daemon
     participant Tray as TrayIcon
-    participant SolidJS as SolidJS (Tauri event)
-
     loop 1 秒ごと
         Task->>Task: tokio::time::sleep(1s)
         Task->>Cmd: AppState.lock() → IpcRequest::GetClipboardStatus
@@ -144,10 +142,8 @@ sequenceDiagram
 
         alt remaining_secs == Some(n), n > 0
             Task->>Tray: set_tooltip("shikomi — クリップボードを自動消去まで {n} 秒")
-            Task->>SolidJS: app.emit("clipboard_clear_countdown", { remaining_secs: n })
         else remaining_secs == None または 0
             Task->>Tray: set_tooltip("shikomi")
-            Task->>SolidJS: app.emit("clipboard_clear_countdown", { remaining_secs: null })
         end
     end
 ```
@@ -157,7 +153,7 @@ sequenceDiagram
 | ケース | 処理 |
 |--------|------|
 | `AppState` が `None`（daemon 未接続） | `ClipboardCountdownResult { remaining_secs: None }` とみなす（エラー伝搬なし）|
-| IPC 通信エラー | `tracing::debug!` でログのみ。ツールチップ・SolidJS イベントは前回状態を維持（polling failure = 非アクティブ扱いは過剰 reset のリスクがある）|
+| IPC 通信エラー | `tracing::debug!` でログのみ。ツールチップは前回状態を維持（polling failure = 非アクティブ扱いは過剰 reset のリスクがある）|
 | タスク panic | Tauri ランタイムが spawn タスクの panic を検知しないため、`catch_unwind` で囲み panic をログして継続する（countdown タスクの死がアプリ全体を止めない）|
 
 ### 4.3 タスクライフサイクル
@@ -236,17 +232,21 @@ daemon 未接続（`AppState == None`）の場合、IPC 呼び出しをスキッ
 
 ---
 
-## 9. 定数・ツールチップ文言一覧
+## 9. 内部ヘルパー関数の可視性
+
+| 関数名 | 可視性 | 役割 |
+|--------|--------|------|
+| `tooltip_text(remaining: Option<u64>) -> String` | `fn`（モジュールプライベート） | ツールチップ文字列を生成する純粋関数。`countdown.rs` 内でのみ呼ぶ |
+| `calc_remaining(started_at: Instant, now: Instant) -> Option<u64>` | `fn`（モジュールプライベート） | 経過時間から残秒を計算する純粋関数。`now` を引数注入することで `Instant::now()` 依存を排除しテスト可能にする |
+
+どちらも `pub fn` にしない。呼び出し元は `countdown::run()` のみ。
+
+---
+
+## 10. 定数・ツールチップ文言一覧
 
 | 状態 | ツールチップ文字列 |
 |------|-----------------|
 | カウントダウン非アクティブ | `"shikomi"` |
 | カウントダウン中（残 n 秒） | `"shikomi — クリップボードを自動消去まで {n} 秒"` |
 
-Tauri イベント名（凍結）: `"clipboard_clear_countdown"`
-
-SolidJS イベントペイロード型（凍結）:
-
-| フィールド | 型 | 値 |
-|----------|-----|-----|
-| `remaining_secs` | `number \| null` | 残秒数 / 非アクティブ時 `null` |

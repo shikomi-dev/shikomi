@@ -16,7 +16,6 @@
 | REQ-TRAY-03 | トレイアイコン右クリックメニューに「ウィンドウを開く」「daemon 再起動」「終了」の 3 項目を表示する（UC-GUI-005）。各項目の動作は §2.3 を参照 |
 | REQ-TRAY-04 | `get_clipboard_countdown` Tauri Command が `ClipboardStatus { remaining_secs: Option<u64> }` を返す。daemon 側 `GetClipboardStatus` IPC 拡張との契約を §3 に定義する（R1-GUI-15） |
 | REQ-TRAY-05 | `countdown` バックグラウンドタスクが 1 秒ごとに `get_clipboard_countdown` を呼び出し、`remaining_secs > 0` の間はトレイアイコンのツールチップを「shikomi — クリップボードを自動消去まで {N} 秒」に更新する。カウントダウンが終了したら「shikomi」に戻す（R1-GUI-15） |
-| REQ-TRAY-06 | `countdown` タスクは同時に Tauri イベント `clipboard_clear_countdown` を SolidJS に emit する。SolidJS は本イベントを受信してカウントダウン状態を store に反映できる（R1-GUI-15、将来的なトレイアイコン視覚更新の拡張点） |
 
 ---
 
@@ -29,12 +28,14 @@ crates/shikomi-gui/src/
   system_tray/
     mod.rs          ← setup() / close-to-tray イベントハンドラ（REQ-TRAY-01, 02）
     menu.rs         ← TrayMenu 構築 + メニュー項目ハンドラ（REQ-TRAY-03）
-    countdown.rs    ← countdown ポーリングタスク（REQ-TRAY-04, 05, 06）
+    countdown.rs    ← countdown ポーリングタスク（REQ-TRAY-04, 05）
   lib.rs            ← system_tray::setup() 呼び出し追加 / get_clipboard_countdown 登録
   ipc_client/
     commands/
       tray.rs       ← get_clipboard_countdown Tauri Command（REQ-TRAY-04）
 ```
+
+**モジュール可視性規則**: `tooltip_text()` / `calc_remaining()` は `countdown.rs` 内のモジュールプライベート関数（`pub` なし）とする。`system_tray::setup()` のみ `pub fn` として `lib.rs` に公開する。
 
 **追加依存パッケージ**:
 
@@ -60,7 +61,6 @@ flowchart TB
         CloseHandler["CloseRequested Handler\nwindow.hide()"]
         CountdownTask["countdown タスク\n1 秒ポーリング"]
         Command["get_clipboard_countdown\nTauri Command"]
-        SolidJS["SolidJS UI\n（listen clipboard_clear_countdown）"]
     end
     Daemon["shikomi-daemon\nGetClipboardStatus IPC"]
 
@@ -72,7 +72,6 @@ flowchart TB
     Command -- "IpcRequest::GetClipboardStatus" --> Daemon
     Daemon -- "ClipboardStatus { remaining_secs }" --> Command
     CountdownTask -- "tray.set_tooltip()" --> TrayIcon
-    CountdownTask -- "app.emit clipboard_clear_countdown" --> SolidJS
     TrayMenu -- "ウィンドウを開く / daemon再起動 / 終了" --> GUI
 ```
 
@@ -104,7 +103,7 @@ flowchart TB
 | メニュー項目 | ID | 実行アクション |
 |-------------|-----|--------------|
 | ウィンドウを開く | `"open_window"` | `app.get_webview_window("main").show()` + `set_focus()` |
-| daemon 再起動 | `"restart_daemon"` | `tauri_plugin_shell::process::Command::new("shikomi").args(["start"])` 実行。既存 IPC 接続を切断し `GuiIpcClient::connect()` を再試行する（`AppState` を `None` → `Some` に遷移）|
+| shikomi のサービスを再起動する | `"restart_daemon"` | `tauri_plugin_shell::process::Command::new("shikomi").args(["start"])` 実行。既存 IPC 接続を切断し `GuiIpcClient::connect()` を再試行する（`AppState` を `None` → `Some` に遷移）|
 | 終了 | `"quit"` | `app.exit(0)` |
 
 `TrayIcon` の `on_tray_icon_event` ハンドラで `TrayIconEvent::RightButtonUp` を受け取り、`menu.popup(window)` でメニューを表示する。`MenuEvent` を `TrayMenu::on_menu_event` で受け取り ID で分岐する。
@@ -147,7 +146,7 @@ IPC ハンドラは `countdown_started_at` の値から `elapsed()` を計算し
 | R1-GUI | REQ-TRAY | 実装箇所 |
 |--------|----------|---------|
 | R1-GUI-14 | REQ-TRAY-01, 02, 03 | `system_tray/mod.rs`, `system_tray/menu.rs`, `lib.rs` |
-| R1-GUI-15 | REQ-TRAY-04, 05, 06 | `system_tray/countdown.rs`, `ipc_client/commands/tray.rs` |
+| R1-GUI-15 | REQ-TRAY-04, 05 | `system_tray/countdown.rs`, `ipc_client/commands/tray.rs` |
 
 ---
 
@@ -169,4 +168,37 @@ IPC ハンドラは `countdown_started_at` の値から `elapsed()` を計算し
 
 ### 5.2 daemon 再起動フロー
 
-「daemon 再起動」メニュー操作時の UX: 再起動中はトレイメニューの「daemon 再起動」項目を無効化し、接続が回復したら再有効化する。接続失敗は既存 `DaemonConnectionPanel` に委ねる。`AppState` の遷移は既存 `lib.rs` の初期接続ロジックを再利用する。
+「shikomi のサービスを再起動する」メニュー操作時の UX: 再起動中はトレイメニューの「daemon 再起動」項目を無効化し、接続が回復したら再有効化する。接続失敗は既存 `DaemonConnectionPanel` に委ねる。`AppState` の遷移は既存 `lib.rs` の初期接続ロジックを再利用する。
+
+---
+
+## 6. セキュリティ設計
+
+### 6.1 shell 実行経路の制限
+
+`tauri-plugin-shell` 経由の `shikomi start` 実行は **Rust 側 MenuEvent ハンドラ（`"restart_daemon"` 分岐）からのみ呼び出す**。JavaScript/SolidJS から `invoke("shell_execute", ...)` 相当の経路は存在しない（Tauri Command として公開しない）。これにより XSS 経由でのシェル実行を防ぐ。
+
+shell scope の validator は `"^start$"`（完全一致アンカー）に限定し、`evilstart` や `start && rm -rf` のような部分一致・コマンドインジェクションを遮断する。`stop` コマンドは使用しないため scope に含めない（最小権限）。
+
+### 6.2 `GetClipboardStatus` IPC 認証
+
+`GetClipboardStatus` コマンドは Sub-B で確立した IPC チャネル（Unix Domain Socket + SO_PEERCRED / Windows Named Pipe + ACL）に乗っている。チャネル自体が同一ユーザープロセスのみ接続を許可するため、`GetClipboardStatus` 個別の認証ロジックは不要。
+
+### 6.3 ツールチップの観測可能性
+
+ツールチップ文言「クリップボードを自動消去まで {N} 秒」はローカルプロセスが読めるアクセシビリティ API（macOS Accessibility API / Windows UI Automation）から観測可能。ただし本情報は **「クリップボードに何かあと N 秒で消える」という操作タイミング情報のみ**であり、Secret の内容を含まない。ローカルプロセスが既にユーザー権限を持つ場合、クリップボードそのものを読み取れるため、この情報漏洩は許容リスクとする。
+
+### 6.4 OWASP Top 10 対応表
+
+| # | カテゴリ | 対応状況 |
+|---|---------|---------|
+| A01 | Broken Access Control | IPC チャネルが SO_PEERCRED で同一ユーザー以外を拒否（Sub-B 設計） |
+| A02 | Cryptographic Failures | 該当なし（Secret の暗号化は daemon スコープ）|
+| A03 | Injection | shell scope を `"^start$"` でアンカー固定。`args` はハードコード配列のみ許可 |
+| A04 | Insecure Design | shell scope を最小コマンド 1 件に限定。`stop` variant は scope に含めない |
+| A05 | Security Misconfiguration | `tauri.conf.json` の `shell.scope` で明示的許可リスト方式 |
+| A06 | Vulnerable Components | `tauri-plugin-shell v2` を使用。Tauri v2 の脆弱性管理は `cargo audit` CI 対応済み（Sub-A） |
+| A07 | Auth Failures | IPC 認証は Sub-B 確立済みチャネルに委任 |
+| A08 | Software Integrity | Tauri の CSP（`script-src 'self'`）で外部スクリプト注入を防止 |
+| A09 | Logging Failures | IPC エラー・shell spawn エラーは `tracing::debug!` / `tracing::warn!` でログ記録 |
+| A10 | SSRF | 該当なし（外部 HTTP 通信なし）|
