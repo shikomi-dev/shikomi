@@ -92,8 +92,8 @@ mod windows_sid {
 
         // safety: `buf` は `TOKEN_USER` レイアウト互換。
         let token_user: *const TOKEN_USER = buf.as_ptr().cast();
-        // PSID は windows-sys 0.52 で廃止。SID_AND_ATTRIBUTES::Sid の実型へ as キャストする。
-        let sid = unsafe { (*token_user).User.Sid as *mut ::core::ffi::c_void };
+        // SID_AND_ATTRIBUTES::Sid は windows-sys 0.52 で *mut c_void。キャスト不要。
+        let sid = unsafe { (*token_user).User.Sid };
         sid_to_string(sid)
     }
 
