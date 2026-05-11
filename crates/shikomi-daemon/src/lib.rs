@@ -28,7 +28,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
+use shikomi_core::vault::{Vault, VaultHeader, VaultVersion};
+use shikomi_infra::persistence::{PersistenceError, SqliteVaultRepository, VaultRepository};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
@@ -93,6 +94,33 @@ pub async fn run() -> ExitCode {
         }
     };
 
+    // vault ディレクトリを事前作成する。
+    // PermissionGuard::verify_dir は fs::metadata でディレクトリの存在を確認するため、
+    // 初回起動 / CI 環境などディレクトリが未作成の場合にクラッシュする（BUG-04）。
+    // ここで create_dir_all しておくことで verify_dir を確実に通過させる。
+    if let Err(err) = std::fs::create_dir_all(&vault_dir) {
+        tracing::error!(
+            target: "shikomi_daemon::lifecycle",
+            "cannot create vault dir {}: {err}",
+            vault_dir.display()
+        );
+        return DaemonExit::SystemError.into();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(err) =
+            std::fs::set_permissions(&vault_dir, std::fs::Permissions::from_mode(0o700))
+        {
+            tracing::error!(
+                target: "shikomi_daemon::lifecycle",
+                "cannot set vault dir permissions {}: {err}",
+                vault_dir.display()
+            );
+            return DaemonExit::SystemError.into();
+        }
+    }
+
     let repo = match SqliteVaultRepository::from_directory(&vault_dir) {
         Ok(r) => r,
         Err(err) => {
@@ -103,6 +131,23 @@ pub async fn run() -> ExitCode {
 
     let vault = match repo.load() {
         Ok(v) => v,
+        // vault.db が存在しない場合 → 初回インストール / データ未作成 → 空の plaintext vault で起動。
+        // daemon は vault なしでも IPC を受け付け、list_entries は空リストを返す。
+        Err(PersistenceError::Io { ref source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            tracing::info!(
+                target: "shikomi_daemon::lifecycle",
+                "vault.db not found — starting with empty plaintext vault (new installation)"
+            );
+            Vault::new(
+                VaultHeader::new_plaintext(
+                    VaultVersion::CURRENT,
+                    time::OffsetDateTime::now_utc(),
+                )
+                .expect("CURRENT version is always valid"),
+            )
+        }
         Err(err) => {
             tracing::error!(target: "shikomi_daemon::lifecycle", "failed to load vault: {err}");
             return DaemonExit::SystemError.into();
