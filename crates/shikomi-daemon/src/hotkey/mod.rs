@@ -3,7 +3,7 @@
 //! ## モジュール構成
 //!
 //! - `backend/`: `HotkeyBackend` trait + `BackendEnum` + OS 別実装
-//! - `clipboard`: `ClipboardWriter` trait + arboard 実装
+//! - `clipboard`: `ClipboardWriter` trait + arboard 実装（`ArboardClipboardWriter::init_shared` を含む）
 //! - `clear_timer`: `ClearTimer`（30 秒自動クリア）
 //! - `notifier`: `Notifier` trait + notify-rust 実装
 //! - `event_loop`: `HotkeyEventLoop`
@@ -61,6 +61,7 @@ impl HotkeyManager {
     /// テスト用: `NullBackend` + 空 vault で構築する（OS API 不使用）。
     ///
     /// `it_server_connection.rs` 等の統合テストが IpcServer のシグネチャを満たすために使う。
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     #[must_use]
     pub fn new_null() -> Self {
@@ -88,21 +89,85 @@ impl HotkeyManager {
 
     /// 単一ホットキーを OS に登録する（IPC `add`/`edit` ハンドラから呼ばれる）。
     ///
+    /// `combo` は `Hotkey::parse` で正規化したうえで OS に登録する（P1-③ / H-003）。
+    /// 正規化により `"ctrl+alt+1"` と `"alt+ctrl+1"` は同一コンボとして扱われる。
+    ///
     /// # Errors
-    /// OS 登録失敗 / バックエンド未対応。
+    /// コンボ文字列解析失敗 / OS 登録失敗 / バックエンド未対応。
     pub fn register_one(&self, combo: &str) -> Result<(), HotkeyError> {
-        self.backend.register(combo)?;
-        self.registered.lock().unwrap().insert(combo.to_owned());
+        let hotkey = shikomi_core::Hotkey::parse(combo)
+            .map_err(|_| HotkeyError::ParseFailed { combo: combo.to_owned() })?;
+        let normalized = hotkey.as_str().to_owned();
+        self.backend.register(&normalized)?;
+        self.registered.lock().unwrap().insert(normalized);
         Ok(())
     }
 
     /// 単一ホットキーの OS 登録を解除する（IPC `edit`/`remove` ハンドラから呼ばれる）。
     ///
+    /// `combo` は `Hotkey::parse` で正規化したうえで OS 解除する（P1-③ / H-003）。
+    ///
     /// # Errors
-    /// OS 解除失敗 / バックエンド未対応。
+    /// コンボ文字列解析失敗 / OS 解除失敗 / バックエンド未対応。
     pub fn unregister_one(&self, combo: &str) -> Result<(), HotkeyError> {
-        self.backend.unregister(combo)?;
-        self.registered.lock().unwrap().remove(combo);
+        let hotkey = shikomi_core::Hotkey::parse(combo)
+            .map_err(|_| HotkeyError::ParseFailed { combo: combo.to_owned() })?;
+        let normalized = hotkey.as_str().to_owned();
+        self.backend.unregister(&normalized)?;
+        self.registered.lock().unwrap().remove(&normalized);
+        Ok(())
+    }
+
+    /// IPC `edit` / `add` 後の OS ホットキー状態を同期する（Tell, Don't Ask / P1-②）。
+    ///
+    /// - `clear == true`: `old_combo` を OS 解除して終了（`new_combo` は無視）
+    /// - `new_combo.is_some()` && `!clear`:
+    ///   - 正規化後 `old_combo != new_combo` の場合のみ旧コンボを解除（best-effort）
+    ///   - 新コンボを OS 登録（Fail Fast: 失敗時は `Err` を返す）
+    /// - それ以外: noop
+    ///
+    /// unregister 失敗は `tracing::warn!` のみ（OS が既に解除済みでも問題ない）。
+    /// register 失敗は `Err` を返す（Fail Fast）。
+    ///
+    /// # Errors
+    /// `clear == false` かつ `new_combo.is_some()` のとき OS 登録失敗。
+    pub fn sync_hotkey(
+        &self,
+        old_combo: Option<&str>,
+        new_combo: Option<&str>,
+        clear: bool,
+    ) -> Result<(), HotkeyError> {
+        if clear {
+            if let Some(old) = old_combo {
+                if let Err(e) = self.unregister_one(old) {
+                    tracing::warn!(combo = old, error = %e, "sync_hotkey: unregister_one on clear");
+                }
+            }
+            return Ok(());
+        }
+
+        if let Some(new_raw) = new_combo {
+            // 正規化後の新コンボ（比較用）
+            let new_normalized = shikomi_core::Hotkey::parse(new_raw)
+                .map(|h| h.as_str().to_owned())
+                .unwrap_or_else(|_| new_raw.to_owned());
+
+            // 正規化後に同一コンボなら変更なし（OS 再登録を防ぐ）
+            if old_combo.is_some_and(|old| old == new_normalized) {
+                return Ok(());
+            }
+
+            // 旧コンボ解除（best-effort）
+            if let Some(old) = old_combo {
+                if let Err(e) = self.unregister_one(old) {
+                    tracing::warn!(combo = old, error = %e, "sync_hotkey: unregister_one old");
+                }
+            }
+
+            // 新コンボ登録（Fail Fast）
+            self.register_one(new_raw)?;
+        }
+
         Ok(())
     }
 
@@ -136,49 +201,6 @@ impl Drop for HotkeyManager {
     }
 }
 
-// -------------------------------------------------------------------
-// ヘルパ: Vault からのホットキー文字列取得
-// -------------------------------------------------------------------
-
-/// `Vault` から `Record` のホットキー文字列を取得するヘルパ。
-///
-/// `Vault::find_record` でレコードを参照し、そのホットキーコンボ文字列を返す。
-/// レコード不在 / ホットキー未設定の場合は `None`。
-pub fn get_record_hotkey_combo(vault: &Vault, id: &shikomi_core::RecordId) -> Option<String> {
-    vault
-        .find_record(id)
-        .and_then(|r| r.hotkey())
-        .map(|h| h.as_str().to_owned())
-}
-
-// -------------------------------------------------------------------
-// クリップボード初期化ヘルパ
-// -------------------------------------------------------------------
-
-/// クリップボードを初期化する。
-///
-/// `SHIKOMI_DISABLE_CLIPBOARD=1` 環境変数が設定されている場合、または
-/// `ArboardClipboardWriter::new()` が失敗した場合は `NullClipboardWriter` を返す。
-pub fn init_clipboard() -> Arc<tokio::sync::Mutex<dyn clipboard::ClipboardWriter + Send>> {
-    if std::env::var("SHIKOMI_DISABLE_CLIPBOARD").as_deref() == Ok("1") {
-        tracing::info!("SHIKOMI_DISABLE_CLIPBOARD=1: clipboard disabled");
-        return Arc::new(tokio::sync::Mutex::new(clipboard::NullClipboardWriter));
-    }
-
-    match clipboard::ArboardClipboardWriter::new() {
-        Ok(writer) => {
-            tracing::debug!("clipboard: initialized arboard clipboard");
-            Arc::new(tokio::sync::Mutex::new(writer))
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "clipboard: arboard init failed, falling back to NullClipboardWriter"
-            );
-            Arc::new(tokio::sync::Mutex::new(clipboard::NullClipboardWriter))
-        }
-    }
-}
 
 // -------------------------------------------------------------------
 // ユニットテスト（TC-HD-DU01〜DU03）

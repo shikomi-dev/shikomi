@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# テスト専用公開 API（`ensure_vault_dir` / `ensure_vault_file`）を有効化する。
+# 本番バイナリには含まれない。テストのみで有効化する（justfile `test-cli` / `test-daemon` 参照）。
+test-fixtures = []
+
 [dependencies]
 shikomi-core  = { workspace = true }
 rusqlite      = { workspace = true }

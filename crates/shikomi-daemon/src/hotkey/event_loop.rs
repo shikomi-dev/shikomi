@@ -144,7 +144,8 @@ impl HotkeyEventLoop {
             }
 
             // ペイロード値を clone して取り出す（Mutex 保持時間最小化）
-            let payload_value = record.text_preview(usize::MAX).unwrap_or_default();
+            // SEC-001: `text_preview` は Secret kind で None を返すため `clipboard_value` を使用。
+            let payload_value = record.clipboard_value().unwrap_or_default();
             let record_kind = record.kind();
             let record_id = record.id().to_string();
 

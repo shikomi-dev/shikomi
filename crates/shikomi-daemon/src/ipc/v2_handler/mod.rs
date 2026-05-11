@@ -187,21 +187,20 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
             let hotkey_clone = hotkey.clone();
             let response = {
                 let mut vault = ctx.vault.lock().await;
-                let is_plaintext = matches!(
-                    vault.protection_mode(),
-                    shikomi_core::ProtectionMode::Plaintext
-                );
-                if !is_plaintext && !ctx.cache.is_unlocked().await {
+                if is_vault_locked(&vault, ctx.cache).await {
                     return IpcResponse::Error(IpcErrorCode::VaultLocked);
                 }
                 super::handler::handle_request(ctx.repo, &mut vault, request)
                 // vault MutexGuard がここで drop される
             };
-            // OS ホットキー登録（vault Mutex 解放後）
+            // OS ホットキー登録（vault Mutex 解放後）。失敗は Fail Fast（P1-②）
             if let IpcResponse::Added { .. } = &response {
                 if let Some(combo) = hotkey_clone {
                     if let Err(e) = ctx.hotkey_manager.register_one(&combo) {
                         tracing::error!(combo, error = %e, "dispatch_v2: OS hotkey register failed");
+                        return IpcResponse::Error(IpcErrorCode::HotkeyConflict {
+                            reason: format!("{e}"),
+                        });
                     }
                 }
             }
@@ -215,57 +214,66 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
         } => {
             let id_clone = id.clone();
             let hotkey_clone = hotkey.clone();
-            // 旧ホットキーは vault Mutex 内で取得する
+            // 旧ホットキーは vault Mutex 内で取得する（SEC-002 対応: RemoveRecord と同パターン）
             let old_hotkey_combo = {
                 let vault = ctx.vault.lock().await;
-                crate::hotkey::get_record_hotkey_combo(&vault, &id_clone)
+                vault.hotkey_combo_for_record(&id_clone)
             };
             let response = {
                 let mut vault = ctx.vault.lock().await;
-                let is_plaintext = matches!(
-                    vault.protection_mode(),
-                    shikomi_core::ProtectionMode::Plaintext
-                );
-                if !is_plaintext && !ctx.cache.is_unlocked().await {
+                if is_vault_locked(&vault, ctx.cache).await {
                     return IpcResponse::Error(IpcErrorCode::VaultLocked);
                 }
                 super::handler::handle_request(ctx.repo, &mut vault, request)
                 // vault MutexGuard がここで drop される
             };
-            // OS ホットキー登録 / 解除（vault Mutex 解放後）
+            // OS ホットキー状態同期（vault Mutex 解放後）。register 失敗は Fail Fast（P1-②）
             if let IpcResponse::Edited { .. } = &response {
-                if clear_hotkey {
-                    if let Some(old) = old_hotkey_combo {
-                        if let Err(e) = ctx.hotkey_manager.unregister_one(&old) {
-                            tracing::warn!(combo = old, error = %e, "dispatch_v2: OS hotkey unregister failed");
-                        }
-                    }
-                } else if let Some(new_combo) = hotkey_clone {
-                    // 旧ホットキー解除 → 新ホットキー登録
-                    if let Some(old) = old_hotkey_combo {
-                        if old != new_combo {
-                            if let Err(e) = ctx.hotkey_manager.unregister_one(&old) {
-                                tracing::warn!(combo = old, error = %e, "dispatch_v2: OS hotkey unregister failed");
-                            }
-                        }
-                    }
-                    if let Err(e) = ctx.hotkey_manager.register_one(&new_combo) {
-                        tracing::error!(combo = new_combo, error = %e, "dispatch_v2: OS hotkey register failed");
-                    }
+                if let Err(e) = ctx.hotkey_manager.sync_hotkey(
+                    old_hotkey_combo.as_deref(),
+                    hotkey_clone.as_deref(),
+                    clear_hotkey,
+                ) {
+                    tracing::error!(error = %e, "dispatch_v2: OS hotkey sync failed");
+                    return IpcResponse::Error(IpcErrorCode::HotkeyConflict {
+                        reason: format!("{e}"),
+                    });
                 }
             }
             response
         }
-        IpcRequest::ListRecords | IpcRequest::RemoveRecord { .. } => {
+        IpcRequest::ListRecords => {
             let mut vault = ctx.vault.lock().await;
-            let is_plaintext = matches!(
-                vault.protection_mode(),
-                shikomi_core::ProtectionMode::Plaintext
-            );
-            if !is_plaintext && !ctx.cache.is_unlocked().await {
+            if is_vault_locked(&vault, ctx.cache).await {
                 return IpcResponse::Error(IpcErrorCode::VaultLocked);
             }
             super::handler::handle_request(ctx.repo, &mut vault, request)
+        }
+        // SEC-002: RemoveRecord 後にホットキー OS 登録を解除する
+        IpcRequest::RemoveRecord { ref id } => {
+            let id_clone = id.clone();
+            // 削除前に旧ホットキーを取得（vault Mutex 内）
+            let old_hotkey_combo = {
+                let vault = ctx.vault.lock().await;
+                vault.hotkey_combo_for_record(&id_clone)
+            };
+            let response = {
+                let mut vault = ctx.vault.lock().await;
+                if is_vault_locked(&vault, ctx.cache).await {
+                    return IpcResponse::Error(IpcErrorCode::VaultLocked);
+                }
+                super::handler::handle_request(ctx.repo, &mut vault, request)
+                // vault MutexGuard がここで drop される
+            };
+            // OS ホットキー解除（vault Mutex 解放後、best-effort）
+            if let IpcResponse::Removed { .. } = &response {
+                if let Some(old) = old_hotkey_combo {
+                    if let Err(e) = ctx.hotkey_manager.unregister_one(&old) {
+                        tracing::warn!(combo = old, error = %e, "dispatch_v2: OS hotkey unregister on remove");
+                    }
+                }
+            }
+            response
         }
 
         // ---------- Handshake は別経路 ----------
@@ -278,6 +286,20 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
             reason: "unknown request variant".to_owned(),
         }),
     }
+}
+
+// -------------------------------------------------------------------
+// プライベートヘルパ
+// -------------------------------------------------------------------
+
+/// vault がロック中（暗号化かつ VEK キャッシュ未解放）の場合 `true` を返す（DRY / P1-②）。
+///
+/// plaintext vault は常に「ロック解除済み」扱いとする
+/// （`VekCache` は起動時に常に `Locked` 状態のため、plaintext vault では `is_unlocked()` が
+/// false を返す。IPC handler の統一契約として plaintext を特別扱いする）。
+async fn is_vault_locked(vault: &Vault, cache: &VekCache) -> bool {
+    let is_plaintext = matches!(vault.protection_mode(), shikomi_core::ProtectionMode::Plaintext);
+    !is_plaintext && !cache.is_unlocked().await
 }
 
 // -------------------------------------------------------------------

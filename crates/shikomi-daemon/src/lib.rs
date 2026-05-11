@@ -140,7 +140,7 @@ pub async fn run() -> ExitCode {
             Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
         ))
     };
-    let clipboard = crate::hotkey::init_clipboard();
+    let clipboard = crate::hotkey::clipboard::ArboardClipboardWriter::init_shared();
 
     // shutdown 通知 channel。`watch::channel<bool>` を使うことで、シグナル到達と
     // receiver の poll 順序に関わらず通知が消失しない（BUG-DAEMON-IPC-002 対策）。

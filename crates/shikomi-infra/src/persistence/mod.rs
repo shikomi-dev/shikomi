@@ -47,8 +47,11 @@ pub(crate) const TRACKING_ISSUE_ENCRYPTED_VAULT: Option<u32> = None;
 /// テスト専用: vault ディレクトリに OS 要件の権限（Unix: 0700 / Windows: DACL protected）を
 /// 設定する。`create_encrypted_vault` フィクスチャが TempDir に権限を付与するために使用する。
 ///
+/// `test-fixtures` feature または `cfg(test)` でのみ利用可能（本番バイナリへの混入防止）。
+///
 /// # Errors
 /// ディレクトリ作成失敗・権限設定失敗時に `PersistenceError` を返す。
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn ensure_vault_dir(path: &std::path::Path) -> Result<(), PersistenceError> {
     permission::PermissionGuard::ensure_dir(path)
@@ -58,8 +61,11 @@ pub fn ensure_vault_dir(path: &std::path::Path) -> Result<(), PersistenceError> 
 /// 設定する。`create_encrypted_vault` フィクスチャが TempDir 配下のファイルに
 /// 権限を付与するために使用する。
 ///
+/// `test-fixtures` feature または `cfg(test)` でのみ利用可能（本番バイナリへの混入防止）。
+///
 /// # Errors
 /// 権限設定失敗時に `PersistenceError` を返す。
+#[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn ensure_vault_file(path: &std::path::Path) -> Result<(), PersistenceError> {
     permission::PermissionGuard::ensure_file(path)

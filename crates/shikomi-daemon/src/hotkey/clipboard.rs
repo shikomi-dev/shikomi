@@ -66,6 +66,33 @@ impl ArboardClipboardWriter {
                 reason: e.to_string(),
             })
     }
+
+    /// daemon 起動時に使用するクリップボード共有オブジェクトを初期化する。
+    ///
+    /// `SHIKOMI_DISABLE_CLIPBOARD=1` 環境変数が設定されている場合、または
+    /// `arboard::Clipboard::new()` が失敗した場合は `NullClipboardWriter` を返す。
+    /// 呼び出し元は返り値を `HotkeyEventLoop::new` に渡す。
+    #[must_use]
+    pub fn init_shared() -> std::sync::Arc<tokio::sync::Mutex<dyn ClipboardWriter + Send>> {
+        if std::env::var("SHIKOMI_DISABLE_CLIPBOARD").as_deref() == Ok("1") {
+            tracing::info!("SHIKOMI_DISABLE_CLIPBOARD=1: clipboard disabled");
+            return std::sync::Arc::new(tokio::sync::Mutex::new(NullClipboardWriter));
+        }
+
+        match Self::new() {
+            Ok(writer) => {
+                tracing::debug!("clipboard: initialized arboard clipboard");
+                std::sync::Arc::new(tokio::sync::Mutex::new(writer))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "clipboard: arboard init failed, falling back to NullClipboardWriter"
+                );
+                std::sync::Arc::new(tokio::sync::Mutex::new(NullClipboardWriter))
+            }
+        }
+    }
 }
 
 impl ClipboardWriter for ArboardClipboardWriter {

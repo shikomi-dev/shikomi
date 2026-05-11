@@ -286,6 +286,17 @@ impl Vault {
     pub fn find_by_hotkey(&self, hotkey: &crate::vault::record::Hotkey) -> Option<&Record> {
         self.hotkey_entries().find(|r| r.hotkey() == Some(hotkey))
     }
+
+    /// 指定 ID のレコードに設定されたホットキーのコンボ文字列を返す。
+    ///
+    /// レコード不在またはホットキー未設定の場合は `None`。
+    /// 返り値の文字列は `Hotkey::parse` による正規化済み形式（例: `"alt+ctrl+1"`）。
+    #[must_use]
+    pub fn hotkey_combo_for_record(&self, id: &RecordId) -> Option<String> {
+        self.find_record(id)
+            .and_then(|r| r.hotkey())
+            .map(|h| h.as_str().to_owned())
+    }
 }
 
 #[cfg(test)]

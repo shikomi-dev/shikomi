@@ -220,4 +220,20 @@ impl Record {
             _ => None,
         }
     }
+
+    /// クリップボード投入用の平文値を返す（SEC-001 対応）。
+    ///
+    /// `RecordKind::Text` / `RecordKind::Secret` を問わず `RecordPayload::Plaintext` の
+    /// 平文値を返す（daemon ホットキー投入ユースケース専用）。`Encrypted` variant の場合は
+    /// `None`（Phase 1 では発生しない）。
+    ///
+    /// CLI プレビュー用途の `text_preview` と異なり Secret kind を除外しない。
+    /// `expose_secret` の呼び出し経路は daemon 内部の hotkey `event_loop.rs` に閉じる。
+    #[must_use]
+    pub fn clipboard_value(&self) -> Option<String> {
+        match &self.payload {
+            RecordPayload::Plaintext(secret) => Some(secret.expose_secret().to_owned()),
+            _ => None,
+        }
+    }
 }

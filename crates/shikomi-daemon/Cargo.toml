@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# テスト専用公開 API（`HotkeyManager::new_null`）を有効化する。
+# 本番バイナリには含まれない。統合テストのみで有効化する（justfile `test-daemon` 参照）。
+test-fixtures = []
+
 # lib + bin の 2 ターゲット構成（cli-vault-commands と同型）
 # - lib: run() / 内部公開 API を結合テスト（tests/）から呼び出すため
 # - bin: `#[tokio::main(flavor = "multi_thread")]` で run() を呼ぶ薄ラッパ
