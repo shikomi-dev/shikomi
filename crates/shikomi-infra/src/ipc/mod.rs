@@ -25,7 +25,7 @@ mod windows_sid {
     };
     use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
     use windows_sys::Win32::Security::{
-        GetTokenInformation, TokenUser, PSID, TOKEN_QUERY, TOKEN_USER,
+        GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -34,7 +34,7 @@ mod windows_sid {
     /// # Errors
     /// kernel API 失敗時 `PersistenceError::IpcIo`（reason は固定文言）。
     pub fn resolve_self_user_sid() -> Result<String, PersistenceError> {
-        let mut token: HANDLE = std::ptr::null_mut();
+        let mut token: HANDLE = 0;
         // safety: `GetCurrentProcess` は pseudo handle、`OpenProcessToken` は read-only。
         let ok = unsafe {
             OpenProcessToken(
@@ -94,11 +94,12 @@ mod windows_sid {
 
         // safety: `buf` は `TOKEN_USER` レイアウト互換。
         let token_user: *const TOKEN_USER = buf.as_ptr().cast();
-        let sid: PSID = unsafe { (*token_user).User.Sid };
+        // PSID は windows-sys 0.52 で廃止。SID_AND_ATTRIBUTES::Sid の実型へ as キャストする。
+        let sid = unsafe { (*token_user).User.Sid as *mut ::core::ffi::c_void };
         sid_to_string(sid)
     }
 
-    fn sid_to_string(sid: PSID) -> Result<String, PersistenceError> {
+    fn sid_to_string(sid: *mut ::core::ffi::c_void) -> Result<String, PersistenceError> {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt as _;
 
