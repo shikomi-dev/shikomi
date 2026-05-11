@@ -45,7 +45,7 @@
 | `{ kind: "ipc_error", ipc_code: "vault_locked" }` | 制御フロー信号 | コンポーネントは `UnlockModal` 表示に切り替える |
 | `{ kind: "ipc_error", ipc_code: "hotkey_conflict", hotkey_conflict_entry: "..." }` | 日本語文字列 | 競合エントリ名を文字列補間 |
 | `{ kind: "ipc_error", ipc_code: "crypto", crypto_reason: "..." }` | 日本語文字列 | `crypto_reason` で分岐（§6.1 参照）|
-| `{ kind: "ipc_error", ipc_code: "backoff_active", wait_secs: N }` | 日本語文字列 | `wait_secs` を文字列補間。**0 は「しばらく」に fallback** |
+| `{ kind: "ipc_error", ipc_code: "backoff_active", wait_secs: N }` | 日本語文字列 | `wait_secs` を文字列補間。**`null` / `undefined` のみ「しばらく」にフォールバック（`0` はフォールバック非発動、「0 秒後」と表示される）** |
 | `{ kind: "invalid_input", invalid_input_code: "..." }` | 日本語文字列 | `invalid_input_code` で switch（§6.2 参照）。`message` パース禁止 |
 
 ### 6.2 `invalid_input_code` 安定識別子（凍結 API 契約）
@@ -57,10 +57,11 @@
 | `"label_empty"` | 「ラベルを入力してください」 | `EntryForm` フィールド直下 |
 | `"value_empty"` | 「値を入力してください」 | `EntryForm` フィールド直下 |
 | `"password_empty"` | 「パスワードを入力してください」 | `VaultEncryptPanel` / `VaultDecryptPanel` / `UnlockModal` フォーム直下 |
-| `"confirmation_required"` | 「確認チェックボックスをオンにしてください」 | `VaultDecryptPanel` チェックボックス直下 |
-| `"id_invalid"` | 「エントリが見つかりません（一覧を更新します）」 | フォームインライン、`list_entries` 再取得 |
-| `"hotkey_invalid"` | 「無効なホットキーです」 | `HotkeySelector` インライン |
-| 未知の値 | 「入力内容に問題があります」 | 操作元フォームインライン（`message` 表示は禁止）|
+| `"confirmation_required"` | 「確認チェックボックスを有効にしてください」 | `VaultDecryptPanel` チェックボックス直下 |
+| `"id_invalid"` | 「無効なエントリIDです」 | フォームインライン |
+| `"label_invalid"` | 「ラベルの形式が正しくありません」 | `EntryForm` フィールド直下 |
+| `"hotkey_invalid"` | 「ホットキーの形式が正しくありません」 | `HotkeySelector` インライン |
+| 未知の値 | 「入力内容に誤りがあります」 | 操作元フォームインライン（`message` 表示は禁止）|
 
 **`errors.ts` 内での `message` 参照禁止**: `resolveInvalidInput` は `invalid_input_code` フィールドのみで分岐し、`err.message` の `includes()` / `match()` 等のパースは一切行わない。コンポーネントも `message` を表示してはならない。
 
