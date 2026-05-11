@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags};
-use shikomi_core::{Record, Vault};
+use shikomi_core::{Record, Vault, VaultHeader, VaultVersion};
 
 use super::{
     audit::Audit,
@@ -56,6 +56,51 @@ impl SqliteVaultRepository {
     #[must_use]
     pub fn paths(&self) -> &VaultPaths {
         &self.paths
+    }
+
+    /// vault ディレクトリを作成し、OS 規定のパーミッション（Unix: 0700）を設定する。
+    ///
+    /// daemon コンポジションルートから呼び出し、`PermissionGuard::verify_dir` が
+    /// 確実に通過できる状態を保証する。
+    /// `run()` に生の `std::fs::create_dir_all` + `set_permissions` を書かないための
+    /// カプセル化（BUG-04 根治: 責務を repository 層に閉じる）。
+    ///
+    /// # Errors
+    ///
+    /// - ディレクトリ作成失敗・パーミッション設定失敗: `PersistenceError::Io`
+    pub fn prepare_dir(&self) -> Result<(), PersistenceError> {
+        PermissionGuard::ensure_dir(self.paths.dir())
+    }
+
+    /// vault を読み込む。`vault.db` が存在しない場合は空の plaintext vault を返す。
+    ///
+    /// 初回インストール / CI 環境など `vault.db` が未作成の状態で daemon が起動する場合に
+    /// IPC を受け付けられるよう、空の vault で起動する。NotFound 以外のエラーは伝播する。
+    ///
+    /// # Errors
+    ///
+    /// - `vault.db` が存在しない以外の IO エラー / 破損データ / ロック取得失敗:
+    ///   `PersistenceError`
+    pub fn load_or_create(&self) -> Result<Vault, PersistenceError> {
+        match self.load() {
+            Ok(v) => Ok(v),
+            Err(PersistenceError::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                tracing::info!(
+                    target: "shikomi_infra::persistence",
+                    "vault.db not found — starting with empty plaintext vault (new installation)"
+                );
+                Ok(Vault::new(
+                    VaultHeader::new_plaintext(
+                        VaultVersion::CURRENT,
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .expect("CURRENT version is always valid"),
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// `Instant` からミリ秒経過時間を計算する。オーバーフロー時は `u64::MAX`。
@@ -334,5 +379,72 @@ impl SqliteVaultRepository {
             .len();
 
         Ok(bytes_written)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ユニットテスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // --- TC-U-REPO-01: prepare_dir — 存在しないディレクトリを作成する ---
+
+    #[test]
+    fn tc_u_repo_01_prepare_dir_creates_directory() {
+        let base = TempDir::new().unwrap();
+        let vault_dir = base.path().join("vault_new");
+
+        // 事前条件: ディレクトリが存在しない
+        assert!(!vault_dir.exists(), "事前条件: ディレクトリが未作成");
+
+        let repo = SqliteVaultRepository::from_directory(&vault_dir).unwrap();
+        repo.prepare_dir().expect("prepare_dir は成功すべき");
+
+        assert!(
+            vault_dir.is_dir(),
+            "prepare_dir 後: ディレクトリが作成されるべき"
+        );
+    }
+
+    // --- TC-U-REPO-02: prepare_dir — 既存ディレクトリに冪等 ---
+
+    #[test]
+    fn tc_u_repo_02_prepare_dir_is_idempotent_on_existing_dir() {
+        let dir = TempDir::new().unwrap();
+        let repo = SqliteVaultRepository::from_directory(dir.path()).unwrap();
+
+        // 2 回呼び出しても失敗しない
+        repo.prepare_dir()
+            .expect("1 回目: prepare_dir は成功すべき");
+        repo.prepare_dir()
+            .expect("2 回目: prepare_dir は冪等であるべき");
+    }
+
+    // --- TC-U-REPO-03: load_or_create — vault.db 未存在時に空 plaintext vault を返す ---
+
+    #[test]
+    fn tc_u_repo_03_load_or_create_returns_empty_vault_when_not_found() {
+        let dir = TempDir::new().unwrap();
+        let repo = SqliteVaultRepository::from_directory(dir.path()).unwrap();
+        // ディレクトリのパーミッションを OS 規定に設定してから load_or_create を呼ぶ
+        repo.prepare_dir().expect("prepare_dir は成功すべき");
+
+        // vault.db が存在しない → NotFound を捕捉して空 plaintext vault を返すべき
+        let vault = repo
+            .load_or_create()
+            .expect("load_or_create は空 vault を返すべき");
+
+        assert!(vault.records().is_empty(), "初期 vault はレコード 0 件");
+        assert!(
+            matches!(
+                vault.protection_mode(),
+                shikomi_core::ProtectionMode::Plaintext
+            ),
+            "初期 vault は plaintext モードであるべき"
+        );
     }
 }

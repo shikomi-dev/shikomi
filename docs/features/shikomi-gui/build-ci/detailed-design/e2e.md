@@ -84,7 +84,7 @@ sequenceDiagram
     end
     Note over Script: GUI が 15s 生存 → 起動安定と判断
 
-    Script->>Daemon: ./target/release/shikomi list（exit 0 = IPC 接続確認）
+    Script->>Daemon: ./target/release/shikomi list --ipc（exit 0 = IPC 接続確認）
     Note over Script: exit code 非ゼロ → exit 1（FAIL: IPC 未接続）
 
     Script->>GUI: kill -TERM $GUI_PID
@@ -115,10 +115,10 @@ sequenceDiagram
 |------------|---------|---------------|
 | daemon ソケット生成確認 | 10 秒以内にソケットファイル `$DAEMON_SOCKET_PATH` が存在する | スクリプト exit 1 → ジョブ FAIL |
 | GUI プロセス起動確認 | 15 秒ポーリング中 `kill -0 $GUI_PID` が一度も失敗しない | スクリプト exit 1 → ジョブ FAIL |
-| daemon IPC 接続確認 | `shikomi list` が exit 0（daemon との IPC ソケット到達を証明） | スクリプト exit 1 → ジョブ FAIL |
+| daemon IPC 接続確認 | `shikomi list --ipc` が exit 0（daemon との IPC ソケット到達を証明） | スクリプト exit 1 → ジョブ FAIL |
 | プロセス正常終了確認 | `timeout 5 wait $GUI_PID` が exit 0（SIGTERM 後 5 秒以内に終了） | スクリプト exit 1 → ジョブ FAIL |
 
-**`shikomi list` の信頼性根拠**: `shikomi list` は IPC ソケットへの接続に失敗した場合（daemon 未接続）に非ゼロ exit を返す。これは TC-GUI-CI-IT04（IT04 自動化 §6.8 参照）で明示的に検証し、「IPC 接続なし → exit 非ゼロ」の動作を回帰テストで固定する。将来の実装変更でこの動作が変わった場合は IT04 が FAIL し検知できる。
+**`shikomi list --ipc` の信頼性根拠**: `shikomi list --ipc` は IPC ソケットへの接続に失敗した場合（daemon 未接続）に非ゼロ exit を返す。`--ipc` フラグで IPC 経路を明示的に指定することで、SQLite 直結経路（`shikomi list` デフォルト）との混同を設計レベルで排除する。これは TC-GUI-CI-IT04（IT04 自動化 §6.8 参照）で明示的に検証し、「IPC 接続なし → exit 非ゼロ」の動作を回帰テストで固定する。将来の実装変更でこの動作が変わった場合は IT04 が FAIL し検知できる。
 
 ### 6.8 IT04 自動化: `e2e-smoke-fault` ジョブ設計
 
@@ -136,7 +136,7 @@ sequenceDiagram
     participant CLI as ./target/release/shikomi
 
     Note over Job: daemon は起動しない（fault injection）
-    Job->>CLI: ./target/release/shikomi list
+    Job->>CLI: ./target/release/shikomi list --ipc
     CLI-->>Job: exit 非ゼロ（daemon IPC ソケット未存在 → 接続失敗）
     Job->>Job: exit code が 0 なら FAIL（逆正常性違反）
     Job->>Job: exit code が 非ゼロ なら PASS
@@ -149,11 +149,11 @@ sequenceDiagram
 | 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
 | 2〜4 | Rust環境 | `dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` | ビルド環境 |
 | 5 | build shikomi-cli | `cargo build --release -p shikomi-cli` | テスト対象 CLI バイナリをビルド |
-| 6 | fault check | `! ./target/release/shikomi list` | IPC 未接続で exit 非ゼロを返すことを検証（`!` でシェル反転） |
+| 6 | fault check | `! ./target/release/shikomi list --ipc` | IPC 未接続で exit 非ゼロを返すことを検証（`!` でシェル反転） |
 
-**`! ./target/release/shikomi list` の動作**:
-- daemon が起動していない → `shikomi list` が exit 非ゼロ → `!` が反転して exit 0 → CI ステップ PASS
-- daemon が誤って起動していた場合 → `shikomi list` が exit 0 → `!` が反転して exit 非ゼロ → CI ステップ FAIL（テスト前提条件違反）
+**`! ./target/release/shikomi list --ipc` の動作**:
+- daemon が起動していない → `shikomi list --ipc` が exit 非ゼロ → `!` が反転して exit 0 → CI ステップ PASS
+- daemon が誤って起動していた場合 → `shikomi list --ipc` が exit 0 → `!` が反転して exit 非ゼロ → CI ステップ FAIL（テスト前提条件違反）
 
 このシンプルな反転チェックは smoke スクリプトに引数フラグを追加するより軽量で SSoT を保ちやすい（KISS）。
 

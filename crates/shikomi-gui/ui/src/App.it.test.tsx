@@ -100,7 +100,7 @@ describe("TC-GUI-UI-IT03: App — vault_locked → UnlockModal オーバーレ�
     fireEvent.click(addBtn);
 
     // ラベルと値を入力
-    const { container } = render(() => <div />); // render は cleanup で管理
+    render(() => <div />); // render は cleanup で管理
     // EntryForm の「追加」ボタン操作は EntryForm.it.test.tsx に委ねる
     // ここでは handleCommandError 経由で vaultLockPending を立てる方法でテスト
 
@@ -146,7 +146,7 @@ describe("TC-GUI-UI-IT14: vault_locked フロー — アンロック → pending
     );
 
     // UnlockModal の「アンロック」ボタンをクリック
-    const { container } = render(() => <div />) ;
+    render(() => <div />) ;
     // 代わりに handleUnlockSuccess を直接呼ぶ（store function test）
     await handleUnlockSuccess();
 

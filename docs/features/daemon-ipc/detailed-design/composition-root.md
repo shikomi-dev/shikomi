@@ -23,9 +23,11 @@
 4. **シングルインスタンス先取り**: `let single_instance = SingleInstanceLock::acquire(&socket_dir)?;`
    - 失敗時: `tracing::error!(target: "shikomi_daemon::lifecycle", "single instance acquisition failed: {}", err);` → `ExitCode::from(2)` で early return
 5. **repo 構築**: `let repo = SqliteVaultRepository::from_directory(&vault_dir)?;`
+   - **業務ルール（初回起動時のデータディレクトリ自動生成）**: `from_directory` は `vault_dir` が存在しない場合に `std::fs::create_dir_all` でディレクトリを作成し、SQLite ファイルを初期化してから返す。`run()` に `create_dir_all` を直接記述しない——ファイルシステム初期化はリポジトリ層（`SqliteVaultRepository`）の責務（Clean Architecture 原則、`run()` はコンポジションルートとしての組み立てのみを担う）
    - 失敗時: `tracing::error!("failed to construct SqliteVaultRepository: {}", err);` → `ExitCode::from(1)` early return
-6. **vault load**: `let vault = repo.load()?;`
-   - 失敗時: `tracing::error!("failed to load vault: {}", err);` → `ExitCode::from(1)` early return
+6. **vault load（初回起動対応）**: `let vault = repo.load_or_create_plaintext()?;`
+   - **業務ルール（初回インストール時の空 vault 自動生成）**: vault ファイルが存在しない場合（初回インストール / CI 環境）は空の plaintext vault を生成して返す。`run()` で `ErrorKind::NotFound` を場当たり的に `match` しない——「NotFound → 空 vault 生成」ロジックは `SqliteVaultRepository::load_or_create_plaintext()` に閉じる（**Tell, Don't Ask 原則**。呼び出し元がリポジトリ状態を尋ねて外部で処理を分岐させない）
+   - 失敗時: `tracing::error!("failed to load or create vault: {}", err);` → `ExitCode::from(1)` early return
 7. **暗号化モード検証**: `if vault.protection_mode() == ProtectionMode::Encrypted { tracing::error!("vault is encrypted; daemon does not support encrypted vaults yet (Issue #26 scope-out)"); return ExitCode::from(3); }`
 8. **共有データ構造の構築**:
    - `let repo = Arc::new(repo);`

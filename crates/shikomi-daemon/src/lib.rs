@@ -28,7 +28,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
+use shikomi_core::vault::Vault;
+use shikomi_infra::persistence::SqliteVaultRepository;
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
@@ -84,7 +85,8 @@ pub async fn run() -> ExitCode {
         }
     };
 
-    // vault dir 解決 + repo 構築 + load
+    // vault dir 解決 → repo 構築 → dir 準備 → load（or 空 vault 生成）
+    // 責務: create_dir_all・permissions・NotFound→空vault は SqliteVaultRepository に閉じる
     let vault_dir = match resolve_vault_dir() {
         Ok(p) => p,
         Err(err) => {
@@ -101,7 +103,16 @@ pub async fn run() -> ExitCode {
         }
     };
 
-    let vault = match repo.load() {
+    if let Err(err) = repo.prepare_dir() {
+        tracing::error!(
+            target: "shikomi_daemon::lifecycle",
+            "cannot prepare vault dir {}: {err}",
+            vault_dir.display()
+        );
+        return DaemonExit::SystemError.into();
+    }
+
+    let vault = match repo.load_or_create() {
         Ok(v) => v,
         Err(err) => {
             tracing::error!(target: "shikomi_daemon::lifecycle", "failed to load vault: {err}");
