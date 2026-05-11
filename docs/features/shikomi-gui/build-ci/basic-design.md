@@ -125,7 +125,7 @@ AC-GUI-01「`shikomi gui` で GUI が起動し、daemon と IPC 接続が確立�
 |------|------|------|
 | OS | ubuntu-22.04 | 既存 `test-gui.yml` と同一環境。GTK / WebKit2GTK インストール済みキャッシュを再利用できる |
 | 仮想ディスプレイ | xvfb（`Xvfb :99 -screen 0 1280x720x24`） | CI にディスプレイがない環境で Tauri WebView の初期化を通過させる。GTK / WebKit の headless モードより確実 |
-| E2E フレームワーク | `tauri-driver` + `webdriverio` は **不採用**（YAGNI）。シェルスクリプトで `shikomi gui &` → `shikomi list` → kill のシンプルな smoke check を採用 | フルセレニウムテストはアクセシビリティ Issue で別途実施（Issue #78 Sub-F 参照）|
+| E2E フレームワーク | `tauri-driver` + `webdriverio` は **不採用**（YAGNI）。シェルスクリプトで `shikomi gui &` → `shikomi list` → kill のシンプルな smoke check を採用 | フルセレニウムテストは現時点で要件なし（YAGNI）。アクセシビリティ検証が必要になった時点で別 Issue で設計する |
 
 ### 4.3 テスト対象外（headless 制約）
 

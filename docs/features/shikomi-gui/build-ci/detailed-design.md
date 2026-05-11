@@ -60,7 +60,7 @@ artifact 保持日数はトリガー条件で分岐する。`github.event_name =
 | トリガー | `retention-days` | artifact 名テンプレート |
 |---------|-----------------|----------------------|
 | pull_request | 7 | `shikomi-installer-pr${{ github.event.pull_request.number }}-{os}` |
-| push (main / develop) | 30 | `shikomi-installer-${{ github.sha }}-{os}` |
+| push (main / develop) | 30 | `shikomi-installer-{sha7}-{os}`（`sha7` の算出は §5.2 参照） |
 
 ---
 
@@ -76,21 +76,18 @@ artifact 保持日数はトリガー条件で分岐する。`github.event_name =
 
 ### 2.2 ステップ一覧
 
+共通セットアップは composite action（§11 参照）に集約する。OS 固有の追加ステップのみ各ジョブに配置する。
+
 | 順序 | ステップ名 | 使用アクション / コマンド | 目的 |
 |------|-----------|------------------------|------|
-| 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
-| 2 | install Rust | `dtolnay/rust-toolchain@stable` | Rust stable ツールチェーン |
-| 3 | Rust cache | `Swatinem/rust-cache@v2` | ビルドキャッシュ |
-| 4 | install system libraries | `apt-get install` | GTK / WebKit 依存解決（後述 §2.3） |
-| 5 | setup Node.js | `actions/setup-node@v4` (node: `20`) | フロントエンドビルド環境 |
-| 6 | npm ci (UI) | `npm ci` in `crates/shikomi-gui/ui/` | SolidJS 依存確定インストール |
-| 7 | install tauri-cli | `cargo install --locked tauri-cli` | `cargo tauri build` コマンド提供 |
-| 8 | tauri build (linux) | `cargo tauri build` | deb / rpm / AppImage 生成（後述 §2.4） |
-| 9 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存（後述 §2.5） |
+| 1 | tauri build setup | `.github/actions/tauri-build-setup`（composite） | checkout / Rust / cache / Node.js / npm ci / tauri-cli を一括セットアップ（§11） |
+| 2 | install system libraries | `apt-get install` | GTK / WebKit 依存解決（後述 §2.3） |
+| 3 | tauri build (linux) | `cargo tauri build --ci` | deb / rpm / AppImage 生成（後述 §2.4） |
+| 4 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存（後述 §2.5） |
 
 ### 2.3 システムライブラリ一覧
 
-既存 `test-gui.yml` の `install system libraries` ステップと同一セットを使用する（DRY: キャッシュキーを共通化できる）。
+既存 `test-gui.yml` の `install system libraries` ステップと同一セットを使用する（DRY: composite action でキャッシュキーを共通化）。
 
 | パッケージ | 用途 |
 |-----------|------|
@@ -103,8 +100,6 @@ artifact 保持日数はトリガー条件で分岐する。`github.event_name =
 | `pkg-config` | ライブラリ検索ツール |
 
 ### 2.4 tauri build オプション
-
-`cargo tauri build` は `tauri.conf.json` の `bundle.targets` を参照して全形式をビルドする。
 
 | オプション | 値 | 根拠 |
 |-----------|----|------|
@@ -140,16 +135,11 @@ GitHub のデフォルト仕様として、fork リポジトリからの PR で�
 
 | 順序 | ステップ名 | 使用アクション / コマンド | 目的 |
 |------|-----------|------------------------|------|
-| 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
-| 2 | install Rust | `dtolnay/rust-toolchain@stable` | Rust stable ツールチェーン |
-| 3 | Rust cache | `Swatinem/rust-cache@v2` | ビルドキャッシュ |
-| 4 | setup Node.js | `actions/setup-node@v4` (node: `20`) | フロントエンドビルド環境 |
-| 5 | npm ci (UI) | `npm ci` in `crates/shikomi-gui/ui/` | SolidJS 依存確定インストール |
-| 6 | install tauri-cli | `cargo install --locked tauri-cli` | `cargo tauri build` コマンド提供 |
-| 7 | import certificate to Keychain | シェルコマンド（後述 §3.4） | Developer ID 証明書のインポート |
-| 8 | tauri build (macos) | `cargo tauri build --ci` | DMG 生成 + 署名 + 公証 |
-| 9 | cleanup Keychain | シェルコマンド（後述 §3.4） | 一時 Keychain の削除 |
-| 10 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存 |
+| 1 | tauri build setup | `.github/actions/tauri-build-setup`（composite） | checkout / Rust / cache / Node.js / npm ci / tauri-cli を一括セットアップ（§11） |
+| 2 | import certificate to Keychain | シェルコマンド（後述 §3.4） | Developer ID 証明書のインポート |
+| 3 | tauri build (macos) | `cargo tauri build --ci` | DMG 生成 + 署名 + 公証 |
+| 4 | cleanup Keychain | シェルコマンド（後述 §3.4） | 一時 Keychain の削除（`if: always()` で失敗時も保証） |
+| 5 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存 |
 
 ### 3.4 Keychain セットアップ・クリーンアップ設計
 
@@ -169,8 +159,8 @@ sequenceDiagram
     CI->>KChain: security set-key-partition-list -S apple-tool:,apple: -s build.keychain
     CI->>Tauri: cargo tauri build --ci\n  (APPLE_ID / APPLE_ID_PASSWORD / APPLE_TEAM_ID 注入)
     Tauri-->>CI: DMG（署名 + 公証済み）
-    CI->>KChain: security delete-keychain build.keychain
-    CI->>CI: rm certificate.p12
+    CI->>KChain: security delete-keychain build.keychain（if: always()）
+    CI->>CI: rm -f certificate.p12（if: always()）
 ```
 
 **Keychain 操作の詳細**:
@@ -182,7 +172,9 @@ sequenceDiagram
 | Keychain ロック解除 | `security unlock-keychain -p "" build.keychain` | パスワードなしで即時解除 |
 | 証明書インポート | `security import ... -T /usr/bin/codesign` | `codesign` のみにアクセスを制限（最小権限） |
 | パーティションリスト設定 | `security set-key-partition-list -S apple-tool:,apple:` | Keychain アクセス確認ダイアログを抑制（CI では UI 不可） |
-| Keychain 削除 | `security delete-keychain build.keychain` | 一時ファイル削除 |
+| Keychain 削除 | `security delete-keychain build.keychain` | 一時ファイル削除（`if: always()` で tauri build 失敗時も実行保証） |
+
+**`if: always()` の対称性保証**: `cleanup Keychain` ステップ（§3.3 順序 4）に `if: always()` を付与する。これにより `tauri build` ステップが途中失敗してもランナー上に一時 Keychain が残留しない（対称性の原則）。
 
 出典: https://v2.tauri.app/distribute/sign/macos/
 
@@ -215,7 +207,9 @@ sequenceDiagram
 | `runs-on` | `windows-latest` |
 | `defaults.run.shell` | `pwsh`（既存 `windows.yml` と統一） |
 | タイムアウト | 60 分 |
-| 必要な Secrets | なし（MVP: コード署名なし） |
+| 必要な Secrets | なし（MVP: コード署名なし。手動受入: **AC-GUI-08**） |
+
+**AC-GUI-08 スコープ明記**: Windows MVP では Authenticode 証明書を取得しないため、SmartScreen 警告が表示される。この UX コストは `feature-spec.md` の AC-GUI-08（手動受入基準）に明記し、Beta 前に証明書取得を推奨する。本設計書の自動テスト対象外。
 
 ### 4.2 WebView2 ランタイム依存
 
@@ -227,14 +221,9 @@ sequenceDiagram
 
 | 順序 | ステップ名 | 使用アクション / コマンド | 目的 |
 |------|-----------|------------------------|------|
-| 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
-| 2 | install Rust | `dtolnay/rust-toolchain@stable` | Rust stable ツールチェーン（MSVC target） |
-| 3 | Rust cache | `Swatinem/rust-cache@v2` | ビルドキャッシュ |
-| 4 | setup Node.js | `actions/setup-node@v4` (node: `20`) | フロントエンドビルド環境 |
-| 5 | npm ci (UI) | `npm ci` in `crates/shikomi-gui/ui/` | SolidJS 依存確定インストール |
-| 6 | install tauri-cli | `cargo install --locked tauri-cli` | `cargo tauri build` コマンド提供 |
-| 7 | tauri build (windows) | `cargo tauri build --ci` | MSI + NSIS 生成 |
-| 8 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存 |
+| 1 | tauri build setup | `.github/actions/tauri-build-setup`（composite） | checkout / Rust / cache / Node.js / npm ci / tauri-cli を一括セットアップ（§11） |
+| 2 | tauri build (windows) | `cargo tauri build --ci` | MSI + NSIS 生成 |
+| 3 | upload artifacts | `actions/upload-artifact@v4` | 成果物保存 |
 
 ### 4.4 Rust ターゲット
 
@@ -264,7 +253,14 @@ sequenceDiagram
 
 ### 5.2 artifact 命名の `sha7` 算出
 
-main / develop ブランチの artifact 名に含める `sha7` は `${{ github.sha }}` の先頭 7 文字を `substring` 式で取得する（GitHub Actions の `slice` 式: `${{ github.sha[0,7] }}`）。
+GitHub Actions 式言語は文字列スライス構文を持たない。`sha7` はシェルステップで環境変数から抽出し、`$GITHUB_OUTPUT` 経由で後続ステップに渡す。
+
+| ステップ順序 | 操作 | 詳細 |
+|------------|------|------|
+| 1（`compute-sha7` ステップ） | シェルで `echo "sha7=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT` を実行 | Bash の文字列スライス構文でコミット SHA 先頭 7 文字を算出 |
+| 2（`upload-artifacts` ステップ） | artifact name に `${{ steps.compute-sha7.outputs.sha7 }}` で参照 | ステップ output 変数経由で利用 |
+
+この方式は PR トリガーと push トリガーで分岐する `if` 式と組み合わせて使用する。PR トリガーでは `sha7` ステップをスキップし PR 番号をそのまま使用する（DRY のため `compute-sha7` ステップの `if: github.event_name != 'pull_request'` 条件で制御）。
 
 ---
 
@@ -284,18 +280,33 @@ main / develop ブランチの artifact 名に含める `sha7` は `${{ github.s
 
 ### 6.3 ステップ一覧（TC-GUI-E01 実現）
 
+smoke スクリプトは `scripts/smoke-e2e.sh` に SSoT 化する（後述 §6.4 参照）。CI ステップはスクリプトの呼び出しのみとし、ロジックの二重管理を防ぐ（DRY）。
+
 | 順序 | ステップ名 | 使用アクション / コマンド | 目的 |
 |------|-----------|------------------------|------|
 | 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
 | 2 | install Rust | `dtolnay/rust-toolchain@stable` | Rust ツールチェーン |
 | 3 | Rust cache | `Swatinem/rust-cache@v2` | ビルドキャッシュ |
-| 4 | install system libraries | `apt-get install` | GTK / WebKit + xvfb（後述 §6.4） |
+| 4 | install system libraries | `apt-get install` | GTK / WebKit + xvfb（後述 §6.5） |
 | 5 | setup Node.js | `actions/setup-node@v4` | フロントエンドビルド環境 |
 | 6 | npm ci (UI) | `npm ci` in `crates/shikomi-gui/ui/` | SolidJS ビルド |
 | 7 | build binaries | `cargo build --release -p shikomi-daemon -p shikomi-cli -p shikomi-gui` | E2E に必要な 3 バイナリをビルド |
-| 8 | smoke test | シェルスクリプト（後述 §6.5） | TC-GUI-E01 実行 |
+| 8 | e2e smoke test | `bash scripts/smoke-e2e.sh` | TC-GUI-E01 実行（§6.6 シーケンス図参照） |
 
-### 6.4 追加システムパッケージ
+### 6.4 smoke スクリプト SSoT 設計
+
+| 項目 | 設計 |
+|------|------|
+| 配置先 | `scripts/smoke-e2e.sh`（リポジトリルート配下） |
+| 実行権限 | `chmod +x`（コミット時に付与） |
+| ローカル実行 | CI と同一経路で実行可能。xvfb インストール済み Linux であれば `bash scripts/smoke-e2e.sh` で手動実行 |
+| CI 呼び出し | `e2e-smoke` ジョブ step 8 から `bash scripts/smoke-e2e.sh` を呼ぶだけ |
+| 引数 `--no-daemon` | daemon を起動しないモード。IT04 自動検証用（後述 §6.8） |
+| shellcheck | `lint.yml` の shellcheck ステップ対象に `scripts/smoke-e2e.sh` を追加 |
+
+スクリプトを `test-gui.yml` インラインに書かない理由: インライン shell は `actionlint` の文字数制限・可読性低下・ローカル再現困難の 3 問題を生む。スクリプトファイルとして配置すれば shellcheck でも静的検証できる（YAGNI で inline を選ぶ理由がない）。
+
+### 6.5 追加システムパッケージ
 
 `test-gui.yml` の `install system libraries` ステップに以下を追記する。
 
@@ -303,47 +314,108 @@ main / develop ブランチの artifact 名に含める `sha7` は `${{ github.s
 |--------------|------|
 | `xvfb` | 仮想ディスプレイサーバ（headless Tauri WebView 起動） |
 
-### 6.5 smoke test スクリプト設計（TC-GUI-E01）
+### 6.6 smoke スクリプト設計（TC-GUI-E01・デフォルトモード）
+
+**固定 sleep を排除し、ソケット存在確認 + プロセス生存確認のポーリングに変更する。**これにより、速い CI ランナーでの早期成功・遅いランナーでの無駄な待機の両方を防ぐ（flaky test 排除）。
 
 ```mermaid
 sequenceDiagram
-    participant Script as e2e-smoke ステップ
+    participant Script as scripts/smoke-e2e.sh
     participant Xvfb
     participant Daemon as shikomi-daemon
     participant GUI as shikomi-gui (DISPLAY=:99)
 
-    Script->>Xvfb: Xvfb :99 -screen 0 1280x720x24 &
-    Script->>Daemon: ./target/release/shikomi start &
-    Note over Daemon: バックグラウンド起動
+    Script->>Script: trap cleanup EXIT（Xvfb / daemon / GUI の kill を保証）
+    Script->>Xvfb: Xvfb :99 -screen 0 1280x720x24 &（XVFB_PID=$!）
+    Script->>Daemon: ./target/release/shikomi start &（DAEMON_PID=$!）
 
-    Script->>Script: sleep 2（daemon ソケット待機）
-    Script->>GUI: DISPLAY=:99 ./target/release/shikomi-gui &
-    Script->>Script: GUI_PID=$!
+    loop daemon ソケット待機（最大 10s、0.5s ごとポーリング）
+        Script->>Script: [ -S "$DAEMON_SOCKET_PATH" ] で確認
+        Script->>Script: タイムアウト超過 → exit 1（FAIL: daemon 起動失敗）
+    end
 
-    Script->>Script: sleep 10（Window ハンドル生成待機）
-    Script->>Script: kill -0 $GUI_PID（プロセス生存確認）
-    Note over Script: exit code 非ゼロ → FAIL（TC-GUI-E01 §起動確認）
+    Script->>GUI: DISPLAY=:99 ./target/release/shikomi-gui &（GUI_PID=$!）
 
-    Script->>Daemon: ./target/release/shikomi list
-    Note over Script: exit code 非ゼロ → FAIL（TC-GUI-E01 §IPC 接続確認）
+    loop GUI プロセス生存確認（最大 15s、0.5s ごとポーリング）
+        Script->>Script: kill -0 $GUI_PID で確認
+        Script->>Script: プロセス消失 → exit 1（FAIL: GUI クラッシュ）
+    end
+    Note over Script: GUI が 15s 生存 → 起動安定と判断
+
+    Script->>Daemon: ./target/release/shikomi list（exit 0 = IPC 接続確認）
+    Note over Script: exit code 非ゼロ → exit 1（FAIL: IPC 未接続）
 
     Script->>GUI: kill -TERM $GUI_PID
-    Script->>Script: timeout 5 wait $GUI_PID
-    Note over Script: タイムアウト or exit code 非ゼロ → FAIL（TC-GUI-E01 §正常終了確認）
+    Script->>Script: timeout 5 wait $GUI_PID（exit 0 = 正常終了確認）
+    Note over Script: タイムアウト or 非ゼロ exit → exit 1（FAIL）
 
-    Script->>Xvfb: kill %1（Xvfb 終了）
-    Script->>Daemon: kill %2（daemon 終了）
+    Script->>Script: exit 0（全検証 PASS）
+    Note over Script: trap EXIT が cleanup を自動実行
 ```
 
-### 6.6 合否判定ロジック
+**cleanup 関数（trap EXIT で保証）**:
+
+| 対象 | 操作 |
+|------|------|
+| GUI プロセス（`$GUI_PID`） | `kill -TERM $GUI_PID 2>/dev/null; wait $GUI_PID 2>/dev/null` |
+| daemon プロセス（`$DAEMON_PID`） | `kill -TERM $DAEMON_PID 2>/dev/null; wait $DAEMON_PID 2>/dev/null` |
+| Xvfb プロセス（`$XVFB_PID`） | `kill -TERM $XVFB_PID 2>/dev/null; wait $XVFB_PID 2>/dev/null` |
+
+`trap cleanup EXIT` はスクリプトの最初で宣言する。success / failure どちらの経路でも必ず実行されるため、Xvfb・daemon の残留プロセスを CI ランナーに残さない（macOS Keychain の `if: always()` と同等の対称性保証）。
+
+**daemon ソケットパス**:
+
+`DAEMON_SOCKET_PATH` は `shikomi-daemon` が作成する UDS ソケットパス（`$XDG_RUNTIME_DIR/shikomi/shikomi.sock` 等、`shikomi-core` の定数で定義）。CI 環境では環境変数 `SHIKOMI_SOCKET_PATH` で上書き可能な場合はその値を使用する。ソケットパスの SSoT は `shikomi-core::ipc::SOCKET_PATH` に従う。
+
+### 6.7 合否判定ロジック
 
 | 検証ポイント | 成功条件 | 失敗時の CI 挙動 |
 |------------|---------|---------------|
-| GUI プロセス起動確認 | `kill -0 $GUI_PID` が exit 0（10 秒後にプロセス生存） | step が exit 1 → ジョブ FAIL |
-| daemon IPC 接続確認 | `shikomi list` が exit 0（0 件以上を返す） | step が exit 1 → ジョブ FAIL |
-| プロセス正常終了確認 | `timeout 5 wait $GUI_PID` が exit 0（SIGTERM 後 5 秒以内に終了） | step が exit 1 → ジョブ FAIL |
+| daemon ソケット生成確認 | 10 秒以内にソケットファイル `$DAEMON_SOCKET_PATH` が存在する | スクリプト exit 1 → ジョブ FAIL |
+| GUI プロセス起動確認 | 15 秒ポーリング中 `kill -0 $GUI_PID` が一度も失敗しない | スクリプト exit 1 → ジョブ FAIL |
+| daemon IPC 接続確認 | `shikomi list` が exit 0（daemon との IPC ソケット到達を証明） | スクリプト exit 1 → ジョブ FAIL |
+| プロセス正常終了確認 | `timeout 5 wait $GUI_PID` が exit 0（SIGTERM 後 5 秒以内に終了） | スクリプト exit 1 → ジョブ FAIL |
 
-### 6.7 headless 制約（テスト対象外）
+**`shikomi list` の信頼性根拠**: `shikomi list` は IPC ソケットへの接続に失敗した場合（daemon 未接続）に非ゼロ exit を返す。これは TC-GUI-CI-IT04（IT04 自動化 §6.8 参照）で明示的に検証し、「IPC 接続なし → exit 非ゼロ」の動作を回帰テストで固定する。将来の実装変更でこの動作が変わった場合は IT04 が FAIL し検知できる。
+
+### 6.8 IT04 自動化: `e2e-smoke-fault` ジョブ設計
+
+**目的**: daemon 未起動時に smoke スクリプト（IPC 確認コマンド）が正しく exit 非ゼロを返すことを CI で自動検証する（逆正常性確認）。
+
+| 設定 | 値 |
+|------|-----|
+| ジョブ名 | `e2e-smoke-fault`（`test-gui.yml` に追記） |
+| `runs-on` | `ubuntu-22.04` |
+| タイムアウト | 5 分（ビルド済みキャッシュ使用を前提） |
+
+```mermaid
+sequenceDiagram
+    participant Job as e2e-smoke-fault ジョブ
+    participant CLI as ./target/release/shikomi
+
+    Note over Job: daemon は起動しない（fault injection）
+    Job->>CLI: ./target/release/shikomi list
+    CLI-->>Job: exit 非ゼロ（daemon IPC ソケット未存在 → 接続失敗）
+    Job->>Job: exit code が 0 なら FAIL（逆正常性違反）
+    Job->>Job: exit code が 非ゼロ なら PASS
+```
+
+**ステップ一覧（`e2e-smoke-fault` ジョブ）**:
+
+| 順序 | ステップ名 | コマンド | 目的 |
+|------|-----------|---------|------|
+| 1 | checkout | `actions/checkout@v4` | リポジトリ取得 |
+| 2〜4 | Rust環境 | `dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` | ビルド環境 |
+| 5 | build shikomi-cli | `cargo build --release -p shikomi-cli` | テスト対象 CLI バイナリをビルド |
+| 6 | fault check | `! ./target/release/shikomi list` | IPC 未接続で exit 非ゼロを返すことを検証（`!` でシェル反転） |
+
+**`! ./target/release/shikomi list` の動作**:
+- daemon が起動していない → `shikomi list` が exit 非ゼロ → `!` が反転して exit 0 → CI ステップ PASS
+- daemon が誤って起動していた場合 → `shikomi list` が exit 0 → `!` が反転して exit 非ゼロ → CI ステップ FAIL（テスト前提条件違反）
+
+このシンプルな反転チェックは smoke スクリプトに引数フラグを追加するより軽量で SSoT を保ちやすい（KISS）。
+
+### 6.9 headless 制約（テスト対象外）
 
 基本設計書 §4.3 の headless 制約を再掲する（実装上の注意点として）。
 
@@ -363,10 +435,10 @@ sequenceDiagram
 
 ### 7.2 shikomi-gui 追加による影響
 
-| 新規依存 | Sub-E で追加される理由 | 既存 deny.toml への影響 |
+| 新規依存 | Sub-D/E で追加される理由 | 既存 deny.toml への影響 |
 |---------|-------------------|----------------------|
 | `tauri-plugin-shell@2` | daemon 再起動機能（Sub-D #97） | Tauri 公式 crate のため既存 `[advisories]` で問題なし |
-| `tauri-driver`（非採用） | E2E フレームワーク不採用のため追加なし | — |
+| `tauri-driver`（不採用） | CI テストフレームワークとして検討したが YAGNI（シェルスクリプト smoke で必要十分）のため依存追加なし | — |
 
 ### 7.3 新規 RUSTSEC Advisory 発生時の対応手順
 
@@ -408,7 +480,7 @@ flowchart LR
 | `APPLE_TEAM_ID` | build-macos | tauri build (macos) | Apple Developer Team ID |
 | `GITHUB_TOKEN` | 全ジョブ | actions/checkout | リポジトリ読み取り（`permissions.contents: read`） |
 
-Windows / Linux ジョブ・e2e-smoke ジョブは repository secrets を参照しない。fork PR でもすべてのステップが実行される（macOS ジョブのみ fork PR をスキップ）。
+Windows / Linux ジョブ・e2e-smoke ジョブ・e2e-smoke-fault ジョブは repository secrets を参照しない。fork PR でもすべてのステップが実行される（macOS ジョブのみ fork PR をスキップ）。
 
 ---
 
@@ -422,40 +494,94 @@ Windows / Linux ジョブ・e2e-smoke ジョブは repository secrets を参照�
 | `cargo tauri build` 失敗（Rust コンパイルエラー） | 成果物なし | ジョブ FAIL。CI ログでエラー詳細確認 |
 | macOS 公証失敗（Apple サーバー負荷） | DMG 未生成 | ジョブ FAIL。手動で再実行（`workflow_dispatch`）。タイムアウトは通常 5 分以内 |
 | macOS 公証失敗（証明書期限切れ） | DMG 未署名 | repository secret の更新が必要 → キャプテンに報告 |
-| `kill -0 $GUI_PID` 失敗（E2E smoke） | GUI 起動失敗 | e2e-smoke ジョブ FAIL。bundler.yml には影響しない |
+| daemon ソケット待機タイムアウト（E2E smoke） | daemon 起動失敗 | e2e-smoke ジョブ FAIL。daemon の起動ログを確認 |
+| GUI クラッシュ（E2E smoke）| GUI 起動失敗 | e2e-smoke ジョブ FAIL。shikomi-gui の初期化ログを確認 |
 | `shikomi list` 失敗（E2E smoke） | daemon IPC 未接続 | e2e-smoke ジョブ FAIL。daemon の起動ログを確認 |
 
-### 9.2 bundler.yml と e2e-smoke の独立性
+### 9.2 bundler.yml・e2e-smoke・e2e-smoke-fault の独立性
 
 ```mermaid
 flowchart LR
     Bundler["bundler.yml\n（3 OS ビルド）"]
     E2E["e2e-smoke\n（test-gui.yml）"]
+    Fault["e2e-smoke-fault\n（test-gui.yml）"]
     Artifacts["GitHub Artifact\n（成果物）"]
     Result["smoke PASS / FAIL"]
+    FaultResult["fault check PASS / FAIL"]
 
     Bundler --> Artifacts
     E2E --> Result
+    Fault --> FaultResult
     Bundler -.->|"独立（依存なし）"| E2E
+    Bundler -.->|"独立（依存なし）"| Fault
 ```
 
-E2E smoke 失敗は bundler の成果物生成を妨げない。インストーラの動作検証（AC-GUI-08/09/10）は手動受入とする（基本設計書 §4.3 参照）。
+E2E smoke 失敗・fault 失敗は bundler の成果物生成を妨げない。
 
 ### 9.3 Keychain クリーンアップの保証（macOS）
 
-macOS ジョブで `tauri build` ステップが失敗した場合でも Keychain 削除ステップを実行するため、`cleanup Keychain` ステップには `if: always()` 条件を付与する。これにより、ジョブ失敗後もランナーの一時 Keychain が残留しない。
+macOS ジョブで `tauri build` ステップが失敗した場合でも Keychain 削除ステップを実行するため、`cleanup Keychain` ステップには `if: always()` 条件を付与する（§3.4 参照）。smoke スクリプトの `trap EXIT` と同じ対称性原則を CI ステップにも適用する。
 
 ---
 
 ## 10. feature-spec との対応（REQ-CI → 実装ファイルトレーサビリティ）
 
-| REQ-CI | 実装ファイル | 詳細セクション |
-|--------|------------|-------------|
-| REQ-CI-01 | `.github/workflows/bundler.yml` | §1 / §2 / §3 / §4 |
-| REQ-CI-02 | `.github/workflows/bundler.yml` (build-macos) | §3 |
-| REQ-CI-03 | `.github/workflows/bundler.yml` (build-windows) | §4 |
-| REQ-CI-04 | `.github/workflows/bundler.yml` (build-linux) | §2 |
-| REQ-CI-05 | `.github/workflows/bundler.yml` (upload-artifacts) | §5 |
-| REQ-CI-06 | `deny.toml` 更新手順 | §7 |
-| REQ-CI-07 | `.github/workflows/test-gui.yml` (e2e-smoke) | §6 |
-| REQ-CI-08 | `.github/workflows/bundler.yml` (on.paths) | §1.2 |
+| REQ-CI | 実装ファイル | 詳細セクション | 自動検証方法 |
+|--------|------------|-------------|------------|
+| REQ-CI-01 | `.github/workflows/bundler.yml` | §1 / §2 / §3 / §4 | `bundler.yml` 実行（内部 PR）+ `actionlint`（TC-GUI-CI-UT01） |
+| REQ-CI-02 | `.github/workflows/bundler.yml` (build-macos) | §3 | `bundler.yml` build-macos ジョブ実行（内部 PR）。自動 CI = ジョブ成功。**最終受入 = 手動（AC-GUI-09 Gatekeeper 検証）** |
+| REQ-CI-03 | `.github/workflows/bundler.yml` (build-windows) | §4 | `bundler.yml` build-windows ジョブ実行（内部 PR）。自動 CI = ジョブ成功。**最終受入 = 手動（AC-GUI-08 SmartScreen 確認）** |
+| REQ-CI-04 | `.github/workflows/bundler.yml` (build-linux) | §2 | `bundler.yml` build-linux ジョブ実行（内部 PR）+ `actionlint` |
+| REQ-CI-05 | `.github/workflows/bundler.yml` (upload-artifacts) | §5 | `bundler.yml` 実行後の GitHub Actions artifact UI で目視確認（7 日 / 30 日は時間経過後） |
+| REQ-CI-06 | `deny.toml` + `audit.yml` | §7 | `cargo deny check`（TC-GUI-CI-UT03）が PR CI で自動実行 |
+| REQ-CI-07 | `.github/workflows/test-gui.yml` (e2e-smoke + e2e-smoke-fault) | §6 | `e2e-smoke`（TC-GUI-CI-IT01〜IT03）+ `e2e-smoke-fault`（TC-GUI-CI-IT04）が PR CI で自動実行 |
+| REQ-CI-08 | `.github/workflows/bundler.yml` (on.paths) | §1.2 | `actionlint`（TC-GUI-CI-UT01）で paths フィルタ構文を静的検証 |
+
+**REQ-CI-02/03 の自動カバレッジ補足**: macOS 署名・公証（REQ-CI-02）と Windows MSI/NSIS ビルド（REQ-CI-03）の「成果物が正常に生成される」という自動 CI カバレッジは `bundler.yml` ジョブの成功/失敗で確認する。ただし Gatekeeper 通過（AC-GUI-09）・SmartScreen 警告（AC-GUI-08）はバイナリを実際の OS で手動実行して受入確認する。この役割分担を `test-design.md §§4/7` で明示する。
+
+---
+
+## 11. composite action 設計（DRY: 3 OS 共通セットアップ）
+
+### 11.1 DRY 違反の解消方針
+
+3 つの OS ジョブ（build-linux / build-macos / build-windows）はいずれも以下の共通ステップを持つ:
+
+1. `actions/checkout@v4`
+2. `dtolnay/rust-toolchain@stable`
+3. `Swatinem/rust-cache@v2`
+4. `actions/setup-node@v4` (node: 20)
+5. `npm ci` (in `crates/shikomi-gui/ui/`)
+6. `cargo install --locked tauri-cli`
+
+これを各ジョブに直接書くと、Node.js バージョン変更・Rust toolchain 更新・npm ci パス変更の際に 3 箇所を同期修正する必要が生じる（Boy Scout Rule 違反予備軍）。composite action として抽出することで SSoT を確保する。
+
+### 11.2 composite action 仕様
+
+| 項目 | 値 |
+|------|-----|
+| 配置先 | `.github/actions/tauri-build-setup/action.yml` |
+| 種別 | composite action（`using: "composite"`） |
+| inputs | なし（バージョンは action 内でハードコード。変更は action 単一箇所のみ） |
+| outputs | なし |
+
+**composite action 内ステップ**:
+
+| 順序 | ステップ名 | action/コマンド |
+|------|-----------|--------------|
+| 1 | checkout | `actions/checkout@v4` |
+| 2 | install Rust stable | `dtolnay/rust-toolchain@stable` |
+| 3 | Rust build cache | `Swatinem/rust-cache@v2` |
+| 4 | setup Node.js 20 | `actions/setup-node@v4` with `node-version: "20"` |
+| 5 | npm ci (shikomi-gui UI) | `npm ci` in `crates/shikomi-gui/ui/` |
+| 6 | install tauri-cli | `cargo install --locked tauri-cli` |
+
+### 11.3 composite action を使わないステップ（OS 固有）
+
+| OS | 固有ステップ | 理由 |
+|----|------------|------|
+| Linux | `apt-get install` (system libraries) | パッケージマネージャが OS 依存 |
+| macOS | Keychain セットアップ / クリーンアップ | Apple 固有の署名フロー |
+| Windows | 追加なし（WebView2 プリインストール済み） | — |
+
+これらは composite action に含めず、各ジョブの OS 固有ステップとして残す。composite action は「どの OS でも同じ」ステップのみに絞る（KISS）。
