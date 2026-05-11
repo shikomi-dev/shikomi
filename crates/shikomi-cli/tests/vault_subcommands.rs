@@ -353,12 +353,11 @@ fn tc_f_i11b_path_traversal_via_env_var_rejected() {
 // daemon が起動していない場合は DaemonNotRunning で失敗する。
 // 現時点では daemon バイナリのビルドが前提になるため #[ignore] とする。
 
+// BUG-112-01 修正: `DaemonSpawn` は `#[cfg(unix)]` 限定シンボルのため、
+// `#[cfg_attr(target_os = "windows", ignore)]` のランタイムスキップでは
+// Windows コンパイル時に E0433 が発生する。`#[cfg(unix)]` でコンパイル自体を除外する。
 #[test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "expectrl PTY check is Unix-specific, Windows uses Console API \
-              (test-design integration.md §10.3)"
-)]
+#[cfg(unix)]
 #[ignore = "requires pre-built shikomi-daemon binary and running DaemonSpawn for IPC handshake; \
             run `cargo build -p shikomi-daemon` first, then test verifies NonInteractivePassword \
             is returned before IPC Unlock call (C-38, test-design integration.md §10.4.7, \
