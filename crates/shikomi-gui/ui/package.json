@@ -9,9 +9,11 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "solid-js": "^1.8"
+    "solid-js": "^1.8",
+    "zxcvbn": "^4.4"
   },
   "devDependencies": {
+    "@types/zxcvbn": "^4.4",
     "typescript": "^5.4",
     "vite": "^5.3",
     "vite-plugin-solid": "^2.10"

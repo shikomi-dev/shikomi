@@ -285,10 +285,7 @@ mod tests {
         );
         // message はデバッグ専用（Display 準拠）。Sub-C は crypto_reason を使う
         let msg = v["message"].as_str().unwrap();
-        assert!(
-            !msg.is_empty(),
-            "message must not be empty: {v}"
-        );
+        assert!(!msg.is_empty(), "message must not be empty: {v}");
         // BackoffActive 固有の wait_secs は Crypto には存在しない
         assert!(
             v.get("wait_secs").is_none() || v["wait_secs"].is_null(),
