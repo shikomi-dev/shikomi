@@ -50,7 +50,7 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
 
 /// ウィンドウ「×」ボタンをトレイ常駐にリダイレクトするハンドラを登録する（REQ-TRAY-02）。
 ///
-/// `CloseRequested` を `prevent_default()` して `hide()` する。
+/// `CloseRequested` を `prevent_close()` して `hide()` する。
 /// `AppHandle::exit(0)` はトレイメニューの「終了」のみが呼ぶ唯一の終了経路（§2.2）。
 fn register_close_to_tray_handler(app: &App) {
     let Some(window) = app.get_webview_window("main") else {
@@ -61,7 +61,7 @@ fn register_close_to_tray_handler(app: &App) {
     let window_clone = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_default();
+            api.prevent_close();
             if let Err(e) = window_clone.hide() {
                 tracing::warn!(error = %e, "system_tray: window.hide() failed");
             }

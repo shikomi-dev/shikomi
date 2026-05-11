@@ -22,30 +22,20 @@ use crate::ipc_client::{round_trip_checked, AppState};
 /// カウントダウンポーリングタスクのエントリポイント。
 ///
 /// `setup()` から `tauri::async_runtime::spawn` で起動する。
-/// `AppHandle` の weak 参照を使い、ランタイム終了後に安全にループを終了させる。
+/// トレイアイコンが見つからなくなった時点（アプリ終了途中）でループを終了する。
 /// エラーは `tracing::warn!` でログし、タスクは継続する（best-effort）。
 ///
 /// 設計根拠: docs/features/shikomi-gui/system-tray/detailed-design.md §4.3
 pub async fn run<R: Runtime>(app_handle: AppHandle<R>, tray_id: TrayIconId) {
-    let weak = app_handle.downgrade();
-    // 強参照を解放してランタイム終了検知を weak のみに委ねる
-    drop(app_handle);
-
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        let Some(app) = weak.upgrade() else {
-            // ランタイム終了: ループを安全に終了する（REQ-TRAY-05 §4.3）
-            tracing::debug!("countdown: AppHandle dropped; exiting loop");
+        let remaining = poll_remaining(&app_handle).await;
+
+        let Some(tray) = app_handle.tray_by_id(&tray_id) else {
+            // トレイが破棄されている（アプリ終了途中）→ ループを安全に終了する（REQ-TRAY-05 §4.3）
+            tracing::debug!("countdown: tray icon not found; exiting loop");
             break;
-        };
-
-        let remaining = poll_remaining(&app).await;
-
-        let Some(tray) = app.tray_by_id(&tray_id) else {
-            // トレイが破棄されている（アプリ終了途中）→ best-effort で継続
-            tracing::warn!("countdown: tray icon not found; skipping tooltip update");
-            continue;
         };
 
         let text = tooltip_text(remaining);
