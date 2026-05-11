@@ -35,7 +35,7 @@ crates/shikomi-gui/src/
       tray.rs       ← get_clipboard_countdown Tauri Command（REQ-TRAY-04）
 ```
 
-**モジュール可視性規則**: `tooltip_text()` / `calc_remaining()` は `countdown.rs` 内のモジュールプライベート関数（`pub` なし）とする。`system_tray::setup()` のみ `pub fn` として `lib.rs` に公開する。
+**モジュール可視性規則**: `tooltip_text()` は `countdown.rs` 内のモジュールプライベート関数（`pub` なし）とする。`system_tray::setup()` のみ `pub fn` として `lib.rs` に公開する。`calc_remaining()` は A案適用により削除済み（残秒計算は daemon 側 `get_clipboard_status.rs` に一元化）。
 
 **追加依存パッケージ**:
 
@@ -83,7 +83,7 @@ flowchart TB
 |------|------|
 | トレイアイコン生成 | `TrayIconBuilder::new()` でアイコン・ツールチップ・メニューを設定し `build(app)` |
 | ウィンドウ close-to-tray 設定 | `app.get_webview_window("main")` に `on_window_event` ハンドラを登録 |
-| countdown タスク起動 | `tauri::async_runtime::spawn` で `countdown::run(app_handle)` を起動 |
+| countdown タスク起動 | `tauri::async_runtime::spawn` で `countdown::run(app_handle, tray_id)` を起動 |
 
 **アイコンリソース**: 既存の `icons/32x32.png`（`tauri.conf.json` の `bundle.icon` で定義済み）を使用する。OS 別アイコン解決は `tauri::image::Image::from_path` で行い、プラットフォーム差異を吸収する。
 

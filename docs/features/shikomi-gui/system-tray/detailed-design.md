@@ -26,7 +26,7 @@ sequenceDiagram
     SetupFn->>SetupFn: tray.on_tray_icon_event(右クリック → popup)
     SetupFn->>SetupFn: menu.on_menu_event(id 分岐)
     SetupFn->>Window: on_window_event(CloseRequested → prevent_default + hide)
-    SetupFn->>CountdownTask: tauri::async_runtime::spawn(countdown::run(app_handle))
+    SetupFn->>CountdownTask: tauri::async_runtime::spawn(countdown::run(app_handle, tray_id))
     CountdownTask-->>SetupFn: JoinHandle（drop 時 abort）
 ```
 
@@ -245,7 +245,7 @@ daemon 未接続（`AppState == None`）の場合、IPC 呼び出しをスキッ
 | 関数名 | 可視性 | 役割 |
 |--------|--------|------|
 | `tooltip_text(remaining: Option<u64>) -> String` | `fn`（モジュールプライベート） | ツールチップ文字列を生成する純粋関数。`countdown.rs` 内でのみ呼ぶ |
-| `calc_remaining(started_at: Instant, now: Instant) -> Option<u64>` | `fn`（モジュールプライベート） | 経過時間から残秒を計算する純粋関数。`now` を引数注入することで `Instant::now()` 依存を排除しテスト可能にする |
+
 
 どちらも `pub fn` にしない。呼び出し元は `countdown::run()` のみ。
 
