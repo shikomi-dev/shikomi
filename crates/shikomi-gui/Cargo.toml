@@ -6,5 +6,29 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# lib + bin の 2 ターゲット構成
+# - lib: pub fn run() を公開し、将来 `shikomi-cli` から直接呼び出せる
+# - bin: `shikomi_gui::run()` を呼ぶ 3 行ラッパ（SUBSYSTEM:WINDOWS でコンソール非表示）
+[lib]
+name = "shikomi_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shikomi-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Tauri v2 ランタイム（tech-stack.md §2.1 / §2.6）
+# tray-icon: UC-GUI-005 システムトレイ常駐（Sub-D で実装）
+tauri = { version = "2", features = ["tray-icon"] }
+serde           = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror       = { workspace = true }
+
+[build-dependencies]
+# Tauri ビルドスクリプト（tauri.conf.json の検証 + コード生成）
+tauri-build = { version = "2", features = [] }
+
 [lints]
 workspace = true

@@ -147,6 +147,12 @@ pub enum CliError {
         /// 解析失敗詳細。
         reason: String,
     },
+
+    /// GUI 起動失敗（`shikomi-gui` バイナリが見つからない / 起動失敗）。
+    ///
+    /// R1-GUI-01: `shikomi gui` コマンドが `shikomi-gui` を exec できない場合。
+    #[error("failed to launch GUI: {0}")]
+    GuiLaunchFailed(String),
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -270,7 +276,8 @@ impl From<&CliError> for ExitCode {
             | CliError::Domain(_)
             | CliError::WrongPassword
             | CliError::BackoffActive { .. }
-            | CliError::UnexpectedIpcResponse { .. } => Self::SystemError,
+            | CliError::UnexpectedIpcResponse { .. }
+            | CliError::GuiLaunchFailed(_) => Self::SystemError,
             // exit 3: 暗号化未対応 / vault Locked / 保護モード Unknown（Sub-F SSoT）
             CliError::EncryptionUnsupported
             | CliError::VaultLocked
@@ -552,6 +559,10 @@ mod tests {
                 CliError::UnexpectedIpcResponse {
                     request_kind: "ListRecords",
                 },
+            ),
+            (
+                "GuiLaunchFailed",
+                CliError::GuiLaunchFailed("No such file or directory (os error 2)".to_owned()),
             ),
         ];
         for (name, err) in system_error_cases {

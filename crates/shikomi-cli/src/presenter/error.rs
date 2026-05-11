@@ -274,6 +274,12 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "use format like ctrl+alt+1 or shift+f1".to_owned(),
             "ctrl+alt+1 や shift+f1 のような形式で指定してください".to_owned(),
         ),
+        CliError::GuiLaunchFailed(msg) => (
+            format!("failed to launch GUI: {msg}"),
+            format!("GUI の起動に失敗しました: {msg}"),
+            "is shikomi-gui installed? try reinstalling shikomi".to_owned(),
+            "shikomi-gui がインストールされているか確認してください".to_owned(),
+        ),
     }
 }
 

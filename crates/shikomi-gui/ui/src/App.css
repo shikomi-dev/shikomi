@@ -1,0 +1,5 @@
+/* Sub-A: 骨格スタイル。Sub-C (#96) で本実装に置き換える。 */
+.app-root {
+  padding: 2rem;
+  font-family: system-ui, sans-serif;
+}

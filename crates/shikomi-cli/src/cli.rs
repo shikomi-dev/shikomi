@@ -87,6 +87,13 @@ pub enum Subcommand {
         about = "Vault encryption management commands (encrypt/decrypt/unlock/lock/change-password/rekey/rotate-recovery)"
     )]
     Vault(VaultSubcommand),
+
+    /// GUI アプリを起動する。
+    ///
+    /// `shikomi-gui` バイナリをサブプロセスとして起動する（Sub-A 実装）。
+    /// 設計根拠: `docs/features/shikomi-gui/feature-spec.md` R1-GUI-01
+    #[command(about = "Launch the graphical interface")]
+    Gui,
 }
 
 // -------------------------------------------------------------------
