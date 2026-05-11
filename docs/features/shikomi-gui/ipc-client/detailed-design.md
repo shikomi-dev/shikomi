@@ -153,7 +153,7 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 | `ipc_code` 値（凍結） | 対応 `IpcErrorCode` variant | 追加フィールド | Sub-C の表示責務 |
 |----------------------|----------------------------|---------------|-----------------|
 | `"vault_locked"` | `VaultLocked` | なし | アンロックモーダルを表示（R1-GUI-13） |
-| `"hotkey_conflict"` | `HotkeyConflict { reason }` | なし | 「競合エントリ名」を表示（R1-GUI-08, UC-GUI-003） |
+| `"hotkey_conflict"` | `HotkeyConflict { reason }` | `"hotkey_conflict_entry": "<競合エントリ名の文字列>"` | **`hotkey_conflict_entry` フィールドの値**を競合エントリ名として UI に表示する（R1-GUI-08, UC-GUI-003）。`message` への依存は禁止 |
 | `"not_found"` | `NotFound { id }` | なし | 「エントリが見つかりません」エラーダイアログ |
 | `"crypto"` | `Crypto { reason }` | `"crypto_reason": "<kebab-case固定文言>"` | `crypto_reason` により分岐：`"wrong-password"` → 「パスワードが一致しません」、`"weak-password"` → 「パスワードが脆弱です」、`"nonce-limit-exceeded"` → 「再暗号化が必要です」（UC-GUI-006）。凍結許容値セットは `IpcErrorCode::Crypto.reason` 設計書 SSoT 参照 |
 | `"backoff_active"` | `BackoffActive { wait_secs }` | `"wait_secs": <u32>` | **`wait_secs` フィールドの値**（秒数）を UI に表示する。`message` への依存は禁止 |
@@ -166,7 +166,7 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 | `"internal"` | `Internal { reason }` | なし | 「予期しないエラーが発生しました」エラーダイアログ |
 | `"protocol_downgrade"` | `ProtocolDowngrade` | なし | 「daemon との通信エラーが発生しました。再起動してください」エラーダイアログ |
 
-**追加フィールド仕様**: `crypto` と `backoff_active` のみ標準の `kind` / `ipc_code` / `message` 3フィールドに加えて専用フィールドを持つ。完全な JSON 例：
+**追加フィールド仕様**: `hotkey_conflict` / `crypto` / `backoff_active` の3 variant のみ標準の `kind` / `ipc_code` / `message` 3フィールドに加えて専用フィールドを持つ。完全な JSON 例：
 
 ```
 // backoff_active
@@ -174,6 +174,9 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 
 // crypto
 { "kind": "ipc_error", "ipc_code": "crypto", "crypto_reason": "wrong-password", "message": "crypto error: wrong-password" }
+
+// hotkey_conflict
+{ "kind": "ipc_error", "ipc_code": "hotkey_conflict", "hotkey_conflict_entry": "GitHub Token", "message": "hotkey conflict: hotkey conflict" }
 ```
 
 ---
