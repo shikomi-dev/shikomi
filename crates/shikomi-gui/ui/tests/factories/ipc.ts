@@ -90,6 +90,8 @@ export function errInvalidInput(
 
 /** label_empty — ラベル空欄 */
 export const errLabelEmpty = () => errInvalidInput("label_empty", "label must not be empty");
+/** label_invalid — ラベル形式不正（Rust 凍結文字列: "invalid label format"） */
+export const errLabelInvalid = () => errInvalidInput("label_invalid", "invalid label format");
 /** value_empty — 値空欄 */
 export const errValueEmpty = () => errInvalidInput("value_empty", "value must not be empty");
 /** password_empty — パスワード空欄（encrypt/decrypt/unlock 共通） */

@@ -223,6 +223,60 @@ describe("TC-GUI-UI-UT33: errors.ts — invalid_input hotkey_invalid", () => {
   });
 });
 
+describe("TC-GUI-UI-UT36: errors.ts — invalid_input label_invalid", () => {
+  it("invalid_input_code=label_invalid → 「ラベルの形式が正しくありません」", () => {
+    const result = resolveError(factory.errLabelInvalid());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("ラベルの形式が正しくありません");
+      // Rust 凍結文字列 "invalid label format" がユーザー表示に漏れない（REQ-UI-13）
+      expect(result.text).not.toContain("invalid label format");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TC-GUI-UI-UT37: 往復テスト — Rust 凍結文字列 → invalid_input_code → 日本語（§2.2）
+//
+// Rust invalid_input_code_key() が "invalid label format" を "label_invalid" に変換し、
+// TypeScript resolveInvalidInput が "label_invalid" を「ラベルの形式が正しくありません」に
+// 変換する経路を end-to-end で検証するネ。
+//
+// factory の message フィールドには実際の Rust 凍結文字列を使用している。
+// これにより Rust→key→日本語 の往復パスが一貫していることを保証する。
+// ---------------------------------------------------------------------------
+describe("TC-GUI-UI-UT37: 往復テスト — 'invalid label format'（Rust 凍結文字列）→ label_invalid → 「ラベルの形式が正しくありません」", () => {
+  it("Rust 凍結文字列 'invalid label format' が invalid_input_code=label_invalid を経由して日本語に変換される", () => {
+    // factory.errLabelInvalid() の message は実際の Rust 凍結文字列
+    const err = factory.errLabelInvalid();
+    expect(err.message).toBe("invalid label format");    // Rust 側の凍結文字列を確認
+    expect(err.invalid_input_code).toBe("label_invalid"); // invalid_input_code_key() の出力を確認
+
+    const result = resolveError(err);
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      // 日本語変換が正しく行われていること
+      expect(result.text).toBe("ラベルの形式が正しくありません");
+      // Rust 凍結文字列が DOM に漏れないこと（REQ-UI-13）
+      expect(result.text).not.toContain("invalid label format");
+    }
+  });
+
+  it("往復テスト — hotkey_invalid: 'invalid hotkey format'（Rust 凍結文字列）→ 「ホットキーの形式が正しくありません」", () => {
+    // 同様に hotkey_invalid 経路も確認（ペテルギウス指摘の修正後経路）
+    const err = factory.errHotkeyInvalid();
+    expect(err.message).toBe("invalid hotkey combo");    // factory 側の代替文字列
+    expect(err.invalid_input_code).toBe("hotkey_invalid");
+
+    const result = resolveError(err);
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("ホットキーの形式が正しくありません");
+      expect(result.text).not.toContain("invalid hotkey combo");
+    }
+  });
+});
+
 describe("TC-GUI-UI-UT34: errors.ts — invalid_input unknown code フォールバック", () => {
   it("未知の invalid_input_code → 「入力内容に誤りがあります」（フォールバック）", () => {
     const result = resolveError(factory.errInvalidInputUnknown());
@@ -245,6 +299,7 @@ describe("TC-GUI-UI-UT34: errors.ts — invalid_input unknown code フォール�
 describe("TC-GUI-UI-UT35: errors.ts — invalid_input 全種で message フィールド非混入（REQ-UI-13）", () => {
   const cases = [
     ["label_empty", factory.errLabelEmpty()],
+    ["label_invalid", factory.errLabelInvalid()],
     ["value_empty", factory.errValueEmpty()],
     ["password_empty", factory.errPasswordEmpty()],
     ["confirmation_required", factory.errConfirmationRequired()],
