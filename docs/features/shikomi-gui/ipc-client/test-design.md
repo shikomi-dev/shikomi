@@ -78,7 +78,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | TC-GUI-IPC-UT06 | REQ-IPC-05 | `detailed-design.md §3.5` | `assign_hotkey` — `Ctrl+Alt+9`（正常最大値）→ validation PASS | 正常系（境界値） |
 | TC-GUI-IPC-UT07 | REQ-IPC-09 | `detailed-design.md §3.9` | `decrypt_vault` — `confirmed: false` → `GUIError::InvalidInput("decrypt confirmation required")` | 異常系 |
 | TC-GUI-IPC-UT08 | REQ-IPC-04 | `detailed-design.md §4.2` | `delete_entry` — 不正 UUID 文字列 → `GUIError::InvalidInput("invalid record id format")` | 異常系 |
-| TC-GUI-IPC-UT09 | REQ-IPC-03 | `detailed-design.md §3.3` | `update_entry` — `label: None, value: None`（全フィールド `None`）→ IPC 送信省略、即時 `Edited { id }` 返却 | 正常系 |
+| TC-GUI-IPC-UT09 | REQ-IPC-03 | `detailed-design.md §3.3`, `§4.2` | `update_entry` — 不正 UUID 文字列 → `GUIError::InvalidInput("invalid record id format")`（IPC 送信なし） | 異常系 |
 | TC-GUI-IPC-UT10 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::DaemonNotRunning` を `serde_json::to_value` → `kind == "daemon_not_running"` | 正常系 |
 | TC-GUI-IPC-UT11 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::NotConnected` → `kind == "not_connected"` | 正常系 |
 | TC-GUI-IPC-UT12 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` → `kind == "protocol_version_mismatch"` | 正常系 |
@@ -171,17 +171,17 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | 操作 | `delete_entry(state, id="not-a-uuid")` |
 | 期待結果 | `Err(GUIError::InvalidInput("invalid record id format"))` |
 
-### TC-GUI-IPC-UT09: `update_entry` — 全フィールド `None`（IPC 省略）
+### TC-GUI-IPC-UT09: `update_entry` — 不正 UUID 文字列
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-GUI-IPC-UT09 |
-| 対応する要件ID | REQ-IPC-03（`detailed-design.md §3.3`） |
+| 対応する要件ID | REQ-IPC-03（`detailed-design.md §3.3`）、REQ-IPC-19（`basic-design.md §モジュール契約`） |
 | 対応する工程 | 階層 3 詳細設計 |
-| 種別 | 正常系（IPC 省略経路） |
-| 前提条件 | `AppState = Some(client)`（IPC は呼ばれないはずだが、AppState は接続済みで準備） |
-| 操作 | `update_entry(state, id=valid_uuid, label=None, value=None)` |
-| 期待結果 | `Ok({ id: valid_uuid })` が返る。MockDaemon への IPC リクエストは 0 件 |
+| 種別 | 異常系 |
+| 前提条件 | `AppState = Some(client)` |
+| 操作 | `update_entry(state, id="not-a-uuid", label=None, value=None)` |
+| 期待結果 | `Err(GUIError::InvalidInput("invalid record id format"))` が返る。MockDaemon への IPC リクエストは 0 件（Fail Fast、IPC 未到達） |
 
 ### TC-GUI-IPC-UT10〜UT14: `GUIError` Serialize 検証
 
@@ -417,7 +417,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 
 | 観点 | 基準 |
 |------|------|
-| REQ-IPC 全件網羅 | REQ-IPC-01〜12 全件が IT または UT でカバーされること |
+| REQ-IPC 全件網羅 | REQ-IPC-01〜12 全件が IT または UT でカバーされること（REQ-IPC-13 は `shikomi-infra` crate の `IpcEndpoint` 単体テストで担保、本 test-design 対象外） |
 | 正常系 | 全 Command の正常経路（IT）必須 |
 | 異常系 | Fail Fast（NotConnected）、validation 失敗（InvalidInput）、daemon エラー透過伝搬（Ipc）を網羅 |
 | 境界値 | `Ctrl+Alt+1`（最小）、`Ctrl+Alt+9`（最大）、`Ctrl+Alt+0`（範囲外）を必ず含む |
