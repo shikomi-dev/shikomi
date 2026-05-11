@@ -218,7 +218,10 @@ impl DaemonSpawn {
 }
 
 impl Drop for DaemonSpawn {
-    fn drop(&mut self) { let _ = self.process.kill(); }
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait(); // ゾンビ化防止: kill 後に必ず wait する（CI 並列実行時の pid リソース枯渇防止）
+    }
 }
 ```
 
@@ -245,11 +248,28 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 | 外部I/O | 方針 | characterization 状態 |
 |---|---|---|
 | **`shikomi-daemon` プロセス** | `DaemonSpawn`（`tests/helpers/daemon_spawn.rs`）経由で実子プロセス起動。`SHIKOMI_VAULT_DIR` env + **tempdir socket 親ディレクトリを `0700` 強制（起動前 chmod + 起動後 stat 検証 fail fast）** + `Drop` で `kill()` | **既存資産拡張**（Sub-F 工程3 で銀時実装）|
-| **TTY（password / mnemonic / DECRYPT 確認）** | `expectrl`（Unix 限定 dev-dep、Sub-D `e2e_daemon_phase15_pty.rs` で既導入）で PTY 擬似制御。stdin パイプ拒否確認（TC-F-I12）は `assert_cmd::Command::write_stdin` で非 TTY 経路 | **既存資産再利用** |
+| **TTY（password / mnemonic / DECRYPT 確認）** | `expectrl`（**Unix 限定** dev-dep、Sub-D `e2e_daemon_phase15_pty.rs` で既導入）で PTY 擬似制御。stdin パイプ拒否確認（TC-F-I12）は `assert_cmd::Command::write_stdin` で非 TTY 経路。**Windows CI 扱い**: `expectrl` は Unix 専用のため、PTY 経由入力を必要とする TC（TC-F-I01 / I02 / I02b / I03 / I03b / I05 / I06 / I07 / I07c / I08）に `#[cfg_attr(target_os = "windows", ignore = "expectrl PTY not available on Windows, covered by Unix CI (3-OS matrix design intent: TC-F-I* PTY path is Unix+macOS only)")]` を付与する。TC-F-I12（stdin パイプ拒否）は `write_stdin` 非 TTY 経路のため Windows でも実行可能 | **既存資産再利用** |
 | **vault.db（SQLite）** | §3 と同一: `TempDir` + `create_encrypted_vault()` ヘルパー経由 | 不要（既存パターン）|
 | **env seam（C-40 allowlist）** | `DaemonSpawn::with_idle_threshold` / `with_force_relock_fail` 経由で `#[cfg(debug_assertions)]` 限定 env 注入 | 不要（local env）|
 
-**`#[ignore]` ゲート管理**: TC-F-I07c は `SHIKOMI_DAEMON_FORCE_RELOCK_FAIL=1` が `#[cfg(debug_assertions)]` 限定のため、`#[cfg_attr(not(debug_assertions), ignore = "requires debug build")]` でゲート。**無声 skip 禁止** —— CI ログに `IGNORED: requires debug build` を明示して監査経路に含める。
+**`#[ignore]` ゲート管理（reason 文字列規約）**: TC-F-I07c は `SHIKOMI_DAEMON_FORCE_RELOCK_FAIL=1` が `#[cfg(debug_assertions)]` 限定のため release ビルドでは実行不可。**無声 skip 禁止** —— CI ログに reason を明示して監査経路に含める。
+
+reason 文字列の必須要素（vault-persistence/test-design/integration/changelog.md v8.4 確立規約 + Bug-F-003 再演防止 Boy Scout）:
+
+| 要素 | 内容 |
+|------|------|
+| ① skip 理由 | なぜ skip されるか（例: `requires debug build`）|
+| ② 関連ゲート | 制約の根拠（例: `C-40 allowlist gate`）|
+| ③ 設計書クロス参照 | TC が記述されている設計書パス + セクション（例: `test-design integration.md §10.3`）|
+| ④ 解除条件 | 将来 skip を外せる条件（例: `unlock condition: SHIKOMI_DAEMON_FORCE_RELOCK_FAIL extended to release builds by explicit flag`）|
+
+TC-F-I07c の完全 reason 文字列:
+```
+"requires debug build (C-40 allowlist gate, test-design integration.md §10.3,
+ unlock condition: SHIKOMI_DAEMON_FORCE_RELOCK_FAIL extended to release builds by explicit flag)"
+```
+
+TC-F-I10a〜d のうち Windows で skip するものおよび TC-F-I11b も同形式で reason 文字列を付与すること（実装担当の責務）。
 
 ### 10.4 テストケース一覧（TC-F-I01〜I12 / SSoT §15.6 1:1 対応）
 
@@ -310,6 +330,17 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 |-------|-------------|---------|------|---------|
 | TC-F-I12 | C-38 | 暗号化 vault + `DaemonSpawn` | `assert_cmd::Command::write_stdin("strong-password")` で非 TTY パイプ経路（`echo "strong-password" \| shikomi vault unlock` 相当）| exit 1 + `CliError::NonInteractivePassword` 文言 + 「パスワードはプロンプト入力のみ。`echo \| shikomi` の経路は提供していません」案内（C-38、Rev1 服部指摘5）|
 
+#### 10.4.8 インジェクション境界値（TC-F-I11）
+
+> `basic-design/security.md` は「rusqlite パラメータバインディング・`RecordLabel::try_new`・`VaultPaths::new` 検証に委譲」と規定する。本 §10.4.8 はその委譲が CLI → IPC V2 → daemon 経路で正しく機能するかを結合テストレイヤで証明する（OWASP A03 インジェクション防御）。ユニットテストで個別委譲先を検証するだけでは CLI 経由の連結経路での防御が保証されないため、結合テストレイヤでの確認が必要。
+
+| TC-ID | SSoT 受入基準 | 前提条件 | 操作 | 期待結果 |
+|-------|-------------|---------|------|---------|
+| TC-F-I11a | basic-design/security.md §OWASP A03 | plaintext vault + `DaemonSpawn` | `shikomi add Text "; DROP TABLE records;--" "value"` | exit 1 + `CliError::InvalidLabel` 由来エラー文言。後続 `shikomi list` で records テーブルが**消えていない**（SQL インジェクション防御の結合経路委譲確認、`RecordLabel::try_new` が CLI → IPC V2 → daemon 経路で機能することを証明）|
+| TC-F-I11b | basic-design/security.md §OWASP A03 | `SHIKOMI_VAULT_DIR` env を使用（`DaemonSpawn` 不要、`#[serial]` 直列化）| `SHIKOMI_VAULT_DIR=../../../../etc/passwd` を設定して `shikomi list` 実行 | exit 1 + `PersistenceError::InvalidVaultDir` 由来エラー文言（`VaultPaths::new` パストラバーサル防衛の委譲確認）。`/etc/` 配下に vault.db が**生成されない**。シェルメタ文字（`` ` `` / `$(...)` 等）を含む VAULT_DIR 値でも同様に拒否 |
+
+**TC-F-I11b Windows CI 扱い**: `#[cfg_attr(target_os = "windows", ignore = "path traversal boundary is /etc (Unix only), Windows equivalent covered by VaultPaths::new unit test (test-design integration.md §10.4.8, unlock condition: add Windows-specific traversal boundary TC)")]`
+
 ### 10.5 unit.md §5 との棲み分け表
 
 `unit.md §5（TC-UT-050〜053）` は `presenter::list::render_list` の **pure function ユニットテスト**（副作用なし、入力 DTO → 文字列変換）。本 §10 は CLI バイナリ全体の結合経路テスト。
@@ -329,7 +360,7 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 
 | テストファイル | TC | 責務 |
 |-------------|-----|------|
-| `crates/shikomi-cli/tests/vault_subcommands.rs` | TC-F-I01, I02, I02b, I03, I03b, I04, I05, I06, I07, I07c, I08, I09, I09b, I12 | vault 管理サブコマンドの CLI→IPC V2 結合経路。`DaemonSpawn` + `expectrl` PTY 使用 |
+| `crates/shikomi-cli/tests/vault_subcommands.rs` | TC-F-I01, I02, I02b, I03, I03b, I04, I05, I06, I07, I07c, I08, I09, I09b, I11a, I11b, I12 | vault 管理サブコマンドの CLI→IPC V2 結合経路 + インジェクション境界値。`DaemonSpawn` + `expectrl` PTY 使用 |
 | `crates/shikomi-cli/tests/mode_banner_integration.rs` | TC-F-I10a〜d | `shikomi list` mode banner 3 状態 + NO_COLOR。plaintext は `DaemonSpawn` 不要、Locked / Unlocked 状態は `DaemonSpawn` 使用 |
 
 **共通インフラ**:
@@ -354,6 +385,7 @@ fn setup_encrypted_daemon(vault_dir: &Path) -> DaemonSpawn {
 | EC-F8 Locked 時 CRUD fail fast + 情報漏洩防衛（grep 0 件）| TC-F-I09, TC-F-I09b |
 | EC-F9 / REQ-S16 mode banner 3 状態 + NO_COLOR | TC-F-I10a〜d |
 | C-38 stdin パイプ拒否（Rev1 服部指摘5）| TC-F-I12 |
+| OWASP A03 インジェクション防御（basic-design/security.md 委譲確認、結合経路証明）| TC-F-I11a, TC-F-I11b |
 
 ---
 
