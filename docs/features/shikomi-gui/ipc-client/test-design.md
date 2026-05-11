@@ -30,7 +30,7 @@
 
 | テストレベル | 配置先 | 実行コマンド |
 |------------|--------|------------|
-| UT（validation + Serialize） | `crates/shikomi-gui/src/ipc_client/error.rs` 内 `#[cfg(test)]` | `cargo test -p shikomi-gui` |
+| UT（validation + Serialize） | `crates/shikomi-gui/src/ipc_client/error/tests.rs`（`#[cfg(test)] mod tests;` 経由） | `cargo test -p shikomi-gui` |
 | UT（validation） | `crates/shikomi-gui/src/ipc_client/commands/entries.rs` 内 `#[cfg(test)]` | `cargo test -p shikomi-gui` |
 | UT（validation） | `crates/shikomi-gui/src/ipc_client/commands/hotkey.rs` 内 `#[cfg(test)]` | `cargo test -p shikomi-gui` |
 | UT（validation） | `crates/shikomi-gui/src/ipc_client/commands/vault.rs` 内 `#[cfg(test)]` | `cargo test -p shikomi-gui` |
