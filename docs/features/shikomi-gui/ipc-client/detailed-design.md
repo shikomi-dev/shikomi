@@ -91,11 +91,15 @@ CLI の `IpcClient` と同一仕様で実装する（共通 daemon への接続�
 |---------|--------|------|
 | `IpcEndpoint::default_for_current_user()` | `Result<PathBuf, PersistenceError>` | 現ユーザーのデフォルト IPC ソケットパスを解決。優先順位は下表 |
 
-| 優先度 | パス | 条件 |
-|--------|------|------|
-| 1 | `$SHIKOMI_VAULT_DIR/shikomi.sock`（Unix）/ `\\.\pipe\shikomi-{username}`（Windows） | 環境変数 `SHIKOMI_VAULT_DIR` が設定されている場合 |
-| 2 | `$XDG_RUNTIME_DIR/shikomi/shikomi.sock` | Linux / macOS（XDG 準拠） |
-| 3 | `dirs::data_dir()/shikomi/shikomi.sock`（Unix）/ `\\.\pipe\shikomi`（Windows） | フォールバック |
+| 優先度 | OS | パス | 条件 |
+|--------|----|----|------|
+| 1（Phase B 持ち越し、**本 Sub-B では未実装**） | Unix | `$SHIKOMI_VAULT_DIR/daemon.sock` | 環境変数 `SHIKOMI_VAULT_DIR` が設定されている場合。CLI の `connect_with_vault_dir` 経路として別実装済み。`IpcEndpoint` への統合は Phase B で対応予定 |
+| 2 | Unix | `$XDG_RUNTIME_DIR/shikomi/daemon.sock` | 環境変数 `XDG_RUNTIME_DIR` が設定かつ非空の場合 |
+| 3 | macOS | `dirs::cache_dir()/shikomi/daemon.sock` | `$XDG_RUNTIME_DIR` 未設定時のフォールバック（`~/Library/Caches/shikomi/daemon.sock` 相当） |
+| 3 | Linux / その他 Unix | `dirs::runtime_dir()/shikomi/daemon.sock` | `$XDG_RUNTIME_DIR` 未設定時のフォールバック（`/run/user/{uid}/shikomi/daemon.sock` 相当） |
+| — | Windows | `\\.\pipe\shikomi-daemon-{user-sid}` | SID は `ConvertSidToStringSidW` / `GetTokenInformation` で動的取得 |
+
+**ファイル名について**: daemon は `daemon.sock` でソケットを bind する（`crates/shikomi-daemon/src/` の bind 処理と整合）。`shikomi.sock` は誤りである。
 
 **移行計画**: CLI の `IpcVaultRepository::default_socket_path()` は本 Sub-B で `IpcEndpoint::default_for_current_user()` への委譲に書き換える（Boy Scout Rule）。
 
@@ -110,7 +114,7 @@ CLI の `IpcClient` と同一仕様で実装する（共通 daemon への接続�
 | `DaemonNotRunning` | なし | `"daemon_not_running"` | UDS / Named Pipe ファイルが存在しない（daemon 未起動） |
 | `ConnectionFailed(String)` | `message: String` | `"connection_failed"` | 接続後の IO エラー（切断含む）。`message` には `io::Error::kind().to_string()` のみを使用し、生の OS エラーメッセージ（ソケットパス・FD番号等）を含めない（OWASP A04） |
 | `ProtocolVersionMismatch` | `server: String, client: String` | `"protocol_version_mismatch"` | Handshake バージョン不一致 |
-| `Ipc(IpcErrorCode)` | なし（`IpcErrorCode` の `Display` を `message` に使用） | `"ipc_error"` | daemon 返却 `IpcErrorCode` の透過伝搬 |
+| `Ipc(IpcErrorCode)` | `ipc_code: String`（`IpcErrorCode` variant の安定識別子、§2.3 参照） | `"ipc_error"` | daemon 返却 `IpcErrorCode` の透過伝搬。JSON は 3 フィールド（`kind` / `ipc_code` / `message`）、Sub-C は `ipc_code` で UI 分岐する |
 | `Encode(String)` | `message: String` | `"encode_error"` | MessagePack シリアライズ失敗 |
 | `Decode(String)` | `message: String` | `"decode_error"` | MessagePack デシリアライズ失敗 |
 | `UnexpectedResponse(String)` | `message: String` | `"unexpected_response"` | 予期しない `IpcResponse` variant |
@@ -121,10 +125,17 @@ CLI の `IpcClient` と同一仕様で実装する（共通 daemon への接続�
 
 SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構造に写像する：
 
+**`ipc_error` 以外の全 variant（2 フィールド）**:
 ```
 { "kind": "<上記の kind 文字列>", "message": "<デバッグ用英語技術情報>" }
 ```
 
+**`Ipc(IpcErrorCode)` variant のみ（3 フィールド）**:
+```
+{ "kind": "ipc_error", "ipc_code": "<§2.3 の安定識別子>", "message": "<IpcErrorCode::Display 文字列>" }
+```
+
+`ipc_code` は §2.3 で凍結する安定識別子。Sub-C はこのフィールドで UI 分岐する。
 `IpcErrorCode` の `Display` 実装（`shikomi-core::ipc::error_code`）を `message` フィールドに使用する。
 
 **`message` フィールドの用途制限**:
@@ -133,17 +144,40 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 - Sub-C（UI 層）は `kind` フィールドを switch して**日本語メッセージを自前で表示する責務を持つ**（例: `"daemon_not_running"` → 「daemon が起動していません。`shikomi start` を実行してください」）
 - `message` を画面表示すると、ペルソナ A/C（田中俊介・佐々木健二）には意味不明な英語技術文字列が表示される（personas.md §ペルソナ A/C）
 
-### 2.3 `IpcErrorCode` の透過伝搬
+### 2.3 `IpcErrorCode` の透過伝搬 — `ipc_code` 安定識別子（凍結 API 契約）
 
-`GUIError::Ipc(IpcErrorCode)` は daemon 側エラーコードを変換せずに SolidJS に届ける。Sub-C（UI 層）は `kind == "ipc_error"` かつ `IpcErrorCode` variant に応じた表示制御を行う。
+`GUIError::Ipc(IpcErrorCode)` は daemon 側エラーコードを `ipc_code` フィールドに変換して SolidJS に届ける。Sub-C（UI 層）は `kind == "ipc_error"` を検出後、`ipc_code` で UI 分岐する。**`message` のパースに依存してはならない**（デバッグ用途のみ）。
 
-| `IpcErrorCode` variant | GUI での表示責務（Sub-C 実装） |
-|------------------------|------------------------------|
-| `VaultLocked` | アンロックモーダルを表示（R1-GUI-13） |
-| `HotkeyConflict` | 「競合エントリ名」を表示（R1-GUI-08, UC-GUI-003） |
-| `NotFound { id }` | 「エントリが見つかりません」エラーダイアログ |
-| `Crypto { reason: "wrong-password" }` | 「パスワードが一致しません」を表示（UC-GUI-006） |
-| `BackoffActive { wait_secs }` | Backoff 待ち時間を表示 |
+以下の `ipc_code` 文字列を**凍結 API 契約**とする。変更は本設計書の改訂 + Sub-C 更新を伴う PR で行うこと：
+
+| `ipc_code` 値（凍結） | 対応 `IpcErrorCode` variant | 追加フィールド | Sub-C の表示責務 |
+|----------------------|----------------------------|---------------|-----------------|
+| `"vault_locked"` | `VaultLocked` | なし | アンロックモーダルを表示（R1-GUI-13） |
+| `"hotkey_conflict"` | `HotkeyConflict { reason }` | `"hotkey_conflict_entry": "<競合エントリ名の文字列>"` | **`hotkey_conflict_entry` フィールドの値**を競合エントリ名として UI に表示する（R1-GUI-08, UC-GUI-003）。`message` への依存は禁止 |
+| `"not_found"` | `NotFound { id }` | なし | 「エントリが見つかりません」エラーダイアログ |
+| `"crypto"` | `Crypto { reason }` | `"crypto_reason": "<kebab-case固定文言>"` | `crypto_reason` により分岐：`"wrong-password"` → 「パスワードが一致しません」、`"weak-password"` → 「パスワードが脆弱です」、`"nonce-limit-exceeded"` → 「再暗号化が必要です」（UC-GUI-006）。凍結許容値セットは `IpcErrorCode::Crypto.reason` 設計書 SSoT 参照 |
+| `"backoff_active"` | `BackoffActive { wait_secs }` | `"wait_secs": <u32>` | **`wait_secs` フィールドの値**（秒数）を UI に表示する。`message` への依存は禁止 |
+| `"recovery_required"` | `RecoveryRequired` | なし | recovery 語 入力モーダルへ誘導 |
+| `"hotkey_parse_error"` | `HotkeyParseError { reason }` | なし | 「ホットキー形式が不正です」を表示 |
+| `"encryption_unsupported"` | `EncryptionUnsupported` | なし | 「この操作は現在サポートされていません」エラーダイアログ |
+| `"invalid_label"` | `InvalidLabel { reason }` | なし | 「ラベルが不正です」を表示 |
+| `"persistence"` | `Persistence { reason }` | なし | 「データ保存エラーが発生しました」エラーダイアログ |
+| `"domain"` | `Domain { reason }` | なし | 「操作を完了できませんでした」エラーダイアログ |
+| `"internal"` | `Internal { reason }` | なし | 「予期しないエラーが発生しました」エラーダイアログ |
+| `"protocol_downgrade"` | `ProtocolDowngrade` | なし | 「daemon との通信エラーが発生しました。再起動してください」エラーダイアログ |
+
+**追加フィールド仕様**: `hotkey_conflict` / `crypto` / `backoff_active` の3 variant のみ標準の `kind` / `ipc_code` / `message` 3フィールドに加えて専用フィールドを持つ。完全な JSON 例：
+
+```
+// backoff_active
+{ "kind": "ipc_error", "ipc_code": "backoff_active", "wait_secs": 30, "message": "unlock blocked by backoff for 30s" }
+
+// crypto
+{ "kind": "ipc_error", "ipc_code": "crypto", "crypto_reason": "wrong-password", "message": "crypto error: wrong-password" }
+
+// hotkey_conflict
+{ "kind": "ipc_error", "ipc_code": "hotkey_conflict", "hotkey_conflict_entry": "GitHub Token", "message": "hotkey conflict: hotkey conflict" }
+```
 
 ---
 

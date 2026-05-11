@@ -78,12 +78,18 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | TC-GUI-IPC-UT06 | REQ-IPC-05 | `detailed-design.md §3.5` | `assign_hotkey` — `Ctrl+Alt+9`（正常最大値）→ validation PASS | 正常系（境界値） |
 | TC-GUI-IPC-UT07 | REQ-IPC-09 | `detailed-design.md §3.9` | `decrypt_vault` — `confirmed: false` → `GUIError::InvalidInput("decrypt confirmation required")` | 異常系 |
 | TC-GUI-IPC-UT08 | REQ-IPC-04 | `detailed-design.md §4.2` | `delete_entry` — 不正 UUID 文字列 → `GUIError::InvalidInput("invalid record id format")` | 異常系 |
-| TC-GUI-IPC-UT09 | REQ-IPC-03 | `detailed-design.md §3.3` | `update_entry` — `label: None, value: None`（全フィールド `None`）→ IPC 送信省略、即時 `Edited { id }` 返却 | 正常系 |
+| TC-GUI-IPC-UT09 | REQ-IPC-03 | `detailed-design.md §3.3`, `§4.2` | `update_entry` — 不正 UUID 文字列 → `GUIError::InvalidInput("invalid record id format")`（IPC 送信なし） | 異常系 |
 | TC-GUI-IPC-UT10 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::DaemonNotRunning` を `serde_json::to_value` → `kind == "daemon_not_running"` | 正常系 |
 | TC-GUI-IPC-UT11 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::NotConnected` → `kind == "not_connected"` | 正常系 |
 | TC-GUI-IPC-UT12 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` → `kind == "protocol_version_mismatch"` | 正常系 |
-| TC-GUI-IPC-UT13 | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::VaultLocked)` → `kind == "ipc_error"`、`message` に `IpcErrorCode::VaultLocked` の `Display` 文字列 | 正常系 |
+| TC-GUI-IPC-UT13 | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::VaultLocked)` → `kind == "ipc_error"`、**`ipc_code == "vault_locked"`**、`message` に VaultLocked Display 文字列、`wait_secs` フィールドなし | 正常系 |
+| TC-GUI-IPC-UT13b | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` → `ipc_code == "backoff_active"`、**`wait_secs == 42`** | 正常系 |
+| TC-GUI-IPC-UT13c | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { reason: "slot occupied" })` → `ipc_code == "hotkey_conflict"`、**`hotkey_conflict_entry == "slot occupied"`**、`crypto_reason`/`wait_secs` なし（R1-GUI-08 契約） | 正常系 |
+| TC-GUI-IPC-UT13d | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::Crypto { reason: "wrong-password" })` → `ipc_code == "crypto"`、**`crypto_reason == "wrong-password"`**、`wait_secs` なし | 正常系 |
+| TC-GUI-IPC-UT13d(2) | `basic-design.md §2.2` | `detailed-design.md §2.3` | `Crypto { reason: "weak-password" }` → `crypto_reason == "weak-password"` | 正常系 |
+| TC-GUI-IPC-UT13d(3) | `basic-design.md §2.2` | `detailed-design.md §2.3` | `Crypto { reason: "nonce-limit-exceeded" }` → `crypto_reason == "nonce-limit-exceeded"` | 正常系 |
 | TC-GUI-IPC-UT14 | `basic-design.md §2.2` | `detailed-design.md §2.2` | `GUIError::InvalidInput("test message")` → `kind == "invalid_input"`, `message == "test message"` | 正常系 |
+| TC-GUI-IPC-UT15 | `detailed-design.md §2.3` | `detailed-design.md §2.3` | **§2.3 凍結 API 契約 全 13 variant 網羅テスト**: `ipc_code_key()` の全 variant が §2.3 凍結契約テーブルと完全一致すること（将来 rename/追加時の防衛線） | 正常系 |
 
 ### 4.2 結合テスト
 
@@ -171,29 +177,37 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | 操作 | `delete_entry(state, id="not-a-uuid")` |
 | 期待結果 | `Err(GUIError::InvalidInput("invalid record id format"))` |
 
-### TC-GUI-IPC-UT09: `update_entry` — 全フィールド `None`（IPC 省略）
+### TC-GUI-IPC-UT09: `update_entry` — 不正 UUID 文字列
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-GUI-IPC-UT09 |
-| 対応する要件ID | REQ-IPC-03（`detailed-design.md §3.3`） |
+| 対応する要件ID | REQ-IPC-03（`detailed-design.md §3.3`）、REQ-IPC-19（`basic-design.md §モジュール契約`） |
 | 対応する工程 | 階層 3 詳細設計 |
-| 種別 | 正常系（IPC 省略経路） |
-| 前提条件 | `AppState = Some(client)`（IPC は呼ばれないはずだが、AppState は接続済みで準備） |
-| 操作 | `update_entry(state, id=valid_uuid, label=None, value=None)` |
-| 期待結果 | `Ok({ id: valid_uuid })` が返る。MockDaemon への IPC リクエストは 0 件 |
+| 種別 | 異常系 |
+| 前提条件 | `AppState = Some(client)` |
+| 操作 | `update_entry(state, id="not-a-uuid", label=None, value=None)` |
+| 期待結果 | `Err(GUIError::InvalidInput("invalid record id format"))` が返る。MockDaemon への IPC リクエストは 0 件（Fail Fast、IPC 未到達） |
 
-### TC-GUI-IPC-UT10〜UT14: `GUIError` Serialize 検証
+### TC-GUI-IPC-UT10〜UT15（UT13b〜UT13d・UT15 含む）: `GUIError` Serialize 検証
 
-| テスト ID | 入力 GUIError | 期待 `kind` | 期待 `message` | 種別 |
+| テスト ID | 入力 GUIError | 期待 `kind` | 追加フィールド | 種別 |
 |---------|-------------|-----------|--------------|------|
-| TC-GUI-IPC-UT10 | `GUIError::DaemonNotRunning` | `"daemon_not_running"` | 非空文字列 | 正常系 |
-| TC-GUI-IPC-UT11 | `GUIError::NotConnected` | `"not_connected"` | 非空文字列 | 正常系 |
-| TC-GUI-IPC-UT12 | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` | `"protocol_version_mismatch"` | `"V1"` / `"V2"` 両方含む | 正常系 |
-| TC-GUI-IPC-UT13 | `GUIError::Ipc(IpcErrorCode::VaultLocked)` | `"ipc_error"` | `IpcErrorCode::VaultLocked` の Display 文字列と一致 | 正常系 |
-| TC-GUI-IPC-UT14 | `GUIError::InvalidInput("test message")` | `"invalid_input"` | `"test message"` と完全一致 | 正常系 |
+| TC-GUI-IPC-UT10 | `GUIError::DaemonNotRunning` | `"daemon_not_running"` | — | 正常系 |
+| TC-GUI-IPC-UT11 | `GUIError::NotConnected` | `"not_connected"` | — | 正常系 |
+| TC-GUI-IPC-UT12 | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` | `"protocol_version_mismatch"` | — | 正常系 |
+| TC-GUI-IPC-UT13 | `GUIError::Ipc(IpcErrorCode::VaultLocked)` | `"ipc_error"` | `ipc_code == "vault_locked"`、`wait_secs` なし | 正常系 |
+| TC-GUI-IPC-UT13b | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` | `"ipc_error"` | `ipc_code == "backoff_active"`、`wait_secs == 42` | 正常系 |
+| TC-GUI-IPC-UT13c | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { reason: "slot occupied" })` | `"ipc_error"` | `ipc_code == "hotkey_conflict"`、**`hotkey_conflict_entry == "slot occupied"`**、`crypto_reason`/`wait_secs` なし | 正常系 |
+| TC-GUI-IPC-UT13d | `GUIError::Ipc(IpcErrorCode::Crypto { reason: "wrong-password" })` | `"ipc_error"` | `ipc_code == "crypto"`、`crypto_reason == "wrong-password"` | 正常系 |
+| TC-GUI-IPC-UT13d(2) | `Crypto { reason: "weak-password" }` | `"ipc_error"` | `crypto_reason == "weak-password"` | 正常系 |
+| TC-GUI-IPC-UT13d(3) | `Crypto { reason: "nonce-limit-exceeded" }` | `"ipc_error"` | `crypto_reason == "nonce-limit-exceeded"` | 正常系 |
+| TC-GUI-IPC-UT14 | `GUIError::InvalidInput("test message")` | `"invalid_input"` | — | 正常系 |
+| TC-GUI-IPC-UT15 | 全 13 variant（テーブル参照） | `"ipc_error"` | §2.3 凍結契約の `ipc_code` 値と完全一致すること、かつ追加フィールド（`hotkey_conflict_entry`/`crypto_reason`/`wait_secs`）が各 variant で正しく出力されること | 正常系 |
 
-**操作共通**: `serde_json::to_value(&error).unwrap()` で JSON 変換し、`["kind"]` / `["message"]` フィールドを assert する
+**UT15 の意義（ペテルギウス要求）**: `ipc_code_key()` の全 variant を §2.3 凍結契約テーブルと突合する網羅テスト。さらに追加フィールド契約（`hotkey_conflict_entry`/`crypto_reason`/`wait_secs`）の存在も検証。将来 variant rename・追加・追加フィールド漏れを CI で即 Fail し、設計書更新を構造的に強制する防衛線。
+
+**操作共通**: `serde_json::to_value(&error).unwrap()` で JSON 変換し、`["kind"]` / `["ipc_code"]`（`kind == "ipc_error"` 時）/ 追加フィールドを assert する
 
 ---
 
@@ -403,7 +417,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 
 | テスト | ワークフロー | 備考 |
 |-------|------------|------|
-| TC-GUI-IPC-UT01〜UT14 | `lint.yml` + 新設 `test-gui.yml` | UDS 不使用のためヘッドレス OK |
+| TC-GUI-IPC-UT01〜UT15（UT13b〜UT13d・UT15 含む計 19件） | `lint.yml` + 新設 `test-gui.yml` | UDS 不使用のためヘッドレス OK |
 | TC-GUI-IPC-IT01〜IT18 | 新設 `test-gui.yml` | tempfile + UDS 使用。Linux/macOS で実行 |
 | Windows IT | `windows.yml`（拡張要）| Named Pipe 経路で TC-GUI-IPC-IT01〜IT05 相当を実行（UDS → Named Pipe 切り替え） |
 
@@ -417,7 +431,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 
 | 観点 | 基準 |
 |------|------|
-| REQ-IPC 全件網羅 | REQ-IPC-01〜12 全件が IT または UT でカバーされること |
+| REQ-IPC 全件網羅 | REQ-IPC-01〜12 全件が IT または UT でカバーされること（REQ-IPC-13 は `shikomi-infra` crate の `IpcEndpoint` 単体テストで担保、本 test-design 対象外） |
 | 正常系 | 全 Command の正常経路（IT）必須 |
 | 異常系 | Fail Fast（NotConnected）、validation 失敗（InvalidInput）、daemon エラー透過伝搬（Ipc）を網羅 |
 | 境界値 | `Ctrl+Alt+1`（最小）、`Ctrl+Alt+9`（最大）、`Ctrl+Alt+0`（範囲外）を必ず含む |

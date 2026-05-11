@@ -70,6 +70,14 @@ test-cli:
 test-daemon:
     cargo test --no-fail-fast --all-targets -p shikomi-daemon -p shikomi-cli --features "shikomi-daemon/test-fixtures,shikomi-infra/test-fixtures"
 
+# Sub-B (#95) shikomi-gui 専用テスト CI ジョブ。
+# UT（validation + GUIError Serialize）と IT（MockDaemon 経由 Tauri Commands）を一括実行。
+# `--all-targets` で inline `#[cfg(test)]` と `tests/` 配下の integration tests を両方含む。
+# `--no-fail-fast` で 1 件失敗時も後続テストを継続し、CI ログで全 fail 詳細を観測可能化。
+# Linux / macOS での実行を想定（UDS MockDaemon 使用）。Windows は windows.yml で別途対応。
+test-gui:
+    cargo test --no-fail-fast --all-targets -p shikomi-gui
+
 # ------------------------------------------------------------------ bench
 
 # Sub-B (#40) BC-3 リリースブロッカ — KDF 性能ベンチ gating。
