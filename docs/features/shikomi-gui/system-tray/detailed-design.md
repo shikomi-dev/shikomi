@@ -129,21 +129,26 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Task as countdown::run(app_handle)
-    participant Cmd as get_clipboard_countdown Command
+    participant Task as countdown::run(app_handle, tray_id)
+    participant Cmd as poll_remaining()
     participant Daemon as shikomi-daemon
+    participant App as AppHandle
     participant Tray as TrayIcon
+
     loop 1 秒ごと
         Task->>Task: tokio::time::sleep(1s)
-        Task->>Cmd: AppState.lock() → IpcRequest::GetClipboardStatus
-        Cmd->>Daemon: IPC round_trip
+        Task->>Cmd: poll_remaining(&app_handle)
+        Cmd->>Daemon: IpcRequest::GetClipboardStatus
         Daemon-->>Cmd: ClipboardStatus { remaining_secs }
-        Cmd-->>Task: ClipboardCountdownResult
+        Cmd-->>Task: Option<u64>
 
-        alt remaining_secs == Some(n), n > 0
-            Task->>Tray: set_tooltip("shikomi — クリップボードを自動消去まで {n} 秒")
-        else remaining_secs == None または 0
-            Task->>Tray: set_tooltip("shikomi")
+        Task->>App: tray_by_id(&tray_id)
+        alt TrayIcon 取得成功
+            App-->>Task: Some(tray)
+            Task->>Tray: tray.set_tooltip(tooltip_text(remaining))
+        else TrayIcon 消失（アプリ終了中）
+            App-->>Task: None
+            Task->>Task: break（ループ終了）
         end
     end
 ```
@@ -152,13 +157,16 @@ sequenceDiagram
 
 | ケース | 処理 |
 |--------|------|
-| `AppState` が `None`（daemon 未接続） | `ClipboardCountdownResult { remaining_secs: None }` とみなす（エラー伝搬なし）|
-| IPC 通信エラー | `tracing::debug!` でログのみ。ツールチップは前回状態を維持（polling failure = 非アクティブ扱いは過剰 reset のリスクがある）|
-| タスク panic | Tauri ランタイムが spawn タスクの panic を検知しないため、`catch_unwind` で囲み panic をログして継続する（countdown タスクの死がアプリ全体を止めない）|
+| `AppState` が `None`（daemon 未接続） | `poll_remaining()` が `None` を返す（エラー伝搬なし）。ツールチップは「shikomi」非アクティブ表示 |
+| IPC 通信エラー | `poll_remaining()` が `tracing::debug!` でログのみ、`None` を返す。ツールチップは「shikomi」に更新（過剰 reset のリスクより一貫性を優先）|
+| 予期しない IPC レスポンス variant | `tracing::debug!` でバリアント名をログ、`None` 返却 |
+| `set_tooltip` 失敗 | `tracing::warn!` でログしループ継続（best-effort。Linux Wayland 等の環境差異を吸収）|
+| `tray_by_id()` が `None`（トレイ消失） | ループを `break` で終了。アプリ終了中を示す。panic しない |
+| タスク panic | Tokio の spawn タスクは panic 発生時に当該タスクのみ終了し、アプリ全体を止めない（Tokio ランタイム保証）。`catch_unwind` は不要 |
 
 ### 4.3 タスクライフサイクル
 
-`countdown::run()` は `setup()` から spawn された後、アプリ終了まで継続するインフィニットループ。`AppHandle` の weak 参照を使い、ランタイム終了後も `set_tooltip` 呼び出しが panic しないよう安全にループを終了させる。エラーは `tracing::warn!` で記録しタスクを継続する。
+`countdown::run(app_handle, tray_id)` は `setup()` から `tauri::async_runtime::spawn` で起動する。`AppHandle` の strong 参照を保持し、毎ループで `app_handle.tray_by_id(&tray_id)` を呼ぶ。`None` が返った場合（トレイ破棄＝アプリ終了途中）は `break` でループを自然終了する。weak 参照を使わない理由: Tauri v2 の `tray_by_id()` が `Option` を返すことで生存確認が完結するため、weak 参照による二重管理は不要（KISS）。
 
 ---
 
