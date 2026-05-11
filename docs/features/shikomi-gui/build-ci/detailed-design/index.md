@@ -85,6 +85,16 @@ artifact 保持日数はトリガー条件で分岐する。`github.event_name =
 
 これを各ジョブに直接書くと、Node.js バージョン変更・Rust toolchain 更新・npm ci パス変更の際に 3 箇所を同期修正する必要が生じる（Boy Scout Rule 違反予備軍）。composite action として抽出することで SSoT を確保する。
 
+> **BUG-01 修正（確定済み）**: `actions/checkout@v4` は composite action **外**に置く。各 OS ジョブは composite action 呼び出しの前に自ジョブ定義内で `actions/checkout@v4` を実行する。理由: `Swatinem/rust-cache` のキャッシュキー算出はワークツリーのファイルハッシュに依存するため、checkout を composite action 内に含めると cache key の計算タイミングが checkout より前に走り、CI ランナー間でキャッシュヒットが正しく機能しない（BUG-01 で確認済み）。
+
+composite action が抽出する共通ステップ（checkout を除く）:
+
+1. `dtolnay/rust-toolchain@stable`
+2. `Swatinem/rust-cache@v2`
+3. `actions/setup-node@v4` (node: 20)
+4. `npm ci` (in `crates/shikomi-gui/ui/`)
+5. `cargo install --locked tauri-cli`
+
 ### 11.2 composite action 仕様
 
 | 項目 | 値 |
@@ -94,16 +104,17 @@ artifact 保持日数はトリガー条件で分岐する。`github.event_name =
 | inputs | なし（バージョンは action 内でハードコード。変更は action 単一箇所のみ） |
 | outputs | なし |
 
+> **注意**: `actions/checkout@v4` は composite action に含めない。各ジョブ（build-linux / build-macos / build-windows）は composite action 呼び出しの**前**のステップとして自ジョブ内で `actions/checkout@v4` を実行すること（BUG-01 修正済み）。
+
 **composite action 内ステップ**:
 
 | 順序 | ステップ名 | action/コマンド |
 |------|-----------|--------------|
-| 1 | checkout | `actions/checkout@v4` |
-| 2 | install Rust stable | `dtolnay/rust-toolchain@stable` |
-| 3 | Rust build cache | `Swatinem/rust-cache@v2` |
-| 4 | setup Node.js 20 | `actions/setup-node@v4` with `node-version: "20"` |
-| 5 | npm ci (shikomi-gui UI) | `npm ci` in `crates/shikomi-gui/ui/` |
-| 6 | install tauri-cli | `cargo install --locked tauri-cli` |
+| 1 | install Rust stable | `dtolnay/rust-toolchain@stable` |
+| 2 | Rust build cache | `Swatinem/rust-cache@v2` |
+| 3 | setup Node.js 20 | `actions/setup-node@v4` with `node-version: "20"` |
+| 4 | npm ci (shikomi-gui UI) | `npm ci` in `crates/shikomi-gui/ui/` |
+| 5 | install tauri-cli | `cargo install --locked tauri-cli` |
 
 ### 11.3 composite action を使わないステップ（OS 固有）
 
