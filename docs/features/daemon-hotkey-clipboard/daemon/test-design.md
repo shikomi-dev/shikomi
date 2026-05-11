@@ -4,7 +4,11 @@
 <!-- 配置先: docs/features/daemon-hotkey-clipboard/daemon/test-design.md -->
 <!-- システムテストは system-test-design.md に記述。本ファイルは IT + UT のみ -->
 
-## 0. 外部 I/O 依存マップ
+## 0. テスト方針参照
+
+本テスト設計書は **`config/prompts/test_strategy.md`** に定めるテスト戦略（テストレベル定義・ダブル方針・CI ワークフロー対応方針）に準拠する。本ファイルは IT + UT のみを記述し、システムテストは `system-test-design.md` に委ねる。
+
+## 1. 外部 I/O 依存マップ
 
 | テスト | 外部 I/O | 依存対象 | 対処 |
 |-------|---------|---------|------|
@@ -16,7 +20,7 @@
 
 **`MockBackend` と `MockClipboardWriter` の配置**: `crates/shikomi-daemon/tests/common/mock_backend.rs` / `mock_clipboard.rs`。テスト専用コードを本番コードに混入させない（`#[cfg(test)]` ガード不要、`tests/` 配下に物理分離）。
 
-## 1. テスト配置方針
+## 2. テスト配置方針
 
 | テストレベル | 配置先 | 実行コマンド |
 |------------|--------|------------|
@@ -26,7 +30,7 @@
 | IT | `crates/shikomi-daemon/tests/it_hotkey_event_loop.rs` | `cargo test -p shikomi-daemon` |
 | IT | `crates/shikomi-daemon/tests/it_ipc_hotkey.rs` | `cargo test -p shikomi-daemon` |
 
-## 2. テスト用ダブルの方針
+## 3. テスト用ダブルの方針
 
 `HotkeyBackend` trait を実装した `MockBackend` を `crates/shikomi-daemon/tests/common/mock_backend.rs` に配置。
 
@@ -35,7 +39,7 @@
 - `event_stream` は `tokio::sync::mpsc::Sender<HotkeyEvent>` を返す。テストから `Sender::send` でイベントを注入できる
 - クリップボード操作は `MockClipboard`（`Vec<String>` で書き込み履歴を保持）で差し替える
 
-## 3. ユニットテスト一覧
+## 4. ユニットテスト一覧
 
 ### TC-HD-DU01: `HotkeyManager::register_all` が vault エントリを全件登録する
 
@@ -70,7 +74,7 @@ Drop 後に `mock_backend.registered()` が空になることを確認。
 
 `MockClipboard` を使用し、write 後に value が保持され、clear 後に空になることを確認。
 
-## 4. 結合テスト一覧
+## 5. 結合テスト一覧
 
 ### TC-HD-DI01: `HotkeyEventLoop` — ホットキーイベント受信からクリップボード書き込みまで
 
@@ -119,7 +123,7 @@ Drop 後に `mock_backend.registered()` が空になることを確認。
 
 `shikomi list` の出力（CLI IT として `assert_cmd` で検証）に `[ctrl+alt+1]` が含まれることを確認。
 
-## 5. CI ワークフロー対応
+## 6. CI ワークフロー対応
 
 | テスト | ワークフロー | 備考 |
 |-------|------------|------|

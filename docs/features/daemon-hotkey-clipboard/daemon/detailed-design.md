@@ -92,16 +92,17 @@ IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`ass
 
 `tokio::select!` で `backend.event_stream()` と `shutdown_rx` を多重化。
 
-各イベント受信時の処理:
-1. `vault.lock().await.find_by_hotkey(combo)` でレコード取得
-2. レコードが `None` → `tracing::debug!` でログのみ（スキップ）
-3. `vek_cache.is_locked()` → `true` ならスキップ（サイレント、`R1-HK-07`）
-4. `vek_cache.is_locked()` → `false` ならペイロード取得（暗号化モードは VEK で復号）
-5. `clipboard.write(value)` でクリップボード書き込み
-6. `record.kind == RecordKind::Secret` ならば `clear_timer.schedule(30s, clipboard)` を呼ぶ
-7. `vault` の `Mutex` を 4 より前に drop する（クリップボード書き込みを Mutex 外で行う）
+各イベント受信時の処理順序は **§4.1.5 のステップ定義を正とする**。要点を以下に転記:
 
-**Mutex 保持時間の最小化**: vault の Mutex は「レコード検索 + ペイロード取得」のみに限定し、クリップボード書き込み（OS API 呼び出し）は Mutex 外で行う。
+1. vault Mutex 取得 → `find_by_hotkey` でレコード検索
+2. レコードが `None` → `tracing::debug!` でログのみ（スキップ）
+3. `vek_cache.is_locked()` が `true` → OS 通知「vault がロック中」を送信（R1-HK-13）してスキップ（R1-HK-07）
+4. ペイロードを `clone()` して `Vec<u8>` に取り出し → **vault Mutex を drop**
+5. `clipboard.write(&cloned_value)` でクリップボード書き込み（Mutex 外）
+6. 書き込み失敗 → OS 通知「クリップボードへの書き込みに失敗しました」（R1-HK-14）
+7. `record.kind == RecordKind::Secret` ならば `clear_timer.schedule(CLEAR_TIMEOUT, clipboard)` を呼ぶ
+
+**Mutex 保持時間の最小化**: vault の Mutex はステップ 1〜4 の「レコード検索 + ペイロード clone」のみに限定し、OS API 呼び出し（クリップボード・通知）は Mutex 外で行う。
 
 ## 5. `ClipboardWriter` 詳細
 
@@ -201,5 +202,6 @@ stateDiagram-v2
 | `arboard` | `^3.6` | Wayland `wayland-data-control` feature が 3.6 で安定。major ピン（3→4 は破壊的）|
 | `tauri-plugin-global-shortcut` | `^2.2` | Tauri v2 系列。major ピン必須 |
 | `ashpd` | `^0.13` | `global_shortcuts` feature が 0.13 で stable API。minor ピン |
+| `notify-rust` | `^4.11` | OS 通知（R1-HK-13 / R1-HK-14）。Linux: libnotify / macOS: NSUserNotification / Windows: Toast API。4.x 系は API 安定、5.x 移行時は破壊的変更あり。minor ピン |
 
 `cargo-deny` の `deny.toml` に上記 crate を追加し、major バージョン外への漂流をビルド失敗で検出する。

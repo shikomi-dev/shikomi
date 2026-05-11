@@ -12,7 +12,7 @@
 | R1-HK-04 | `ClipboardWriter::write` が `arboard::Clipboard` 経由で OS クリップボードに値を書き込む |
 | R1-HK-05 | `ClearTimer::schedule` が 30 秒後に `ClipboardWriter::clear` を実行するタスクを spawn する |
 | R1-HK-06 | `HotkeyBackend` trait を実装する `X11Backend` と `WaylandBackend` を Linux 起動時に動的選択する |
-| R1-HK-07 | vault がロック中の場合、`HotkeyEventLoop` はクリップボード書き込みをスキップする（サイレント失敗） |
+| R1-HK-07 | vault がロック中の場合、`HotkeyEventLoop` は OS 通知でユーザーに「ロック中」を伝えクリップボード書き込みをスキップする（R1-HK-13 準拠）|
 | R1-HK-08 | IPC ハンドラ `add.rs` / `edit.rs` が `hotkey` フィールドを処理し `Vault::assign_hotkey` を呼ぶ |
 | R1-HK-09 | IPC ハンドラ `edit.rs` が `clear_hotkey` フラグを処理し `Vault::clear_hotkey` を呼ぶ |
 
@@ -125,7 +125,7 @@ sequenceDiagram
     EL->>VEK: is_locked()
     alt vault がロック中
         VEK-->>EL: true
-        EL->>EL: スキップ（サイレント）
+        EL->>EL: OS通知「vault がロック中」を送信（R1-HK-13）+ スキップ
     else vault がアンロック
         VEK-->>EL: false
         EL->>CW: write(payload_value)
@@ -243,7 +243,7 @@ flowchart LR
 1  メールアドレス  [ctrl+alt+1]  plaintext
 ```
 
-> **Phase 切替注意**: `shikomi-cli` の `add.rs` / `edit.rs` は現在 Phase 1（SQLite 直結）で動作している。本 feature 実装時に IPC 経由（Phase 2）へ切り替える。切替は `shikomi-cli::main.rs` のコンポジションルートのみ変更し、UseCase 層は変更しない。詳細は `feature-spec.md §7` 参照。
+> **Phase 切替**: Phase 1 / Phase 2 の切替戦略は **`feature-spec.md §7`** を唯一の参照先とする。
 
 ## 4. 外部連携（新規依存 crate）
 
@@ -276,6 +276,6 @@ flowchart LR
 |-------------|------|
 | `HotkeyBackend::register` 失敗 | `tracing::error!` + そのホットキーをスキップ（他のホットキーは登録継続） |
 | `ClipboardWriter::new()` 失敗 | `tracing::warn!` + `ClipboardWriter` を無効状態に（ホットキー押下時はスキップ）。daemon 起動は継続 |
-| `ClipboardWriter::write()` 失敗 | `tracing::warn!` でログのみ。エラーを握り潰さず記録する |
+| `ClipboardWriter::write()` 失敗 | `tracing::warn!` でログ記録 + OS 通知「クリップボードへの書き込みに失敗しました」を送信（R1-HK-14）。エラーを握り潰さない |
 | `ClearTimer` abort エラー | 無視（tokio task abort は `JoinError::is_cancelled()` で正常扱い） |
 | Linux セッション検出失敗 | `tracing::warn!` + X11 バックエンドへフォールバック |
