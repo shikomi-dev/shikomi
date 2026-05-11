@@ -247,7 +247,7 @@ daemon 未接続（`AppState == None`）の場合、IPC 呼び出しをスキッ
 | `tooltip_text(remaining: Option<u64>) -> String` | `fn`（モジュールプライベート） | ツールチップ文字列を生成する純粋関数。`countdown.rs` 内でのみ呼ぶ |
 
 
-どちらも `pub fn` にしない。呼び出し元は `countdown::run()` のみ。
+この関数も `pub fn` にしない。呼び出し元は `countdown::run()` のみ。
 
 ---
 
