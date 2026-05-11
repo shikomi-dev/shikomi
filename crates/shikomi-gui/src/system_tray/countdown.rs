@@ -98,31 +98,31 @@ fn tooltip_text(remaining: Option<u64>) -> String {
 mod tests {
     use super::*;
 
-    // TC-TRAY-UT01: tooltip_text — カウントダウン中（残 15 秒）
+    // TC-GUI-TRAY-UT01: tooltip_text — カウントダウン中（残 15 秒）
     #[test]
     fn ut01_tooltip_text_countdown_active() {
         let text = tooltip_text(Some(15));
         assert_eq!(text, "shikomi — クリップボードを自動消去まで 15 秒");
     }
 
-    // TC-TRAY-UT02: tooltip_text — 非アクティブ（None）
+    // TC-GUI-TRAY-UT02: tooltip_text — 境界最小（残 1 秒）
     #[test]
-    fn ut02_tooltip_text_inactive_none() {
-        let text = tooltip_text(None);
-        assert_eq!(text, "shikomi");
+    fn ut02_tooltip_text_one_second_remaining() {
+        let text = tooltip_text(Some(1));
+        assert_eq!(text, "shikomi — クリップボードを自動消去まで 1 秒");
     }
 
-    // TC-TRAY-UT02b: tooltip_text — 非アクティブ（0 秒）
+    // TC-GUI-TRAY-UT03: tooltip_text — 非アクティブ（0 秒）
     #[test]
-    fn ut02b_tooltip_text_inactive_zero() {
+    fn ut03_tooltip_text_inactive_zero() {
         let text = tooltip_text(Some(0));
         assert_eq!(text, "shikomi");
     }
 
-    // TC-TRAY-UT07: tooltip_text — 境界最小（残 1 秒）
+    // TC-GUI-TRAY-UT04: tooltip_text — 非アクティブ（None）
     #[test]
-    fn ut07_tooltip_text_one_second_remaining() {
-        let text = tooltip_text(Some(1));
-        assert_eq!(text, "shikomi — クリップボードを自動消去まで 1 秒");
+    fn ut04_tooltip_text_inactive_none() {
+        let text = tooltip_text(None);
+        assert_eq!(text, "shikomi");
     }
 }
