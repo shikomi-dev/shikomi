@@ -1,0 +1,43 @@
+name: Test GUI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-gui:
+    # Sub-B (#95) shikomi-gui テスト CI ジョブ。
+    # Tauri v2 が GTK / WebKit2GTK / libdbus 等のシステムライブラリを要求するため
+    # Ubuntu 限定で実行する。macOS は WebKit バージョン差異のため除外。
+    # UT（validation + GUIError Serialize）と IT（MockDaemon UDS 経由）を含む。
+    # Windows Named Pipe 経路は windows.yml に移管（IT01〜IT05 相当）。
+    name: test-gui (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install system libraries (Tauri v2 dependencies)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-gui
+        run: just test-gui
