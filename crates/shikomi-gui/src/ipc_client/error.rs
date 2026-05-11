@@ -197,18 +197,73 @@ mod tests {
         );
     }
 
-    // TC-GUI-IPC-UT13
+    // TC-GUI-IPC-UT13 — GUIError::Ipc(VaultLocked): kind/ipc_code/message 全フィールド検証
+    //
+    // ペガサス指摘 Option A（§2.3 ipc_code 追加）対応: Sub-C は ipc_code で分岐する。
+    // ipc_code フィールドの存在と値を検証する（旧実装では kind のみ検証で ipc_code 欠落）。
     #[test]
-    fn ut13_ipc_vault_locked_kind_and_message() {
+    fn ut13_ipc_vault_locked_kind_ipc_code_and_message() {
         let e = GUIError::Ipc(IpcErrorCode::VaultLocked);
         let v = serde_json::to_value(&e).unwrap();
-        assert_eq!(v["kind"], "ipc_error");
+        // kind: "ipc_error"（全 IpcErrorCode 共通）
+        assert_eq!(v["kind"], "ipc_error", "kind must be ipc_error: {v}");
+        // ipc_code: "vault_locked"（Sub-C が UI 分岐に使う安定識別子）
+        assert_eq!(
+            v["ipc_code"], "vault_locked",
+            "ipc_code must be vault_locked: {v}"
+        );
+        // message: VaultLocked の Display 文字列（デバッグ専用）
         let msg = v["message"].as_str().unwrap();
         let expected = IpcErrorCode::VaultLocked.to_string();
         assert_eq!(
             msg, expected,
             "message must match IpcErrorCode::VaultLocked Display"
         );
+        // ipc_code == "vault_locked" のとき wait_secs は存在しない
+        assert!(
+            v.get("wait_secs").is_none() || v["wait_secs"].is_null(),
+            "wait_secs must not be present for VaultLocked: {v}"
+        );
+    }
+
+    // TC-GUI-IPC-UT13b — GUIError::Ipc(BackoffActive): wait_secs フィールド検証
+    //
+    // BackoffActive のみ wait_secs フィールドが追加される（§2.3 特例）。
+    // Sub-C が待機カウントダウンを UI 表示するために必要。
+    #[test]
+    fn ut13b_ipc_backoff_active_has_wait_secs() {
+        let e = GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 });
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "ipc_error", "kind must be ipc_error: {v}");
+        assert_eq!(
+            v["ipc_code"], "backoff_active",
+            "ipc_code must be backoff_active: {v}"
+        );
+        // wait_secs フィールドが数値として存在する
+        assert_eq!(
+            v["wait_secs"], 42,
+            "wait_secs must be 42 for BackoffActive{{ wait_secs: 42 }}: {v}"
+        );
+        // message にも wait_secs が含まれる（Display 準拠）
+        let msg = v["message"].as_str().unwrap();
+        assert!(
+            msg.contains("42"),
+            "message must contain wait_secs value '42': {msg}"
+        );
+    }
+
+    // TC-GUI-IPC-UT13c — GUIError::Ipc(HotkeyConflict): ipc_code 検証
+    //
+    // HotkeyConflict は IT08/IT12 で Rust Result として検証済みだが、
+    // JSON ipc_code フィールドは UT で補完する（§9 カバレッジ基準）。
+    #[test]
+    fn ut13c_ipc_hotkey_conflict_ipc_code() {
+        let e = GUIError::Ipc(IpcErrorCode::HotkeyConflict {
+            reason: "slot occupied".to_owned(),
+        });
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "ipc_error");
+        assert_eq!(v["ipc_code"], "hotkey_conflict");
     }
 
     // TC-GUI-IPC-UT14

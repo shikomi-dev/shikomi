@@ -82,7 +82,9 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | TC-GUI-IPC-UT10 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::DaemonNotRunning` を `serde_json::to_value` → `kind == "daemon_not_running"` | 正常系 |
 | TC-GUI-IPC-UT11 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::NotConnected` → `kind == "not_connected"` | 正常系 |
 | TC-GUI-IPC-UT12 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` → `kind == "protocol_version_mismatch"` | 正常系 |
-| TC-GUI-IPC-UT13 | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::VaultLocked)` → `kind == "ipc_error"`、`message` に `IpcErrorCode::VaultLocked` の `Display` 文字列 | 正常系 |
+| TC-GUI-IPC-UT13 | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::VaultLocked)` → `kind == "ipc_error"`、**`ipc_code == "vault_locked"`**、`message` に VaultLocked Display 文字列、`wait_secs` フィールドなし | 正常系 |
+| TC-GUI-IPC-UT13b | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` → `ipc_code == "backoff_active"`、**`wait_secs == 42`** | 正常系 |
+| TC-GUI-IPC-UT13c | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. })` → `ipc_code == "hotkey_conflict"` | 正常系 |
 | TC-GUI-IPC-UT14 | `basic-design.md §2.2` | `detailed-design.md §2.2` | `GUIError::InvalidInput("test message")` → `kind == "invalid_input"`, `message == "test message"` | 正常系 |
 
 ### 4.2 結合テスト
@@ -183,17 +185,19 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | 操作 | `update_entry(state, id="not-a-uuid", label=None, value=None)` |
 | 期待結果 | `Err(GUIError::InvalidInput("invalid record id format"))` が返る。MockDaemon への IPC リクエストは 0 件（Fail Fast、IPC 未到達） |
 
-### TC-GUI-IPC-UT10〜UT14: `GUIError` Serialize 検証
+### TC-GUI-IPC-UT10〜UT14（UT13b・UT13c 含む）: `GUIError` Serialize 検証
 
 | テスト ID | 入力 GUIError | 期待 `kind` | 期待 `message` | 種別 |
 |---------|-------------|-----------|--------------|------|
 | TC-GUI-IPC-UT10 | `GUIError::DaemonNotRunning` | `"daemon_not_running"` | 非空文字列 | 正常系 |
 | TC-GUI-IPC-UT11 | `GUIError::NotConnected` | `"not_connected"` | 非空文字列 | 正常系 |
 | TC-GUI-IPC-UT12 | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` | `"protocol_version_mismatch"` | `"V1"` / `"V2"` 両方含む | 正常系 |
-| TC-GUI-IPC-UT13 | `GUIError::Ipc(IpcErrorCode::VaultLocked)` | `"ipc_error"` | `IpcErrorCode::VaultLocked` の Display 文字列と一致 | 正常系 |
-| TC-GUI-IPC-UT14 | `GUIError::InvalidInput("test message")` | `"invalid_input"` | `"test message"` と完全一致 | 正常系 |
+| TC-GUI-IPC-UT13 | `GUIError::Ipc(IpcErrorCode::VaultLocked)` | `"ipc_error"` | VaultLocked Display 文字列と一致 | 正常系 | `ipc_code == "vault_locked"`、`wait_secs` フィールドなし |
+| TC-GUI-IPC-UT13b | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` | `"ipc_error"` | 42 を含む文字列 | 正常系 | `ipc_code == "backoff_active"`、`wait_secs == 42` |
+| TC-GUI-IPC-UT13c | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { reason: "slot occupied" })` | `"ipc_error"` | 非空文字列 | 正常系 | `ipc_code == "hotkey_conflict"` |
+| TC-GUI-IPC-UT14 | `GUIError::InvalidInput("test message")` | `"invalid_input"` | `"test message"` と完全一致 | 正常系 | — |
 
-**操作共通**: `serde_json::to_value(&error).unwrap()` で JSON 変換し、`["kind"]` / `["message"]` フィールドを assert する
+**操作共通**: `serde_json::to_value(&error).unwrap()` で JSON 変換し、`["kind"]` / `["ipc_code"]`（`kind == "ipc_error"` 時）/ `["message"]` フィールドを assert する
 
 ---
 
@@ -403,7 +407,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 
 | テスト | ワークフロー | 備考 |
 |-------|------------|------|
-| TC-GUI-IPC-UT01〜UT14 | `lint.yml` + 新設 `test-gui.yml` | UDS 不使用のためヘッドレス OK |
+| TC-GUI-IPC-UT01〜UT14（UT13b・UT13c 含む計 16件） | `lint.yml` + 新設 `test-gui.yml` | UDS 不使用のためヘッドレス OK |
 | TC-GUI-IPC-IT01〜IT18 | 新設 `test-gui.yml` | tempfile + UDS 使用。Linux/macOS で実行 |
 | Windows IT | `windows.yml`（拡張要）| Named Pipe 経路で TC-GUI-IPC-IT01〜IT05 相当を実行（UDS → Named Pipe 切り替え） |
 
