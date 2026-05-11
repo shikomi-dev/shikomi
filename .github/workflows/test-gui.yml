@@ -41,3 +41,73 @@ jobs:
 
       - name: just test-gui
         run: just test-gui
+
+  # ---------------------------------------------------------------------------
+  # e2e-smoke（REQ-CI-07 / TC-GUI-E01）
+  # 設計根拠: docs/features/shikomi-gui/build-ci/detailed-design/e2e.md §6
+  # ---------------------------------------------------------------------------
+  e2e-smoke:
+    name: e2e-smoke (ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install system libraries + xvfb
+        # 設計根拠: e2e.md §6.5 — xvfb 追加
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            pkg-config \
+            xvfb
+
+      - name: setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm ci (UI)
+        working-directory: crates/shikomi-gui/ui
+        run: npm ci
+
+      - name: build binaries
+        # 設計根拠: e2e.md §6.3 ステップ 7
+        run: cargo build --release -p shikomi-daemon -p shikomi-cli -p shikomi-gui
+
+      - name: e2e smoke test
+        # 設計根拠: e2e.md §6.3 ステップ 8 / §6.6 シーケンス図
+        run: bash scripts/smoke-e2e.sh
+
+  # ---------------------------------------------------------------------------
+  # e2e-smoke-fault（IT04 自動化: daemon 未起動時の IPC 失敗を逆正常性で検証）
+  # 設計根拠: docs/features/shikomi-gui/build-ci/detailed-design/e2e.md §6.8
+  # ---------------------------------------------------------------------------
+  e2e-smoke-fault:
+    name: e2e-smoke-fault (ubuntu)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build shikomi-cli
+        # 設計根拠: e2e.md §6.8 ステップ 5
+        run: cargo build --release -p shikomi-cli
+
+      - name: fault check (IPC must fail when daemon is not running)
+        # 設計根拠: e2e.md §6.8 ステップ 6
+        # daemon 未起動 → shikomi list が exit 非ゼロ → ! で反転 → ステップ PASS
+        run: "! ./target/release/shikomi list"

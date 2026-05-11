@@ -42,3 +42,7 @@ jobs:
 
       - name: just clippy
         run: just clippy
+
+      - name: shellcheck (scripts/smoke-e2e.sh)
+        # 設計根拠: docs/features/shikomi-gui/build-ci/detailed-design/e2e.md §6.4
+        run: shellcheck scripts/smoke-e2e.sh

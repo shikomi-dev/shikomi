@@ -1,0 +1,35 @@
+# composite action: Tauri ビルド共通セットアップ（3 OS DRY）
+# 設計根拠: docs/features/shikomi-gui/build-ci/detailed-design/index.md §11
+#
+# checkout / Rust stable / Rust cache / Node.js 20 / npm ci / tauri-cli を一括セットアップ。
+# バージョン変更はこのファイル 1 箇所のみ修正すればよい（SSoT）。
+# OS 固有ステップ（apt-get / Keychain 等）は各ジョブに残す（§11.3）。
+
+name: "Tauri Build Setup"
+description: "Common setup steps for Tauri builds: checkout, Rust, cache, Node.js, npm ci, tauri-cli"
+
+runs:
+  using: "composite"
+  steps:
+    - name: checkout
+      uses: actions/checkout@v4
+
+    - name: install Rust stable
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Rust build cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: setup Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: npm ci (shikomi-gui UI)
+      shell: bash
+      working-directory: crates/shikomi-gui/ui
+      run: npm ci
+
+    - name: install tauri-cli
+      shell: bash
+      run: cargo install --locked tauri-cli
