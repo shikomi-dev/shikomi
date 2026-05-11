@@ -207,6 +207,60 @@ flowchart LR
 - ただし `cargo install --locked` での crates.io 配布物のサプライチェーン監査は、将来 `cargo-deny` のポリシーを `deny.toml` で別途定義するか、`cargo vet` の導入を Sub-issue A 完了後に検討する（現時点では YAGNI）
 - GitHub Releases からのバイナリ配置は setup スクリプト内にピンされた SHA256 定数で完全性検証。バージョン更新は PR 差分で明示され CODEOWNERS レビュー必須
 
+### 2.6 GUI 層設計方針（Tauri Commands ブリッジ）
+
+**適用範囲**: 本節は `shikomi-gui` crate（Issue #90）に固有の設計方針を扱う。daemon / CLI とは独立した GUI 実装層の選定根拠と内部アーキテクチャを記載する。
+
+#### 2.6.1 三層通信モデル
+
+```mermaid
+flowchart LR
+    subgraph GUI["shikomi-gui プロセス"]
+        direction LR
+        SolidJS["SolidJS UI\n(createSignal / createStore)"]
+        TC["Tauri Commands\n(invoke_handler)"]
+        IpcClient["IPC Client\n(shikomi-core::ipc)"]
+    end
+    SolidJS -- "invoke('list_entries', ...)" --> TC
+    TC -- "IpcRequest::ListRecords" --> IpcClient
+    IpcClient -- "UDS / Named Pipe" --> Daemon["shikomi-daemon"]
+```
+
+GUI は以下 3 層を持つ。SolidJS が Tauri Commands を呼び、Tauri Commands のハンドラが daemon IPC に委譲する。GUI Rust バックエンドは vault に**直接アクセスしない**。
+
+| 層 | 技術 | 責務 |
+|----|------|------|
+| SolidJS UI | SolidJS + Vite | コンポーネント描画・ユーザ入力処理・状態表示 |
+| Tauri Commands | `tauri::command` マクロ | SolidJS ↔ Rust 境界。引数の型変換・エラー変換 |
+| IPC クライアント | `shikomi-core::ipc` 再利用 | daemon との MessagePack over UDS/Named Pipe 通信 |
+
+#### 2.6.2 Tauri Commands 設計規約
+
+| 規約 | 内容 | 根拠 |
+|------|------|------|
+| スキーマ共有 | Tauri Commands の引数 / 戻り値型は `shikomi-core::ipc` の型を直接使用（DRY） | GUI / CLI / daemon の 3 者で再定義しない。`tech-stack.md §2.1 IPC シリアライズ` の単一真実源方針と整合 |
+| エラー型 | Tauri Commands は `GUIError` enum に変換して SolidJS に返す。IPC エラーコードは `GUIError::Ipc(IpcErrorCode)` で透過的に伝搬 | フロント側で `switch` によるエラー分岐を型安全に行う |
+| 秘密情報 | SolidJS → Tauri Commands へのパスワード等は `SecretInput` 型（Drop 時 zeroize）で受け渡し。`console.log` / `debug` ログへの混入を構造的に防ぐ | `shikomi-core::secret::SecretBytes` の哲学継承 |
+| 非同期 | 全 Tauri Commands は `async fn`。IPC 応答待ちで Webview をブロックしない | Tauri v2 の `invoke` は Promise を返すため同期実装は UX 悪化（操作フリーズ）につながる |
+| daemon 未接続 | 接続未確立状態での Tauri Command 呼び出しは即 `GUIError::DaemonNotRunning` を返す。リトライは GUI 層で実装せず、ユーザ操作で明示再接続する | Fail Fast。Silent retry で「表示と実態の乖離」を起こさない |
+
+#### 2.6.3 SolidJS 状態管理方針
+
+| 項目 | 採用 | 根拠 |
+|------|------|------|
+| 状態管理 | `createSignal` / `createStore`（SolidJS 標準） | MVP の 1 ペイン構成では外部状態管理ライブラリ（Zustand 等）は YAGNI |
+| サーバ状態 | `createResource` で Tauri Command 呼び出しをラップ | Suspense 連携でローディング状態を宣言的に扱える |
+| フォームバリデーション | 送信前クライアントサイドで必須項目・空文字を Fail Fast チェック。daemon に不正リクエストを送らない | `R1-GUI-05` の要件実現。ネットワーク往復を減らす |
+
+#### 2.6.4 GUI 専用プラグイン選定
+
+| 要素 | 採用 | 根拠 |
+|------|------|------|
+| OS 通知（GUI フェーズ）| `tauri-plugin-notification` v2（Tauri 公式） | daemon フェーズの `notify-rust` と役割分担。GUI プロセスからの通知は Tauri 公式プラグインで統一。出典: https://v2.tauri.app/plugin/notification/ |
+| システムトレイ | Tauri v2 組み込み `tray-icon` | Tauri v2 では tray は core 機能として統合済み。別途プラグイン不要。出典: https://v2.tauri.app/learn/system-tray/ |
+| シェル実行（daemon 再起動）| `tauri-plugin-shell` v2（Tauri 公式） | トレイメニューの「daemon 再起動」で `shikomi start` を呼ぶ用途に限定。出典: https://v2.tauri.app/plugin/shell/ |
+| ウィンドウ制御 | Tauri v2 組み込み `WebviewWindow` | show / hide でトレイ ↔ ウィンドウ切替。追加プラグイン不要 |
+
 ## 3. プラットフォーム差分の扱い（アーキテクチャ方針）
 
 - `shikomi-core` は `no_std` 志向ではないが **I/O を持たない純粋ドメイン**とする
