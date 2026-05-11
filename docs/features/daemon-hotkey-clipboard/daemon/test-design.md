@@ -32,12 +32,22 @@
 
 ## 3. テスト用ダブルの方針
 
-`HotkeyBackend` trait を実装した `MockBackend` を `crates/shikomi-daemon/tests/common/mock_backend.rs` に配置。
+テスト用ダブルは全て `crates/shikomi-daemon/tests/common/` に物理分離して配置する（本番コードへの混入禁止）。
+
+| ダブル型 | 対応 trait | 配置ファイル | 内部状態 |
+|---------|-----------|------------|---------|
+| `MockBackend` | `HotkeyBackend` | `mock_backend.rs` | `HashSet<String>`（登録済みコンボ）+ `mpsc::Sender<HotkeyEvent>` |
+| `MockClipboardWriter` | `ClipboardWriter` | `mock_clipboard.rs` | `Vec<Vec<u8>>`（write履歴）+ `cleared: bool` |
+| `MockNotifier` | `Notifier` | `mock_notifier.rs` | `Mutex<Vec<(NotifyLevel, String, String)>>`（送信履歴）|
 
 `MockBackend` の仕様:
 - `register` / `unregister` は登録済みコンボを `HashSet<String>` で保持（検証用 getter を持つ）
 - `event_stream` は `tokio::sync::mpsc::Sender<HotkeyEvent>` を返す。テストから `Sender::send` でイベントを注入できる
-- クリップボード操作は `MockClipboard`（`Vec<String>` で書き込み履歴を保持）で差し替える
+
+`MockNotifier` の仕様:
+- `notify(level, title, body)` を呼ぶたびにタプルを `Vec` に追加（内部 `Mutex` で `Sync` を実現）
+- 検証用メソッド `notifications() -> Vec<(NotifyLevel, String, String)>` で送信履歴を取得
+- TC-HK-E05 の「OS 通知の発火を検証」など、通知発火の有無・内容を assert に使用する
 
 ## 4. ユニットテスト一覧
 

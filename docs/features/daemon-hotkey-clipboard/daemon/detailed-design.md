@@ -74,6 +74,7 @@ IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`ass
 | `vault` | `Arc<Mutex<Vault>>` | ホットキー → レコード解決 |
 | `vek_cache` | `VekCache` | ロック状態判定 |
 | `clipboard` | `Arc<Mutex<dyn ClipboardWriter>>` | クリップボード書き込み（trait オブジェクト、テスト時に `MockClipboardWriter` に差し替え可能） |
+| `notifier` | `Arc<dyn Notifier>` | OS 通知送信（trait オブジェクト、テスト時に `MockNotifier` に差し替え可能。`basic-design §2.7` 参照）|
 | `clear_timer` | `ClearTimer` | 自動クリアタイマー |
 
 ### 4.1.5 ペイロード取得とMutex保持時間

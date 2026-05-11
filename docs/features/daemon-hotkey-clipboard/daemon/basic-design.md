@@ -172,19 +172,36 @@ secret エントリの自動クリアタスク管理。
 2. タスク内: `tokio::time::sleep(duration)` → `writer.clear()`
 3. shutdown シグナル受信時: タイマータスクを `abort()`
 
-### 2.7 OS 通知設計（R1-HK-13 / R1-HK-14）
+### 2.7 `Notifier` trait と OS 通知設計（R1-HK-13 / R1-HK-14）
 
-`notify-rust` crate を使用してユーザーへのフィードバックを提供する。
+**`Notifier` を trait として定義する**（テスト時の `MockNotifier` 差し替えを可能にするため。`ClipboardWriter §2.5` と同一パターン）。
 
-| 状況 | 通知内容 | 通知タイプ |
-|------|---------|-----------|
-| vault ロック中のホットキー押下（R1-HK-13）| 「vault がロック中です。`shikomi vault unlock` を実行してください」| Low urgency（Linux）/ Info（Windows/macOS）|
-| クリップボード書き込み失敗（R1-HK-14）| 「クリップボードへの書き込みに失敗しました」| Normal urgency |
-| OS ホットキー登録失敗（起動時）| 「ホットキー `{combo}` の登録に失敗しました。他のアプリと競合している可能性があります」| Normal urgency |
+```
+trait Notifier: Send + Sync + 'static {
+    fn notify(&self, level: NotifyLevel, title: &str, body: &str) -> Result<(), NotifyError>;
+}
+```
 
-**通知の非ブロック性**: `notify-rust` の送信は非同期で行い、通知送信失敗は `tracing::warn!` でログのみ（通知システムの不在がアプリ動作を止めない）。
+（上記は Rust 関数シグネチャのプレーンテキスト表記）
 
-**サイレント失敗ポリシーの修正**: 旧設計では vault ロック中をサイレント失敗としていたが、**R1-HK-13 で OS 通知に変更**する。セキュリティリスクがない情報（「ロック中である」という事実）の通知は許容する。
+| 実装型 | 説明 |
+|-------|------|
+| `NotifyRustNotifier` | `notify-rust` crate を使用する本番実装 |
+| `MockNotifier` (テスト用) | `Vec<(NotifyLevel, String, String)>` で送信履歴を保持。`daemon/test-design.md §3` 参照 |
+
+`HotkeyEventLoop` は `notifier: Arc<dyn Notifier>` フィールドで保持する（詳細は `daemon/detailed-design.md §4.1`）。
+
+**通知シナリオ一覧**:
+
+| 状況 | title | body | level |
+|------|-------|------|-------|
+| vault ロック中のホットキー押下（R1-HK-13）| `"shikomi"` | `"vault がロック中です。shikomi vault unlock を実行してください"` | Low / Info |
+| クリップボード書き込み失敗（R1-HK-14）| `"shikomi"` | `"クリップボードへの書き込みに失敗しました"` | Normal |
+| OS ホットキー登録失敗（起動時）| `"shikomi"` | `"ホットキー {combo} の登録に失敗しました。他のアプリと競合している可能性があります"` | Normal |
+
+**通知の非ブロック性**: `notify()` 呼び出しは非同期で行い、失敗時は `tracing::warn!` でログのみ（通知システムの不在がアプリ動作を止めない）。
+
+**`Sync` 要件**: `HotkeyEventLoop` が `Arc<dyn Notifier>` を `tokio::spawn` タスク内で共有するため `Sync` 境界が必要。`MockNotifier` は `Mutex<Vec<...>>` で内部可変性を実現し `Sync` を満たす。
 
 ### 2.8 Linux バックエンド選択（セッション検出）
 
