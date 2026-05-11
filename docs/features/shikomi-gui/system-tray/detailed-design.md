@@ -158,7 +158,7 @@ sequenceDiagram
 
 ### 4.3 タスクライフサイクル
 
-`countdown::run()` は `setup()` から spawn された後、アプリ終了まで継続するインフィニットループ。`AppHandle` の weak 参照を使い、ランタイム終了後の `emit` エラーをサイレントに無視する。
+`countdown::run()` は `setup()` から spawn された後、アプリ終了まで継続するインフィニットループ。`AppHandle` の weak 参照を使い、ランタイム終了後も `set_tooltip` 呼び出しが panic しないよう安全にループを終了させる。エラーは `tracing::warn!` で記録しタスクを継続する。
 
 ---
 

@@ -217,7 +217,7 @@ Sub-B と同様。Tauri Command ハンドラは `tauri::State<AppState>` を受�
 | 種別 | 正常系 |
 | 操作 | `serde_json::to_value(&result).unwrap()` で JSON 変換し `["remaining_secs"]` フィールドを assert |
 
-**設計根拠**: `detailed-design.md §9`「SolidJS イベントペイロード型（凍結）: `remaining_secs: number | null`」との一致を UT で確認する。SolidJS 側が `null` / 数値を正しく受け取れることを型契約として保証する。
+**設計根拠**: `detailed-design.md §5.1`「`#[derive(Serialize)]` で `{ "remaining_secs": 15 }` または `{ "remaining_secs": null }` として SolidJS に渡る」のシリアライズ契約を UT で検証する。SolidJS 側が `null` / 数値を正しく受け取れることを型契約として保証する。
 
 ---
 
@@ -231,7 +231,7 @@ Sub-B と同様。Tauri Command ハンドラは `tauri::State<AppState>` を受�
 | `"open_window"` メニュー → `window.show()` | Tauri API 動作 | システムテスト |
 | `"restart_daemon"` メニュー → `tauri-plugin-shell` 実行 | OS プロセス起動。副作用あり | システムテスト |
 | `"quit"` メニュー → `app.exit(0)` | Tauri プロセス終了。テスト環境で実行不可 | システムテスト |
-| countdown ポーリングループ全体 | `AppHandle` の spawn + TrayIcon + emit が連動。Tauri ランタイム必要 | 上記 UT（純粋ロジック）+ IT（Command）で個別に担保 |
+| countdown ポーリングループ全体 | `AppHandle` の spawn + `set_tooltip` が連動。Tauri ランタイム必要 | 上記 UT（純粋ロジック）+ IT（Command）で個別に担保 |
 | macOS `Reopen` イベント | プラットフォーム固有。macOS 実機必要 | CI 外の実機検証 |
 | Linux Wayland `set_tooltip` 失敗 | OS 依存。エラーを飲み込む設計（best-effort） | Wayland 環境での実機検証 |
 
