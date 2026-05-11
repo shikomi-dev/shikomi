@@ -178,15 +178,7 @@ impl IpcVaultRepository {
     /// # Errors
     /// 解決元が利用不能な場合 `PersistenceError::CannotResolveVaultDir`。
     pub fn default_socket_path() -> Result<PathBuf, PersistenceError> {
-        #[cfg(unix)]
-        {
-            unix_default_socket_path()
-        }
-        #[cfg(windows)]
-        {
-            let sid = crate::io::windows_sid::resolve_self_user_sid()?;
-            Ok(PathBuf::from(format!(r"\\.\pipe\shikomi-daemon-{sid}")))
-        }
+        shikomi_infra::ipc::IpcEndpoint::default_for_current_user()
     }
 
     /// 接続先ソケットパスへの参照を返す（ログ・エラー表示用）。
@@ -522,27 +514,6 @@ pub struct RotateRecoveryOutcome {
     pub words: Vec<SerializableSecretBytes>,
     /// 再 unlock の成否（false 時は MSG-S20 連結表示、C-31/C-36）。
     pub cache_relocked: bool,
-}
-
-#[cfg(unix)]
-fn unix_default_socket_path() -> Result<PathBuf, PersistenceError> {
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir).join("shikomi").join("daemon.sock"));
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return dirs::cache_dir()
-            .map(|d| d.join("shikomi").join("daemon.sock"))
-            .ok_or(PersistenceError::CannotResolveVaultDir);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        dirs::runtime_dir()
-            .map(|d| d.join("shikomi").join("daemon.sock"))
-            .ok_or(PersistenceError::CannotResolveVaultDir)
-    }
 }
 
 // -------------------------------------------------------------------

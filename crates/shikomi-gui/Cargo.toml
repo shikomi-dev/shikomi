@@ -25,6 +25,15 @@ serde           = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror       = { workspace = true }
+# IPC クライアント依存（Sub-B ipc-client）
+shikomi-core    = { workspace = true }
+shikomi-infra   = { workspace = true }
+tokio           = { workspace = true }
+tokio-util      = { workspace = true }
+rmp-serde       = { workspace = true }
+bytes           = { workspace = true }
+futures-util    = { workspace = true }
+time            = { workspace = true }
 
 [build-dependencies]
 # Tauri ビルドスクリプト（tauri.conf.json の検証 + コード生成）

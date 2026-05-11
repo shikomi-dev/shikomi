@@ -4175,10 +4175,18 @@ dependencies = [
 name = "shikomi-gui"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "futures-util",
+ "rmp-serde",
  "serde",
+ "shikomi-core",
+ "shikomi-infra",
  "tauri",
  "tauri-build",
  "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
