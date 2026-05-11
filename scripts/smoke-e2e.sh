@@ -11,7 +11,7 @@
 #   0: 全検証 PASS（daemon 起動 / GUI 起動 / IPC 接続 / 正常終了）
 #   1: いずれかの検証 FAIL
 #
-# shellcheck disable=SC2317  # cleanup 関数は trap 経由で呼ばれるため直接参照なし
+# shellcheck disable=SC2317  # cleanup は "trap cleanup EXIT" で登録済み。shellcheck は trap 経由の呼び出しを静的に追跡できないため false positive
 
 set -euo pipefail
 
@@ -19,8 +19,12 @@ set -euo pipefail
 # 設定
 # ---------------------------------------------------------------------------
 
-# CI で XDG_RUNTIME_DIR が未設定の場合は /tmp を使用しソケットパスを確定させる
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+# XDG_RUNTIME_DIR が未設定の場合はセキュリティ上の理由で /tmp へのフォールバックを行わず終了する。
+# CI では test-gui.yml の "ensure XDG_RUNTIME_DIR" ステップで事前に設定すること。
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    echo "[smoke] FAIL: XDG_RUNTIME_DIR is not set. CI must configure it before running this script."
+    exit 1
+fi
 DAEMON_SOCKET_PATH="${XDG_RUNTIME_DIR}/shikomi/daemon.sock"
 
 DAEMON_BIN="./target/release/shikomi-daemon"
@@ -101,7 +105,14 @@ echo "[smoke] Polling GUI process for ${GUI_WAIT_SECS}s ..."
 WAITED=0
 while [ "$WAITED" -lt "$((GUI_WAIT_SECS * 2))" ]; do
     if ! kill -0 "$GUI_PID" 2>/dev/null; then
-        echo "[smoke] FAIL: GUI process exited unexpectedly"
+        wait "$GUI_PID" 2>/dev/null || true
+        GUI_EXIT=$?
+        if [ "$GUI_EXIT" -gt 128 ]; then
+            GUI_SIG=$((GUI_EXIT - 128))
+            echo "[smoke] FAIL: GUI process exited unexpectedly (exit=${GUI_EXIT}, signal=${GUI_SIG})"
+        else
+            echo "[smoke] FAIL: GUI process exited unexpectedly (exit=${GUI_EXIT})"
+        fi
         exit 1
     fi
     sleep 0.5

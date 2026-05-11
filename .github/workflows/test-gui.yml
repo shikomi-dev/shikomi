@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: install system libraries (Tauri v2 dependencies)
         run: |
@@ -53,9 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: install system libraries + xvfb
         # 設計根拠: e2e.md §6.5 — xvfb 追加
@@ -70,6 +70,15 @@ jobs:
             libssl-dev \
             pkg-config \
             xvfb
+
+      - name: ensure XDG_RUNTIME_DIR
+        # セキュリティ: smoke-e2e.sh は XDG_RUNTIME_DIR 未設定時に exit 1 する（/tmp フォールバック廃止）。
+        # ランナーが未設定の場合のみ /run/user/${UID} を作成して設定する。
+        run: |
+          UID_VAL="$(id -u)"
+          RTDIR="${XDG_RUNTIME_DIR:-/run/user/${UID_VAL}}"
+          mkdir -p "$RTDIR"
+          echo "XDG_RUNTIME_DIR=$RTDIR" >> "$GITHUB_ENV"
 
       - name: setup Node.js 20
         uses: actions/setup-node@v4
@@ -99,9 +108,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: build shikomi-cli
         # 設計根拠: e2e.md §6.8 ステップ 5
@@ -110,4 +119,4 @@ jobs:
       - name: fault check (IPC must fail when daemon is not running)
         # 設計根拠: e2e.md §6.8 ステップ 6
         # daemon 未起動 → shikomi list が exit 非ゼロ → ! で反転 → ステップ PASS
-        run: "! ./target/release/shikomi list"
+        run: "! ./target/release/shikomi list --ipc"

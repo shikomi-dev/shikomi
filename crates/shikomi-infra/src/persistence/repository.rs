@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags};
-use shikomi_core::{Record, Vault};
+use shikomi_core::{Record, Vault, VaultHeader, VaultVersion};
 
 use super::{
     audit::Audit,
@@ -56,6 +56,51 @@ impl SqliteVaultRepository {
     #[must_use]
     pub fn paths(&self) -> &VaultPaths {
         &self.paths
+    }
+
+    /// vault ディレクトリを作成し、OS 規定のパーミッション（Unix: 0700）を設定する。
+    ///
+    /// daemon コンポジションルートから呼び出し、`PermissionGuard::verify_dir` が
+    /// 確実に通過できる状態を保証する。
+    /// `run()` に生の `std::fs::create_dir_all` + `set_permissions` を書かないための
+    /// カプセル化（BUG-04 根治: 責務を repository 層に閉じる）。
+    ///
+    /// # Errors
+    ///
+    /// - ディレクトリ作成失敗・パーミッション設定失敗: `PersistenceError::Io`
+    pub fn prepare_dir(&self) -> Result<(), PersistenceError> {
+        PermissionGuard::ensure_dir(self.paths.dir())
+    }
+
+    /// vault を読み込む。`vault.db` が存在しない場合は空の plaintext vault を返す。
+    ///
+    /// 初回インストール / CI 環境など `vault.db` が未作成の状態で daemon が起動する場合に
+    /// IPC を受け付けられるよう、空の vault で起動する。NotFound 以外のエラーは伝播する。
+    ///
+    /// # Errors
+    ///
+    /// - `vault.db` が存在しない以外の IO エラー / 破損データ / ロック取得失敗:
+    ///   `PersistenceError`
+    pub fn load_or_create(&self) -> Result<Vault, PersistenceError> {
+        match self.load() {
+            Ok(v) => Ok(v),
+            Err(PersistenceError::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                tracing::info!(
+                    target: "shikomi_infra::persistence",
+                    "vault.db not found — starting with empty plaintext vault (new installation)"
+                );
+                Ok(Vault::new(
+                    VaultHeader::new_plaintext(
+                        VaultVersion::CURRENT,
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .expect("CURRENT version is always valid"),
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// `Instant` からミリ秒経過時間を計算する。オーバーフロー時は `u64::MAX`。
