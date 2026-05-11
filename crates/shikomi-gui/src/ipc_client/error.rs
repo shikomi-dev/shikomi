@@ -12,6 +12,7 @@
 //! | `ipc_code` | `kind == "ipc_error"` のみ | daemon エラー種別の安定識別子（§2.3）|
 //! | `wait_secs` | `ipc_code == "backoff_active"` のみ | 次回試行可能までの待機秒数 |
 //! | `crypto_reason` | `ipc_code == "crypto"` のみ | 暗号エラー詳細識別子（kebab-case 固定文言: `wrong-password` / `weak-password` / `nonce-limit-exceeded` 等）。Sub-C はこの値で UI 分岐する |
+//! | `hotkey_conflict_entry` | `ipc_code == "hotkey_conflict"` のみ | 競合している既存エントリ名の文字列。Sub-C は競合エントリ名を UI 表示する（R1-GUI-08）。`message` パースへの依存禁止 |
 //!
 //! Sub-C は `kind` → `ipc_code` の順で分岐し、`message` は開発ツール専用。
 //!
@@ -30,7 +31,8 @@ use thiserror::Error;
 /// Tauri Commands の統一エラー型。
 ///
 /// `Serialize` 実装でモジュール doc の JSON フィールド仕様に従い写像する。
-/// `Ipc` variant のみ `ipc_code`（+ `BackoffActive` は `wait_secs`）を追加フィールドとして持つ。
+/// `Ipc` variant のみ `ipc_code` を持ち、さらに `BackoffActive` は `wait_secs`、
+/// `Crypto` は `crypto_reason`、`HotkeyConflict` は `hotkey_conflict_entry` を追加フィールドとして持つ。
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GUIError {
@@ -89,7 +91,11 @@ impl Serialize for GUIError {
         S: Serializer,
     {
         match self {
-            // Ipc variant: kind + ipc_code + message（BackoffActive は wait_secs、Crypto は crypto_reason を追加）。
+            // Ipc variant: kind + ipc_code + message。
+            // variant ごとの追加フィールド（§2.3）:
+            //   BackoffActive → wait_secs
+            //   Crypto        → crypto_reason
+            //   HotkeyConflict→ hotkey_conflict_entry
             // Sub-C は ipc_code で daemon エラー種別を switch する（detailed-design.md §2.3）。
             Self::Ipc(code) => {
                 let mut map = serializer.serialize_map(None)?;
@@ -100,6 +106,9 @@ impl Serialize for GUIError {
                 }
                 if let IpcErrorCode::Crypto { reason } = code {
                     map.serialize_entry("crypto_reason", reason)?;
+                }
+                if let IpcErrorCode::HotkeyConflict { reason } = code {
+                    map.serialize_entry("hotkey_conflict_entry", reason)?;
                 }
                 map.serialize_entry("message", &code.to_string())?;
                 map.end()
