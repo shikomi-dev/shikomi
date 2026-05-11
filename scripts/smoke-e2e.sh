@@ -11,7 +11,7 @@
 #   0: 全検証 PASS（daemon 起動 / GUI 起動 / IPC 接続 / 正常終了）
 #   1: いずれかの検証 FAIL
 #
-# shellcheck disable=SC2317  # cleanup 関数は trap 経由で呼ばれるため直接参照なし
+# shellcheck disable=SC2329  # cleanup 関数は trap 経由で呼ばれるため直接参照なし
 
 set -euo pipefail
 

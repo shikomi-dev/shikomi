@@ -11,9 +11,6 @@ description: "Common setup steps for Tauri builds: checkout, Rust, cache, Node.j
 runs:
   using: "composite"
   steps:
-    - name: checkout
-      uses: actions/checkout@v4
-
     - name: install Rust stable
       uses: dtolnay/rust-toolchain@stable
 
