@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -13,9 +15,14 @@
     "zxcvbn": "^4.4"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "^0.8.10",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/user-event": "^14.6.1",
     "@types/zxcvbn": "^4.4",
+    "happy-dom": "^20.9.0",
     "typescript": "^5.4",
     "vite": "^5.3",
-    "vite-plugin-solid": "^2.10"
+    "vite-plugin-solid": "^2.10",
+    "vitest": "^2.1.9"
   }
 }
