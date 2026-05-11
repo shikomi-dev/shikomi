@@ -76,10 +76,32 @@ export function errNotFound(): GUIError {
   return { kind: "ipc_error", ipc_code: "not_found", message: "not found" };
 }
 
-/** invalid_input エラー */
-export function errInvalidInput(message: string): GUIError {
-  return { kind: "invalid_input", message };
+/**
+ * invalid_input エラー。
+ * @param invalid_input_code 凍結 API フィールド（§2.2）。未指定時は unknown フォールバックを確認
+ * @param message デバッグ用英語メッセージ（ユーザー表示禁止）
+ */
+export function errInvalidInput(
+  invalid_input_code?: string,
+  message = "invalid input",
+): GUIError {
+  return { kind: "invalid_input", invalid_input_code, message };
 }
+
+/** label_empty — ラベル空欄 */
+export const errLabelEmpty = () => errInvalidInput("label_empty", "label must not be empty");
+/** value_empty — 値空欄 */
+export const errValueEmpty = () => errInvalidInput("value_empty", "value must not be empty");
+/** password_empty — パスワード空欄（encrypt/decrypt/unlock 共通） */
+export const errPasswordEmpty = () => errInvalidInput("password_empty", "master password must not be empty");
+/** confirmation_required — decrypt 確認チェックなし */
+export const errConfirmationRequired = () => errInvalidInput("confirmation_required", "decrypt confirmation required");
+/** id_invalid — 無効 UUID */
+export const errIdInvalid = () => errInvalidInput("id_invalid", "invalid uuid");
+/** hotkey_invalid — ホットキー形式不正 */
+export const errHotkeyInvalid = () => errInvalidInput("hotkey_invalid", "invalid hotkey combo");
+/** unknown invalid_input_code — フォールバック確認用 */
+export const errInvalidInputUnknown = () => errInvalidInput("unknown_code", "some unknown error");
 
 /** recovery_required エラー */
 export function errRecoveryRequired(): GUIError {

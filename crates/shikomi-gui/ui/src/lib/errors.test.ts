@@ -2,6 +2,7 @@
  * errors.ts ユニットテスト
  *
  * TC-GUI-UI-UT17 〜 UT23: ipc_code 別変換、vault_locked 制御フロー信号
+ * TC-GUI-UI-UT28 〜 UT35: invalid_input_code 全7種変換（§6.2 凍結 API 契約）
  * 設計根拠: docs/features/shikomi-gui/ui/detailed-design/ux-and-visual.md §6
  */
 
@@ -145,6 +146,123 @@ describe("isDisconnectError", () => {
   it("vault_locked で false", () => {
     expect(isDisconnectError(factory.errVaultLocked())).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// TC-GUI-UI-UT28〜UT35: invalid_input_code 全7種変換（§6.2 凍結 API 契約）
+// ---------------------------------------------------------------------------
+
+describe("TC-GUI-UI-UT28: errors.ts — invalid_input label_empty", () => {
+  it("invalid_input_code=label_empty → 「ラベルを入力してください」", () => {
+    const result = resolveError(factory.errLabelEmpty());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("ラベルを入力してください");
+      // message フィールドの英語文言が混入していない
+      expect(result.text).not.toContain("label must not be empty");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT29: errors.ts — invalid_input value_empty", () => {
+  it("invalid_input_code=value_empty → 「値を入力してください」", () => {
+    const result = resolveError(factory.errValueEmpty());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("値を入力してください");
+      // かつて includes("empty") で label_empty と誤マッチしていた欠陥の回帰防止
+      expect(result.text).not.toContain("ラベル");
+      expect(result.text).not.toContain("value must not be empty");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT30: errors.ts — invalid_input password_empty", () => {
+  it("invalid_input_code=password_empty → 「パスワードを入力してください」", () => {
+    const result = resolveError(factory.errPasswordEmpty());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("パスワードを入力してください");
+      // かつて includes("empty") で label_empty と誤マッチしていた欠陥の回帰防止
+      expect(result.text).not.toContain("ラベル");
+      expect(result.text).not.toContain("master password must not be empty");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT31: errors.ts — invalid_input confirmation_required", () => {
+  it("invalid_input_code=confirmation_required → 「確認チェックボックスを有効にしてください」", () => {
+    const result = resolveError(factory.errConfirmationRequired());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("確認チェックボックスを有効にしてください");
+      expect(result.text).not.toContain("decrypt confirmation required");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT32: errors.ts — invalid_input id_invalid", () => {
+  it("invalid_input_code=id_invalid → 「無効なエントリIDです」", () => {
+    const result = resolveError(factory.errIdInvalid());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("無効なエントリIDです");
+      expect(result.text).not.toContain("invalid uuid");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT33: errors.ts — invalid_input hotkey_invalid", () => {
+  it("invalid_input_code=hotkey_invalid → 「ホットキーの形式が正しくありません」", () => {
+    const result = resolveError(factory.errHotkeyInvalid());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("ホットキーの形式が正しくありません");
+      expect(result.text).not.toContain("invalid hotkey combo");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT34: errors.ts — invalid_input unknown code フォールバック", () => {
+  it("未知の invalid_input_code → 「入力内容に誤りがあります」（フォールバック）", () => {
+    const result = resolveError(factory.errInvalidInputUnknown());
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("入力内容に誤りがあります");
+    }
+  });
+
+  it("invalid_input_code 未設定（undefined）→ フォールバック", () => {
+    // invalid_input_code が存在しない場合でもフォールバックが返る
+    const result = resolveError(factory.errInvalidInput(undefined));
+    expect(result.type).toBe("message");
+    if (result.type === "message") {
+      expect(result.text).toBe("入力内容に誤りがあります");
+    }
+  });
+});
+
+describe("TC-GUI-UI-UT35: errors.ts — invalid_input 全種で message フィールド非混入（REQ-UI-13）", () => {
+  const cases = [
+    ["label_empty", factory.errLabelEmpty()],
+    ["value_empty", factory.errValueEmpty()],
+    ["password_empty", factory.errPasswordEmpty()],
+    ["confirmation_required", factory.errConfirmationRequired()],
+    ["id_invalid", factory.errIdInvalid()],
+    ["hotkey_invalid", factory.errHotkeyInvalid()],
+    ["unknown_code", factory.errInvalidInputUnknown()],
+  ] as const;
+
+  for (const [code, err] of cases) {
+    it(`${code}: GUIError.message の英語文言が戻り値に混入しない`, () => {
+      const result = resolveError(err);
+      expect(result.type).toBe("message");
+      if (result.type === "message") {
+        expect(result.text).not.toBe(err.message);
+        expect(result.text).toMatch(/[぀-ヿ一-鿿]/);
+      }
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

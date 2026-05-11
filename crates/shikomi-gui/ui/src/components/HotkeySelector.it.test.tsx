@@ -51,8 +51,8 @@ describe("TC-GUI-UI-IT07: HotkeySelector — assign_hotkey 成功 → onChanged(
   });
 });
 
-describe("TC-GUI-UI-IT08: HotkeySelector — hotkey_conflict → 競合エントリ名インライン表示", () => {
-  it("assign_hotkey → hotkey_conflict { hotkey_conflict_entry: 'passwd-entry' } → 競合エントリ名表示", async () => {
+describe("TC-GUI-UI-IT08: HotkeySelector — hotkey_conflict → 競合エントリ名インライン表示（errors.ts 経由）", () => {
+  it("assign_hotkey → hotkey_conflict { hotkey_conflict_entry: 'passwd-entry' } → errors.ts 定義の文言で表示", async () => {
     const errObj = factory.errHotkeyConflict("passwd-entry");
     mockInvoke.mockRejectedValueOnce(errObj);
 
@@ -72,13 +72,39 @@ describe("TC-GUI-UI-IT08: HotkeySelector — hotkey_conflict → 競合エント
       { timeout: 3000 },
     );
 
+    // errors.ts §6.1 の定義文言と完全一致（独自メッセージ構築禁止）
+    // errors.ts: 「選択したホットキーは別エントリ（${hotkey_conflict_entry}）に割り当て済みです」
     const errorEl = queryByText(/passwd-entry/);
-    expect(errorEl).toBeDefined();
-    expect(errorEl!.textContent).toContain("passwd-entry");
-    expect(errorEl!.textContent).toContain("別エントリ");
+    expect(errorEl).not.toBeNull();
+    expect(errorEl!.textContent).toContain("選択したホットキーは別エントリ（passwd-entry）に割り当て済みです");
 
-    // message フィールドの英語文字列が DOM に出ていない
+    // message フィールド（英語）が DOM に出ていない（REQ-UI-13）
     expect(container.textContent).not.toContain(errObj.message);
+  });
+
+  it("hotkey_conflict_entry なし → 「選択したホットキーは既に使用されています」（errors.ts フォールバック）", async () => {
+    // hotkey_conflict_entry を省略したエラー
+    const errObj = { kind: "ipc_error", ipc_code: "hotkey_conflict", message: "hotkey conflict" } as any;
+    mockInvoke.mockRejectedValueOnce(errObj);
+
+    const { container, queryByText } = render(() => (
+      <HotkeySelector
+        entryId="entry-001"
+        currentHotkey={null}
+        onChanged={vi.fn()}
+      />
+    ));
+
+    const select = container.querySelector("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "Ctrl+Alt+3" } });
+
+    await vi.waitUntil(
+      () => queryByText(/既に使用されています/) !== null,
+      { timeout: 3000 },
+    );
+
+    expect(queryByText(/選択したホットキーは既に使用されています/)).not.toBeNull();
+    expect(container.textContent).not.toContain("hotkey conflict");
   });
 });
 

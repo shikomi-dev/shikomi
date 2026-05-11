@@ -6,28 +6,36 @@
  * TC-GUI-UI-UT14: 編集モード、変更なし送信 → update_entry 未呼び出し・onCancel() 呼び出し
  * TC-GUI-UI-IT04: 追加モード、ラベル+値入力送信 → add_entry invoke 成功 → onSuccess() 呼び出し
  * TC-GUI-UI-IT05: 編集モード、ラベル変更送信 → update_entry invoke 成功 → onSuccess() 呼び出し
+ * TC-GUI-UI-IT16: vault_locked 時 — 機密値クロージャが pendingOperation signal に格納されない（REQ-UI-14）
  * 設計根拠: docs/features/shikomi-gui/ui/detailed-design/components.md §1.5
+ *          docs/features/shikomi-gui/ui/detailed-design/store-and-flows.md §2.1
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@solidjs/testing-library";
 import { invoke } from "@tauri-apps/api/core";
 import EntryForm from "./EntryForm";
-import { makeEntry, makeListEntriesResult } from "@tests/factories/ipc";
+import { makeEntry, makeListEntriesResult, errVaultLocked } from "@tests/factories/ipc";
+import { handleVaultLocked } from "../store/vault";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+// EntryForm は handleVaultLocked / handleDisconnect / refreshEntries を使う
+// vi.mock はホイストされるため変数参照不可。vi.fn() で直接定義する
 vi.mock("../store/vault", () => ({
-  handleCommandError: vi.fn().mockReturnValue(false),
+  handleVaultLocked: vi.fn(),
+  handleDisconnect: vi.fn(),
   refreshEntries: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockInvoke = vi.mocked(invoke);
+const mockHandleVaultLocked = vi.mocked(handleVaultLocked);
 
 beforeEach(() => {
   mockInvoke.mockReset();
+  mockHandleVaultLocked.mockReset();
 });
 
 afterEach(cleanup);
@@ -182,5 +190,94 @@ describe("TC-GUI-UI-IT05: EntryForm(edit) — ラベル変更 → update_entry �
       value: null,
     });
     expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TC-GUI-UI-IT16: vault_locked 時 — 機密値クロージャが signal に格納されない（REQ-UI-14）
+// ---------------------------------------------------------------------------
+describe("TC-GUI-UI-IT16: EntryForm — vault_locked 時 機密値クロージャ非格納（REQ-UI-14）", () => {
+  it("add_entry → vault_locked → handleVaultLocked(refreshEntries) が呼ばれる（機密値を含まない引数）", async () => {
+    const { refreshEntries } = await import("../store/vault");
+    mockInvoke.mockRejectedValueOnce(errVaultLocked());
+
+    const { container, queryByText } = render(() => (
+      <EntryForm mode="add" onSuccess={vi.fn()} onCancel={vi.fn()} />
+    ));
+
+    // ラベルと値を入力
+    const labelInput = container.querySelector("input[type=text]") as HTMLInputElement;
+    fireEvent.input(labelInput, { target: { value: "テストエントリ" } });
+
+    const valueInput = container.querySelector("input[type=password]") as HTMLInputElement;
+    Object.defineProperty(valueInput, "value", { writable: true, value: "secretValue" });
+
+    // 送信
+    const addBtn = container.querySelector("button.btn-primary") as HTMLButtonElement;
+    fireEvent.click(addBtn);
+
+    // handleVaultLocked が呼ばれるまで待機
+    await vi.waitUntil(() => mockHandleVaultLocked.mock.calls.length > 0);
+
+    // handleVaultLocked に渡された引数が refreshEntries 関数であること
+    // （機密値 "secretValue" を含むクロージャではない）
+    const passedFn = mockHandleVaultLocked.mock.calls[0][0];
+    expect(passedFn).toBe(refreshEntries);
+
+    // 「アンロック後、エントリを再入力してください」のエラーメッセージが表示される
+    expect(queryByText(/アンロック後、エントリを再入力してください/)).not.toBeNull();
+  });
+
+  it("edit: update_entry → vault_locked → handleVaultLocked(refreshEntries) が呼ばれる（機密値を含まない引数）", async () => {
+    const { refreshEntries } = await import("../store/vault");
+    const entry = makeEntry({ label: "元ラベル", kind: "text" });
+    mockInvoke.mockRejectedValueOnce(errVaultLocked());
+
+    const { container, queryByText } = render(() => (
+      <EntryForm
+        mode="edit"
+        entry={entry}
+        onSuccess={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    ));
+
+    // ラベルを変更して送信（変更ありでupdate_entry呼び出し経路）
+    const labelInput = container.querySelector("input[type=text]") as HTMLInputElement;
+    fireEvent.input(labelInput, { target: { value: "新ラベル" } });
+
+    const saveBtn = container.querySelector("button.btn-primary") as HTMLButtonElement;
+    fireEvent.click(saveBtn);
+
+    await vi.waitUntil(() => mockHandleVaultLocked.mock.calls.length > 0);
+
+    const passedFn = mockHandleVaultLocked.mock.calls[0][0];
+    // 機密値を含むクロージャではなく refreshEntries そのもの
+    expect(passedFn).toBe(refreshEntries);
+
+    expect(queryByText(/アンロック後、エントリを再入力してください/)).not.toBeNull();
+  });
+
+  it("vault_locked 発生後に DOM ref がゼロ化されていること（R1-GUI-18）", async () => {
+    mockInvoke.mockRejectedValueOnce(errVaultLocked());
+
+    const { container } = render(() => (
+      <EntryForm mode="add" onSuccess={vi.fn()} onCancel={vi.fn()} />
+    ));
+
+    const labelInput = container.querySelector("input[type=text]") as HTMLInputElement;
+    fireEvent.input(labelInput, { target: { value: "テストエントリ" } });
+
+    const valueInput = container.querySelector("input[type=password]") as HTMLInputElement;
+    Object.defineProperty(valueInput, "value", { writable: true, value: "secretValue" });
+
+    const addBtn = container.querySelector("button.btn-primary") as HTMLButtonElement;
+    fireEvent.click(addBtn);
+
+    await vi.waitUntil(() => mockHandleVaultLocked.mock.calls.length > 0);
+    await Promise.resolve();
+
+    // vault_locked 後も DOM ref は即ゼロ化（R1-GUI-18）
+    expect(valueInput.value).toBe("");
   });
 });

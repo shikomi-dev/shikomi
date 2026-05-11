@@ -77,7 +77,7 @@ describe("TC-GUI-UI-IT12: UnlockModal — crypto/wrong-password → エラー表
 });
 
 describe("TC-GUI-UI-IT13: UnlockModal — backoff_active wait_secs=30 → wait_secs 表示 + ボタン disabled", () => {
-  it("unlock_vault → backoff_active { wait_secs: 30 } → 「30秒後に再試行」+ ボタン disabled", async () => {
+  it("unlock_vault → backoff_active { wait_secs: 30 } → errors.ts 定義文言で表示 + ボタン disabled", async () => {
     mockInvoke.mockRejectedValueOnce(factory.errBackoffActive(30));
 
     const { container, queryByText } = render(() => (
@@ -88,13 +88,16 @@ describe("TC-GUI-UI-IT13: UnlockModal — backoff_active wait_secs=30 → wait_s
 
     await vi.waitUntil(() => queryByText(/30秒後に再試行/) !== null);
 
-    expect(queryByText(/30秒後に再試行してください/)).toBeDefined();
+    // errors.ts §6.1 定義文言: 「試行回数の上限に達しました。30秒後に再試行してください」
+    // wait_secs=30 が補間されている
+    expect(queryByText(/試行回数の上限に達しました/)).not.toBeNull();
+    expect(queryByText(/30秒後に再試行してください/)).not.toBeNull();
 
     // backoff_active 期間中はアンロックボタンが disabled
     expect(btn).toBeDisabled();
   });
 
-  it("backoff_active: message フィールド（英語）が DOM に出現しない（REQ-UI-13）", async () => {
+  it("backoff_active: wait_secs はタイマー用途のみ / message フィールド（英語）が DOM に出現しない（REQ-UI-13）", async () => {
     const errObj = factory.errBackoffActive(30);
     mockInvoke.mockRejectedValueOnce(errObj);
 
@@ -107,5 +110,7 @@ describe("TC-GUI-UI-IT13: UnlockModal — backoff_active wait_secs=30 → wait_s
 
     // GUIError.message の英語文字列が DOM に表示されていない
     expect(container.textContent).not.toContain(errObj.message);
+    // errors.ts 経由の日本語メッセージのみ表示
+    expect(container.textContent).toContain("試行回数の上限に達しました");
   });
 });
