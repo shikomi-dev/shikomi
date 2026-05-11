@@ -296,18 +296,37 @@ mod tests {
         );
     }
 
-    // TC-GUI-IPC-UT13c — GUIError::Ipc(HotkeyConflict): ipc_code 検証
+    // TC-GUI-IPC-UT13c — GUIError::Ipc(HotkeyConflict): ipc_code + hotkey_conflict_entry 検証
     //
-    // HotkeyConflict は IT08/IT12 で Rust Result として検証済みだが、
-    // JSON ipc_code フィールドは UT で補完する（§9 カバレッジ基準）。
+    // ペガサス指摘対応: HotkeyConflict は Sub-C が競合エントリ名を UI 表示するために
+    // hotkey_conflict_entry フィールドが必要（R1-GUI-08）。message パースへの依存禁止（§2.3）。
+    // ipc_code のみだった旧実装から hotkey_conflict_entry フィールド検証を追加。
     #[test]
-    fn ut13c_ipc_hotkey_conflict_ipc_code() {
+    fn ut13c_ipc_hotkey_conflict_ipc_code_and_entry() {
         let e = GUIError::Ipc(IpcErrorCode::HotkeyConflict {
             reason: "slot occupied".to_owned(),
         });
         let v = serde_json::to_value(&e).unwrap();
-        assert_eq!(v["kind"], "ipc_error");
-        assert_eq!(v["ipc_code"], "hotkey_conflict");
+        assert_eq!(v["kind"], "ipc_error", "kind must be ipc_error: {v}");
+        assert_eq!(
+            v["ipc_code"], "hotkey_conflict",
+            "ipc_code must be hotkey_conflict: {v}"
+        );
+        // hotkey_conflict_entry フィールドが競合エントリ名を持つこと（R1-GUI-08）
+        assert_eq!(
+            v["hotkey_conflict_entry"], "slot occupied",
+            "hotkey_conflict_entry must be 'slot occupied': {v}"
+        );
+        // Crypto 固有の crypto_reason は HotkeyConflict には存在しない
+        assert!(
+            v.get("crypto_reason").is_none() || v["crypto_reason"].is_null(),
+            "crypto_reason must not be present for HotkeyConflict: {v}"
+        );
+        // BackoffActive 固有の wait_secs も存在しない
+        assert!(
+            v.get("wait_secs").is_none() || v["wait_secs"].is_null(),
+            "wait_secs must not be present for HotkeyConflict: {v}"
+        );
     }
 
     // TC-GUI-IPC-UT13d(2) — crypto_reason: weak-password
@@ -438,5 +457,34 @@ mod tests {
                 ipc_code = v["ipc_code"]
             );
         }
+
+        // §2.3 追加フィールド契約の整合性チェック
+        // hotkey_conflict: hotkey_conflict_entry が必ず存在すること
+        let hotkey_e = GUIError::Ipc(IpcErrorCode::HotkeyConflict {
+            reason: "hotkey conflict".to_owned(),
+        });
+        let hotkey_v = serde_json::to_value(&hotkey_e).unwrap();
+        assert_eq!(
+            hotkey_v["hotkey_conflict_entry"], "hotkey conflict",
+            "§2.3 凍結契約違反: hotkey_conflict に hotkey_conflict_entry フィールドが必要: {hotkey_v}"
+        );
+
+        // crypto: crypto_reason が必ず存在すること
+        let crypto_e = GUIError::Ipc(IpcErrorCode::Crypto {
+            reason: "wrong-password".to_owned(),
+        });
+        let crypto_v = serde_json::to_value(&crypto_e).unwrap();
+        assert_eq!(
+            crypto_v["crypto_reason"], "wrong-password",
+            "§2.3 凍結契約違反: crypto に crypto_reason フィールドが必要: {crypto_v}"
+        );
+
+        // backoff_active: wait_secs が必ず存在すること
+        let backoff_e = GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 5 });
+        let backoff_v = serde_json::to_value(&backoff_e).unwrap();
+        assert_eq!(
+            backoff_v["wait_secs"], 5,
+            "§2.3 凍結契約違反: backoff_active に wait_secs フィールドが必要: {backoff_v}"
+        );
     }
 }

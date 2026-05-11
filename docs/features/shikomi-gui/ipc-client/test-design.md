@@ -84,7 +84,7 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | TC-GUI-IPC-UT12 | `basic-design.md §2.2` | `detailed-design.md §2.1` | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` → `kind == "protocol_version_mismatch"` | 正常系 |
 | TC-GUI-IPC-UT13 | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::VaultLocked)` → `kind == "ipc_error"`、**`ipc_code == "vault_locked"`**、`message` に VaultLocked Display 文字列、`wait_secs` フィールドなし | 正常系 |
 | TC-GUI-IPC-UT13b | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` → `ipc_code == "backoff_active"`、**`wait_secs == 42`** | 正常系 |
-| TC-GUI-IPC-UT13c | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. })` → `ipc_code == "hotkey_conflict"` | 正常系 |
+| TC-GUI-IPC-UT13c | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { reason: "slot occupied" })` → `ipc_code == "hotkey_conflict"`、**`hotkey_conflict_entry == "slot occupied"`**、`crypto_reason`/`wait_secs` なし（R1-GUI-08 契約） | 正常系 |
 | TC-GUI-IPC-UT13d | `basic-design.md §2.2` | `detailed-design.md §2.3` | `GUIError::Ipc(IpcErrorCode::Crypto { reason: "wrong-password" })` → `ipc_code == "crypto"`、**`crypto_reason == "wrong-password"`**、`wait_secs` なし | 正常系 |
 | TC-GUI-IPC-UT13d(2) | `basic-design.md §2.2` | `detailed-design.md §2.3` | `Crypto { reason: "weak-password" }` → `crypto_reason == "weak-password"` | 正常系 |
 | TC-GUI-IPC-UT13d(3) | `basic-design.md §2.2` | `detailed-design.md §2.3` | `Crypto { reason: "nonce-limit-exceeded" }` → `crypto_reason == "nonce-limit-exceeded"` | 正常系 |
@@ -198,14 +198,14 @@ Tauri Command ハンドラは `tauri::State<AppState>` を受け取る。テス�
 | TC-GUI-IPC-UT12 | `GUIError::ProtocolVersionMismatch { server: "V1", client: "V2" }` | `"protocol_version_mismatch"` | — | 正常系 |
 | TC-GUI-IPC-UT13 | `GUIError::Ipc(IpcErrorCode::VaultLocked)` | `"ipc_error"` | `ipc_code == "vault_locked"`、`wait_secs` なし | 正常系 |
 | TC-GUI-IPC-UT13b | `GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 42 })` | `"ipc_error"` | `ipc_code == "backoff_active"`、`wait_secs == 42` | 正常系 |
-| TC-GUI-IPC-UT13c | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { .. })` | `"ipc_error"` | `ipc_code == "hotkey_conflict"` | 正常系 |
+| TC-GUI-IPC-UT13c | `GUIError::Ipc(IpcErrorCode::HotkeyConflict { reason: "slot occupied" })` | `"ipc_error"` | `ipc_code == "hotkey_conflict"`、**`hotkey_conflict_entry == "slot occupied"`**、`crypto_reason`/`wait_secs` なし | 正常系 |
 | TC-GUI-IPC-UT13d | `GUIError::Ipc(IpcErrorCode::Crypto { reason: "wrong-password" })` | `"ipc_error"` | `ipc_code == "crypto"`、`crypto_reason == "wrong-password"` | 正常系 |
 | TC-GUI-IPC-UT13d(2) | `Crypto { reason: "weak-password" }` | `"ipc_error"` | `crypto_reason == "weak-password"` | 正常系 |
 | TC-GUI-IPC-UT13d(3) | `Crypto { reason: "nonce-limit-exceeded" }` | `"ipc_error"` | `crypto_reason == "nonce-limit-exceeded"` | 正常系 |
 | TC-GUI-IPC-UT14 | `GUIError::InvalidInput("test message")` | `"invalid_input"` | — | 正常系 |
-| TC-GUI-IPC-UT15 | 全 13 variant（テーブル参照） | `"ipc_error"` | §2.3 凍結契約の `ipc_code` 値と完全一致すること | 正常系 |
+| TC-GUI-IPC-UT15 | 全 13 variant（テーブル参照） | `"ipc_error"` | §2.3 凍結契約の `ipc_code` 値と完全一致すること、かつ追加フィールド（`hotkey_conflict_entry`/`crypto_reason`/`wait_secs`）が各 variant で正しく出力されること | 正常系 |
 
-**UT15 の意義（ペテルギウス要求）**: `ipc_code_key()` の全 variant を §2.3 凍結契約テーブルと突合する網羅テスト。将来 variant rename・追加時に CI で即 Fail し、設計書更新を構造的に強制する防衛線。
+**UT15 の意義（ペテルギウス要求）**: `ipc_code_key()` の全 variant を §2.3 凍結契約テーブルと突合する網羅テスト。さらに追加フィールド契約（`hotkey_conflict_entry`/`crypto_reason`/`wait_secs`）の存在も検証。将来 variant rename・追加・追加フィールド漏れを CI で即 Fail し、設計書更新を構造的に強制する防衛線。
 
 **操作共通**: `serde_json::to_value(&error).unwrap()` で JSON 変換し、`["kind"]` / `["ipc_code"]`（`kind == "ipc_error"` 時）/ 追加フィールドを assert する
 
