@@ -7,11 +7,15 @@
 //! 暗号鍵階層と Fail-Secure 型は `crypto` モジュール、vault 集約とレコードは `vault`
 //! モジュール、秘密値ラッパは `secret` モジュールに分離する (Clean Architecture)。
 
+pub mod constants;
 pub mod crypto;
 pub mod error;
 pub mod ipc;
 pub mod secret;
 pub mod vault;
+
+// --- グローバル定数 ---
+pub use constants::CLEAR_TIMEOUT_SECS;
 
 // --- ドメインエラー ---
 pub use error::{
@@ -33,7 +37,10 @@ pub use crypto::{
 pub use vault::{ProtectionMode, Vault, VaultHeader, VaultVersion};
 
 // --- レコード ---
-pub use vault::{Record, RecordId, RecordKind, RecordLabel, RecordPayload, RecordPayloadEncrypted};
+pub use vault::{
+    Hotkey, HotkeyParseError, Record, RecordId, RecordKind, RecordLabel, RecordPayload,
+    RecordPayloadEncrypted,
+};
 
 // --- 暗号化関連データ型 ---
 pub use vault::{Aad, AuthTag, CipherText, KdfSalt, NonceBytes, NonceCounter, WrappedVek};

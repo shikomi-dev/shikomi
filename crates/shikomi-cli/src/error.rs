@@ -130,6 +130,23 @@ pub enum CliError {
         /// 衝突した経路の固定文言ヒント（`&'static str`、動的データ非含有）。
         hint: &'static str,
     },
+
+    // ---------------- Issue #89: ホットキー操作エラー ----------------
+    /// ホットキーコンボが別レコードまたは別アプリと競合している（exit 1）。
+    /// `IpcErrorCode::HotkeyConflict` からの写像。
+    #[error("hotkey conflict: {reason}")]
+    HotkeyConflict {
+        /// 競合詳細（OS / ドメイン由来の reason 文字列）。
+        reason: String,
+    },
+
+    /// ホットキーコンボ文字列の解析失敗（exit 1）。
+    /// `IpcErrorCode::HotkeyParseError` からの写像。
+    #[error("invalid hotkey: {reason}")]
+    HotkeyParseError {
+        /// 解析失敗詳細。
+        reason: String,
+    },
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -149,6 +166,11 @@ impl From<IpcErrorCode> for CliError {
                 "wrong-password" => Self::WrongPassword,
                 _ => Self::Crypto { reason },
             },
+            // Issue #89: ホットキー操作エラーを専用 variant に写像（PG-①）。
+            // `PersistenceError` 経路を経由させると "internal error: unknown error code" に
+            // 落ちるため、ここで明示写像して適切な exit 1 + ユーザ向け文言を出す。
+            IpcErrorCode::HotkeyConflict { reason } => Self::HotkeyConflict { reason },
+            IpcErrorCode::HotkeyParseError { reason } => Self::HotkeyParseError { reason },
             // V1 系および未知 variant は従来通り PersistenceError 経路を経由する。
             // `From<PersistenceError> for CliError` が `EncryptionUnsupported` /
             // `RecordNotFound` 等を専用 variant に再写像するので、ここで握り潰さず
@@ -230,6 +252,7 @@ impl From<&CliError> for ExitCode {
     fn from(err: &CliError) -> Self {
         match err {
             // exit 1（UserError）: MSG-S08/S10/S12/S13 系 + 既存 V1 ユーザ入力エラー
+            // Issue #89: HotkeyConflict / HotkeyParseError も exit 1（ユーザ操作起因）
             CliError::UsageError(_)
             | CliError::InvalidLabel(_)
             | CliError::InvalidId(_)
@@ -239,7 +262,9 @@ impl From<&CliError> for ExitCode {
             | CliError::NonInteractivePassword
             | CliError::DaemonNotRunning(_)
             | CliError::ProtocolVersionMismatch { .. }
-            | CliError::Crypto { .. } => Self::UserError,
+            | CliError::Crypto { .. }
+            | CliError::HotkeyConflict { .. }
+            | CliError::HotkeyParseError { .. } => Self::UserError,
             // exit 2（SystemError / WrongPassword）: 既存 I/O 系 + Sub-F SSoT パスワード違い
             CliError::Persistence(_)
             | CliError::Domain(_)
@@ -484,6 +509,19 @@ mod tests {
                 "Crypto(other)",
                 CliError::Crypto {
                     reason: "aead-tag-mismatch".to_owned(),
+                },
+            ),
+            // Issue #89: ホットキー操作エラーは exit 1（ユーザ操作起因）
+            (
+                "HotkeyConflict",
+                CliError::HotkeyConflict {
+                    reason: "already registered by another app".to_owned(),
+                },
+            ),
+            (
+                "HotkeyParseError",
+                CliError::HotkeyParseError {
+                    reason: "invalid combo: foobar".to_owned(),
                 },
             ),
         ];

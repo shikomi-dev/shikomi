@@ -12,6 +12,8 @@ pub mod cache;
 #[doc(hidden)]
 pub mod error;
 #[doc(hidden)]
+pub mod hotkey;
+#[doc(hidden)]
 pub mod ipc;
 #[doc(hidden)]
 pub mod lifecycle;
@@ -25,7 +27,6 @@ pub use error::DaemonExit;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use shikomi_core::ProtectionMode;
 use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
@@ -33,6 +34,10 @@ use tracing_subscriber::EnvFilter;
 use crate::backoff::UnlockBackoff;
 use crate::cache::lifecycle::{make_default_os_lock_signal, run_os_lock_signal_loop, IdleTimer};
 use crate::cache::VekCache;
+use crate::hotkey::backend::BackendEnum;
+use crate::hotkey::event_loop::HotkeyEventLoop;
+use crate::hotkey::notifier::NotifyRustNotifier;
+use crate::hotkey::HotkeyManager;
 use crate::ipc::server::IpcServer;
 use crate::ipc::transport::ListenerEnum;
 use crate::lifecycle::{shutdown, single_instance::SingleInstanceLock, socket_path};
@@ -124,6 +129,19 @@ pub async fn run() -> ExitCode {
     let cache = VekCache::new();
     let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
 
+    // Issue #89: ホットキーバックエンド + マネージャ + イベントループの初期化
+    let hotkey_backend = BackendEnum::detect();
+    let hotkey_notifier = Arc::new(NotifyRustNotifier);
+    let hotkey_manager = {
+        let vault_guard = vault.try_lock().expect("vault not yet shared");
+        Arc::new(HotkeyManager::new(
+            Arc::clone(&hotkey_backend),
+            &vault_guard,
+            Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
+        ))
+    };
+    let clipboard = crate::hotkey::clipboard::ArboardClipboardWriter::init_shared();
+
     // shutdown 通知 channel。`watch::channel<bool>` を使うことで、シグナル到達と
     // receiver の poll 順序に関わらず通知が消失しない（BUG-DAEMON-IPC-002 対策）。
     let (shutdown_tx, shutdown_rx) = shutdown::channel();
@@ -144,12 +162,24 @@ pub async fn run() -> ExitCode {
     };
 
     // Sub-E §C-25: OS スクリーンロック / サスペンド購読 task を spawn
-    // (各 OS 具象実装は cfg 分割、現段階は std::future::pending() で他経路に譲るスケルトン)
     let os_lock_signal_task = {
         let cache_for_signal = cache.clone();
         let signal = make_default_os_lock_signal();
         let rx = shutdown_rx.clone();
         tokio::spawn(run_os_lock_signal_loop(cache_for_signal, signal, rx))
+    };
+
+    // Issue #89: ホットキーイベントループを spawn
+    let event_loop_task = {
+        let event_loop = HotkeyEventLoop::new(
+            Arc::clone(&hotkey_backend),
+            Arc::clone(&vault),
+            cache.clone(),
+            Arc::clone(&clipboard),
+            Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
+        );
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move { event_loop.run(rx).await })
     };
 
     // server 実行 (Sub-E (#43): cache / backoff を注入)
@@ -159,18 +189,23 @@ pub async fn run() -> ExitCode {
         Arc::clone(&vault),
         cache.clone(),
         Arc::clone(&backoff),
+        Arc::clone(&hotkey_manager),
     );
     let server_result = server.start_with_shutdown(shutdown_rx).await;
 
-    // Sub-E バックグラウンド task の解放
+    // バックグラウンド task の解放
+    event_loop_task.abort();
     idle_timer_task.abort();
     os_lock_signal_task.abort();
 
     // signal task の解放（shutdown 通知済みなら戻ってくる）
     signal_task.abort();
 
-    // 明示的に共有資源を drop し、Drop 順序を可視化（lock → vault → repo → single_instance）
+    // 明示的に共有資源を drop し、Drop 順序を可視化
     drop(server);
+    drop(hotkey_manager); // Drop 時に全ホットキーを OS から解除
+    drop(hotkey_backend);
+    drop(clipboard);
     drop(vault);
     drop(repo);
     drop(single_instance);

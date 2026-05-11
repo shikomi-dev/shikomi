@@ -6,11 +6,11 @@
 //!
 //! ## 責務分離
 //!
-//! - shikomi-core 側 `VaultHeaderEncrypted` (既存) は version / created_at / kdf_salt /
-//!   wrapped_vek_by_pw / wrapped_vek_by_recovery の 5 フィールドで凍結。
+//! - shikomi-core 側 `VaultHeaderEncrypted` (既存) は version / `created_at` / `kdf_salt` /
+//!   `wrapped_vek_by_pw` / `wrapped_vek_by_recovery` の 5 フィールドで凍結。
 //! - shikomi-infra 側 `VaultEncryptedHeader` はこれをラップし、Sub-D 完成形の
 //!   `nonce_counter` / `kdf_params` / `header_aead_envelope` を追加保持する。
-//! - SQLite 永続化形式の決定はこのモジュールで集約する (Mapping への入出力境界)。
+//! - `SQLite` 永続化形式の決定はこのモジュールで集約する (Mapping への入出力境界)。
 
 use shikomi_core::error::CryptoError;
 use shikomi_core::vault::header::VaultHeaderEncrypted;
@@ -211,12 +211,12 @@ impl VaultEncryptedHeader {
     ///
     /// レイアウト (Sub-D Rev1 凍結):
     /// - version (2B BE u16)
-    /// - created_at_micros (8B BE i64)
-    /// - kdf_salt (16B)
-    /// - wrapped_vek_by_pw_serialized (`nonce 12B ‖ tag 16B ‖ ct ?`)
-    /// - wrapped_vek_by_recovery_serialized (同)
-    /// - nonce_counter (8B BE u64) — L1 巻戻し改竄を構造防衛
-    /// - kdf_params (12B = m||t||p)
+    /// - `created_at_micros` (8B BE i64)
+    /// - `kdf_salt` (16B)
+    /// - `wrapped_vek_by_pw_serialized` (`nonce 12B ‖ tag 16B ‖ ct ?`)
+    /// - `wrapped_vek_by_recovery_serialized` (同)
+    /// - `nonce_counter` (8B BE u64) — L1 巻戻し改竄を構造防衛
+    /// - `kdf_params` (12B = m||t||p)
     #[must_use]
     pub fn canonical_bytes_for_aad(&self) -> Vec<u8> {
         canonical_aad_bytes(
@@ -249,10 +249,10 @@ impl VaultEncryptedHeader {
 
     /// shikomi-core 側 `VaultHeader::Encrypted` への変換 (永続化境界の素通し)。
     ///
-    /// shikomi-core 側の `VaultHeader` 集約は version / created_at / kdf_salt /
-    /// wrapped_vek_by_pw / wrapped_vek_by_recovery のみを保持する (Sub-A 凍結)。
-    /// 追加メタデータ (nonce_counter / kdf_params / header_aead_envelope) は
-    /// 永続化レイヤ (Mapping::vault_header_to_params) で個別 BLOB に詰める。
+    /// shikomi-core 側の `VaultHeader` 集約は version / `created_at` / `kdf_salt` /
+    /// `wrapped_vek_by_pw` / `wrapped_vek_by_recovery` のみを保持する (Sub-A 凍結)。
+    /// 追加メタデータ (`nonce_counter` / `kdf_params` / `header_aead_envelope`) は
+    /// 永続化レイヤ (`Mapping::vault_header_to_params`) で個別 BLOB に詰める。
     ///
     /// # Errors
     ///
@@ -313,12 +313,12 @@ impl VaultEncryptedHeader {
 ///
 /// ## レイアウト凍結 (Sub-D Rev1)
 /// - version (2B BE u16)
-/// - created_at_micros (8B BE i64)
-/// - kdf_salt (16B)
-/// - wrapped_vek_by_pw_serialized (`nonce 12B ‖ tag 16B ‖ ct ?`)
-/// - wrapped_vek_by_recovery_serialized (同)
-/// - nonce_counter (8B BE u64) — L1 巻戻し改竄を構造防衛
-/// - kdf_params (12B = m||t||p)
+/// - `created_at_micros` (8B BE i64)
+/// - `kdf_salt` (16B)
+/// - `wrapped_vek_by_pw_serialized` (`nonce 12B ‖ tag 16B ‖ ct ?`)
+/// - `wrapped_vek_by_recovery_serialized` (同)
+/// - `nonce_counter` (8B BE u64) — L1 巻戻し改竄を構造防衛
+/// - `kdf_params` (12B = m||t||p)
 #[must_use]
 pub(crate) fn canonical_aad_bytes(
     version: VaultVersion,
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(&bytes[8..12], &[0, 0, 0, 3]);
     }
 
-    /// TC-D-U01 / C-17 / C-18: canonical_bytes_for_aad は決定論的でフィールド順序固定。
+    /// TC-D-U01 / C-17 / C-18: `canonical_bytes_for_aad` は決定論的でフィールド順序固定。
     #[test]
     fn canonical_bytes_for_aad_is_deterministic_for_same_header() {
         let h = make_header();
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// C-17: nonce_counter を含むことの確認 (L1 巻戻し攻撃防衛)。
+    /// C-17: `nonce_counter` を含むことの確認 (L1 巻戻し攻撃防衛)。
     #[test]
     fn canonical_bytes_includes_nonce_counter() {
         let h = make_header();
@@ -472,7 +472,7 @@ mod tests {
         assert_ne!(baseline, after, "nonce_counter must affect AAD bytes");
     }
 
-    /// C-18: kdf_params を含むことの確認 (KDF 弱パラメータ改竄防衛)。
+    /// C-18: `kdf_params` を含むことの確認 (KDF 弱パラメータ改竄防衛)。
     #[test]
     fn canonical_bytes_includes_kdf_params() {
         let h = make_header();

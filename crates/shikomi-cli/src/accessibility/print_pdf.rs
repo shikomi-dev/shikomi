@@ -173,7 +173,7 @@ mod tests {
     use shikomi_core::SecretString;
 
     fn word(s: &str) -> SerializableSecretBytes {
-        SerializableSecretBytes::from_secret_string(SecretString::from_string(s.to_owned()))
+        SerializableSecretBytes::from_secret_string(&SecretString::from_string(s.to_owned()))
     }
 
     #[test]

@@ -44,7 +44,7 @@ fn test_record_label_try_new_256_graphemes_returns_too_long() {
 
 #[test]
 fn test_record_label_try_new_empty_returns_empty_error() {
-    let err = RecordLabel::try_new("".to_string()).unwrap_err();
+    let err = RecordLabel::try_new(String::new()).unwrap_err();
     assert!(matches!(
         err,
         DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty)
@@ -201,6 +201,7 @@ fn test_record_rehydrate_updated_at_before_created_at_returns_invalid_updated_at
         RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
         created_at,
         updated_at,
+        None,
     );
     assert!(
         matches!(
@@ -227,6 +228,7 @@ fn test_record_rehydrate_truncates_subsecond_to_microseconds() {
         RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
         created_at,
         updated_at,
+        None,
     )
     .expect("rehydrate が失敗した");
 

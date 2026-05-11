@@ -50,16 +50,33 @@
 3. 成功した場合のみ `registered.insert(combo)` する
 4. 失敗時は `tracing::error!` でログ出力 + `self.notifier.notify(Normal, "shikomi", "ホットキー {combo} の登録に失敗しました。他のアプリと競合している可能性があります")` を呼び継続（他ホットキーは登録する）
 
-### 3.3 `register_one` / `unregister_one` の使用コンテキスト
+### 3.3 `register_one` / `unregister_one` の使用コンテキストと正規化責務
 
 IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`assign_hotkey` が成功した場合のみ OS 登録を試みる（ドメイン層が一次防衛、OS 登録は二次）。
 
-`edit` でホットキーを変更した場合の処理順序:
-1. `unregister_one(旧コンボ)` で旧ホットキーを解除
-2. `Vault::assign_hotkey(id, 新Hotkey)` でドメイン更新
-3. `register_one(新コンボ)` で新ホットキーを OS 登録
+#### 正規化責務（P1-③ / H-003）
 
-順序を変えると不整合が生じるため、上記順序を必ず守る。
+**`register_one` / `unregister_one` の entry point で `Hotkey::parse` による正規化を行う。**
+
+`"ctrl+alt+1"` と `"alt+ctrl+1"` は同一コンボとして扱われるべきであり、この正規化は呼び出し元（`dispatch_v2` / `sync_hotkey`）に依存せず `HotkeyManager` 自身の責務とする。これにより：
+
+- IPC リクエストに含まれる未正規化文字列と vault 内の正規化済み文字列の比較一致が保証される
+- `registered: HashSet<String>` に格納されるコンボは常に正規化形式になる
+- `Drop` での `backend.unregister` も正規化済み文字列で呼ばれる
+
+正規化に失敗した場合（解析不能なコンボ）は `HotkeyError::ParseFailed` を返す（Fail Fast）。
+
+#### `sync_hotkey` の責務（P1-② Tell, Don't Ask）
+
+`edit` 後の OS ホットキー状態同期は `HotkeyManager::sync_hotkey(old, new, clear)` に委譲し、`dispatch_v2` 側で個別に `unregister_one` / `register_one` を呼ばない。これにより：
+
+- `dispatch_v2` が「ホットキーの変更有無を判定して操作」という Tell, Don't Ask 違反を回避
+- 同一コンボの無駄な再登録防止ロジックが `HotkeyManager` に集約される
+
+`edit` でホットキーを変更した場合の `sync_hotkey` 内部処理順序:
+1. `old_combo` と `new_combo` を正規化形式で比較。同一なら noop
+2. 旧コンボを `unregister_one` で解除（best-effort、失敗は `warn!` のみ）
+3. 新コンボを `register_one` で OS 登録（Fail Fast、失敗は `Err` を返す）
 
 ### 3.4 Drop 実装
 

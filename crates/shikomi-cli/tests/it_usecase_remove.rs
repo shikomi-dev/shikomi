@@ -33,6 +33,7 @@ fn tc_it_030_remove_record_removes_existing_record_and_roundtrips_empty() {
             kind: RecordKind::Text,
             label: RecordLabel::try_new("L".to_owned()).unwrap(),
             value: SecretString::from_string("V".to_owned()),
+            hotkey: None,
         },
         now,
     )
@@ -62,6 +63,7 @@ fn tc_it_031_remove_record_with_nonexistent_id_returns_record_not_found() {
             kind: RecordKind::Text,
             label: RecordLabel::try_new("L".to_owned()).unwrap(),
             value: SecretString::from_string("V".to_owned()),
+            hotkey: None,
         },
         now,
     )

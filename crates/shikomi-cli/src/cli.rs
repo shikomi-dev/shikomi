@@ -201,6 +201,11 @@ pub struct AddArgs {
     /// 値を stdin から読み取る。secret 入力時は TTY なら非エコー読取。
     #[arg(long)]
     pub stdin: bool,
+
+    /// グローバルホットキーを設定する。例: `--hotkey "alt+ctrl+1"`。
+    /// daemon 起動中のみ有効（設定は保存されるが、daemon 再起動で有効化される）。
+    #[arg(long, value_name = "COMBO")]
+    pub hotkey: Option<String>,
 }
 
 // -------------------------------------------------------------------
@@ -224,6 +229,15 @@ pub struct EditArgs {
     /// 値を stdin から読み取る。`--value` と併用不可。
     #[arg(long)]
     pub stdin: bool,
+
+    /// グローバルホットキーを変更する。例: `--hotkey "alt+ctrl+2"`。
+    /// `--clear-hotkey` と同時指定不可。
+    #[arg(long, value_name = "COMBO", conflicts_with = "clear_hotkey")]
+    pub hotkey: Option<String>,
+
+    /// グローバルホットキーを解除する。`--hotkey` と同時指定不可。
+    #[arg(long, conflicts_with = "hotkey")]
+    pub clear_hotkey: bool,
     // NOTE: `--kind` フィールドは定義しない（requirements.md REQ-CLI-003 スコープ外）。
 }
 

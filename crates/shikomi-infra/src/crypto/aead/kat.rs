@@ -1,9 +1,9 @@
 //! Known Answer Tests (KAT) — AES-256-GCM 三軸 (key bias × plaintext 長 × AAD 長) 網羅。
 //!
 //! `#[cfg(test)]` 専用。本 KAT は **自己整合 KAT** に責務を絞る:
-//! RustCrypto `aes-gcm` crate (`Aes256Gcm`) で encrypt → 同 key/nonce/aad で
-//! decrypt して bit-exact match を確認する。実装パスが「encrypt_in_place_detached
-//! / decrypt_in_place_detached の roundtrip 成立」「三軸の分散条件全てで動作」を
+//! `RustCrypto` `aes-gcm` crate (`Aes256Gcm`) で encrypt → 同 key/nonce/aad で
+//! decrypt して bit-exact match を確認する。実装パスが「`encrypt_in_place_detached`
+//! / `decrypt_in_place_detached` の roundtrip 成立」「三軸の分散条件全てで動作」を
 //! 検証することが目的。
 //!
 //! 本物の NIST CAVP `gcmEncryptExtIV256.rsp` 公式 expected ciphertext との

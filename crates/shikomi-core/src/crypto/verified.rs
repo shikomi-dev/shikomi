@@ -153,7 +153,7 @@ where
 
 /// `verify_aead_decrypt` の `Plaintext` 特化版 (Sub-C 新規)。
 ///
-/// shikomi-infra::crypto::aead::AesGcmAeadAdapter が AEAD 検証成功時にのみ呼ぶ
+/// `shikomi-infra::crypto::aead::AesGcmAeadAdapter` が AEAD 検証成功時にのみ呼ぶ
 /// 正規経路。`Plaintext::new_within_module` は `pub(in crate::crypto::verified)`
 /// 限定可視性のため shikomi-infra から直接構築不可だが、本関数経由で `Vec<u8>` を
 /// 渡せば AEAD 検証済み `Verified<Plaintext>` を取得できる。

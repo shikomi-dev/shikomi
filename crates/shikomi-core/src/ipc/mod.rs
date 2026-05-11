@@ -2,7 +2,7 @@
 //!
 //! 本モジュールは pure 型定義のみを持ち、I/O を伴わない。
 //! `tokio` / `rmp-serde` / `tokio-util` には依存しない（`tech-stack.md` §4.5）。
-//! MessagePack シリアライズ実装は呼び出し側 crate（`shikomi-daemon` / `shikomi-cli`）の責務。
+//! `MessagePack` シリアライズ実装は呼び出し側 crate（`shikomi-daemon` / `shikomi-cli`）の責務。
 //!
 //! 設計根拠:
 //! - docs/features/daemon-ipc/basic-design/ipc-protocol.md

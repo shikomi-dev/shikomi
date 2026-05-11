@@ -170,6 +170,10 @@ pub enum VaultConsistencyReason {
     /// `updated_at` が `created_at` より前の時刻になる更新は拒否。
     #[error("updated_at must not precede created_at")]
     InvalidUpdatedAt,
+
+    /// 指定ホットキーが既に別レコードに登録済み。
+    #[error("hotkey is already assigned to another record")]
+    HotkeyConflict,
 }
 
 // -------------------------------------------------------------------
@@ -187,7 +191,7 @@ pub enum CryptoError {
     /// 内包する `WeakPasswordFeedback` をそのまま MSG-S08 に渡す（Fail Kindly）。
     ///
     /// `Box` でヒープ移送して `CryptoError` enum 全体のサイズを抑える
-    /// (clippy::result_large_err 対策。`WeakPasswordFeedback` は
+    /// (`clippy::result_large_err` 対策。`WeakPasswordFeedback` は
     /// `Option<String> + Vec<String>` で約 48B あるため、`DomainError` /
     /// `PersistenceError` の連鎖サイズ膨張を防ぐ目的でヒープに逃がす)。
     #[error("weak password rejected by strength gate")]
@@ -229,13 +233,13 @@ pub enum CryptoError {
     /// **Sub-D Rev6 新規 (Sub-E 工程3 Boy Scout 要求)**: マスターパスワード認証失敗。
     ///
     /// `VaultMigration::unlock_with_password` で AEAD unwrap が tag-mismatch だった場合に、
-    /// 「KEK_pw 派生に使ったパスワードが間違っていた」と意味論的に確定するための専用
+    /// 「`KEK_pw` 派生に使ったパスワードが間違っていた」と意味論的に確定するための専用
     /// variant。`AeadTagMismatch` (vault.db 改竄の可能性) と分離し、Sub-E
     /// `UnlockBackoff::record_failure` を **本 variant のみ**でカウントする。
     ///
     /// 設計根拠: Sub-E 工程2 服部指摘 (`detailed-design/vek-cache-and-ipc.md` §F-E1
     /// step 4): `Crypto(_)` ワイルドカード backoff は (a) L2 攻撃者が vault.db
-    /// 5 連破損で正規ユーザの unlock を DoS する経路、(b) ディスク破損 / 実装バグでも
+    /// 5 連破損で正規ユーザの unlock を `DoS` する経路、(b) ディスク破損 / 実装バグでも
     /// 5 回再試行で誤検出、(c) backoff の本来目的 (パスワード違いに対する brute force
     /// レート制限) と乖離する、の 3 点で却下。`WrongPassword` のみ backoff カウント、
     /// 他の `Crypto(_)` variant は即返却で fail fast。
@@ -255,7 +259,7 @@ pub enum KdfErrorKind {
     Argon2id,
     /// PBKDF2-HMAC-SHA512 (BIP-39 mnemonic → seed).
     Pbkdf2,
-    /// HKDF-SHA256 (PBKDF2 seed → KEK_recovery).
+    /// HKDF-SHA256 (PBKDF2 seed → `KEK_recovery`).
     Hkdf,
 }
 

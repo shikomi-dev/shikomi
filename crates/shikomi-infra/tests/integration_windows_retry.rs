@@ -1,10 +1,10 @@
-//! vault-persistence 結合テスト — TC-I29 (Windows AtomicWrite rename retry)
+//! vault-persistence 結合テスト — TC-I29 (Windows `AtomicWrite` rename retry)
 //!
 //! テスト設計書: docs/features/vault-persistence/test-design/integration.md §TC-I29
 //! 対応 Issue: #65
 //!
 //! 本ファイルの 3 ケースは Issue #65 の `cfg(windows)` 限定 rename retry 補強の
-//! 機能 / DoS 兆候 / 監査ログ 3 経路 (pending / succeeded / exhausted) を
+//! 機能 / `DoS` 兆候 / 監査ログ 3 経路 (pending / succeeded / exhausted) を
 //! 一気通貫で検証する。`tracing_test::traced_test` で監査ログを直接観測し、
 //! daemon 側 subscriber の上位通報経路が「emit 側で発火可能」であることまで担保する。
 //!
@@ -16,7 +16,7 @@
 //! 直列化し、外部干渉を最小化する (`tests/sub_e_v2_integration/rekey_rotate.rs` の
 //! `rekey_fault_injection` 直列化と同方針)。
 //!
-//! ## tracing_test ノート
+//! ## `tracing_test` ノート
 //!
 //! 既定では `tracing-test` は integration テスト crate のログのみを捕捉し、
 //! テスト対象 crate (`shikomi-infra`) のログを env filter で弾く (公式注記)。

@@ -293,3 +293,131 @@ fn test_rekey_with_failing_provider_returns_rekey_partial_failure() {
         DomainError::VaultConsistencyError(VaultConsistencyReason::RekeyPartialFailure)
     ));
 }
+
+// ── TC-HD-U04: Vault::assign_hotkey ────────────────────────────────────────
+
+use crate::vault::record::Hotkey;
+
+fn make_hotkey(combo: &str) -> Hotkey {
+    Hotkey::parse(combo).expect("valid combo")
+}
+
+fn make_plaintext_vault_with_record() -> (Vault, RecordId) {
+    let mut vault = Vault::new(make_plaintext_header());
+    let record = make_plaintext_record();
+    let id = record.id().clone();
+    vault.add_record(record).unwrap();
+    (vault, id)
+}
+
+/// TC-HD-U04-a: 既存エントリに新規ホットキーを割り当て → Ok、hotkey が Some に
+#[test]
+fn tc_hd_u04_a_assign_hotkey_ok() {
+    let (mut vault, id) = make_plaintext_vault_with_record();
+    let hotkey = make_hotkey("ctrl+alt+1");
+    vault.assign_hotkey(&id, hotkey.clone()).unwrap();
+    let record = vault.find_record(&id).unwrap();
+    assert_eq!(record.hotkey(), Some(&hotkey));
+}
+
+/// TC-HD-U04-b: 別エントリが同一ホットキー保持中に割り当て → `HotkeyConflict`
+#[test]
+fn tc_hd_u04_b_assign_conflicts_with_other_entry() {
+    let mut vault = Vault::new(make_plaintext_header());
+    let r1 = make_plaintext_record();
+    let r2 = make_plaintext_record();
+    let id1 = r1.id().clone();
+    let id2 = r2.id().clone();
+    vault.add_record(r1).unwrap();
+    vault.add_record(r2).unwrap();
+
+    vault
+        .assign_hotkey(&id1, make_hotkey("ctrl+alt+1"))
+        .unwrap();
+    let err = vault
+        .assign_hotkey(&id2, make_hotkey("ctrl+alt+1"))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        DomainError::VaultConsistencyError(VaultConsistencyReason::HotkeyConflict)
+    ));
+}
+
+/// TC-HD-U04-c: 存在しない `RecordId` に割り当て → `RecordNotFound`
+#[test]
+fn tc_hd_u04_c_assign_to_nonexistent_id_returns_not_found() {
+    let mut vault = Vault::new(make_plaintext_header());
+    let unknown = make_id();
+    let err = vault
+        .assign_hotkey(&unknown, make_hotkey("ctrl+alt+1"))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        DomainError::VaultConsistencyError(VaultConsistencyReason::RecordNotFound(_))
+    ));
+}
+
+/// TC-HD-U04-d: 自エントリと同一ホットキーで上書き → Ok（競合なし）
+#[test]
+fn tc_hd_u04_d_reassign_same_hotkey_to_same_record_ok() {
+    let (mut vault, id) = make_plaintext_vault_with_record();
+    vault.assign_hotkey(&id, make_hotkey("ctrl+alt+1")).unwrap();
+    // 同一 ID に同一ホットキーで上書き → 競合なし
+    vault.assign_hotkey(&id, make_hotkey("ctrl+alt+1")).unwrap();
+    let record = vault.find_record(&id).unwrap();
+    assert_eq!(record.hotkey(), Some(&make_hotkey("ctrl+alt+1")));
+}
+
+// ── TC-HD-U05: Vault::clear_hotkey ────────────────────────────────────────
+
+/// TC-HD-U05-a: ホットキー付きエントリのクリア → Ok、hotkey が None
+#[test]
+fn tc_hd_u05_a_clear_hotkey_removes_hotkey() {
+    let (mut vault, id) = make_plaintext_vault_with_record();
+    vault.assign_hotkey(&id, make_hotkey("ctrl+alt+1")).unwrap();
+    vault.clear_hotkey(&id).unwrap();
+    let record = vault.find_record(&id).unwrap();
+    assert_eq!(record.hotkey(), None);
+}
+
+/// TC-HD-U05-b: ホットキーなしエントリのクリア → Ok（冪等）
+#[test]
+fn tc_hd_u05_b_clear_hotkey_idempotent() {
+    let (mut vault, id) = make_plaintext_vault_with_record();
+    // ホットキーなし状態でクリア
+    vault.clear_hotkey(&id).unwrap();
+    let record = vault.find_record(&id).unwrap();
+    assert_eq!(record.hotkey(), None);
+}
+
+/// TC-HD-U05-c: 存在しない ID のクリア → `RecordNotFound`
+#[test]
+fn tc_hd_u05_c_clear_hotkey_nonexistent_id_returns_not_found() {
+    let mut vault = Vault::new(make_plaintext_header());
+    let unknown = make_id();
+    let err = vault.clear_hotkey(&unknown).unwrap_err();
+    assert!(matches!(
+        err,
+        DomainError::VaultConsistencyError(VaultConsistencyReason::RecordNotFound(_))
+    ));
+}
+
+// ── TC-HD-U06: Vault::find_by_hotkey ───────────────────────────────────────
+
+/// TC-HD-U06-a: 登録済みホットキーで検索 → Some(&Record)
+#[test]
+fn tc_hd_u06_a_find_by_hotkey_returns_some() {
+    let (mut vault, id) = make_plaintext_vault_with_record();
+    vault.assign_hotkey(&id, make_hotkey("ctrl+alt+1")).unwrap();
+    let result = vault.find_by_hotkey(&make_hotkey("ctrl+alt+1"));
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().id(), &id);
+}
+
+/// TC-HD-U06-b: 未登録ホットキーで検索 → None
+#[test]
+fn tc_hd_u06_b_find_by_hotkey_unregistered_returns_none() {
+    let vault = Vault::new(make_plaintext_header());
+    let result = vault.find_by_hotkey(&make_hotkey("ctrl+alt+9"));
+    assert!(result.is_none());
+}

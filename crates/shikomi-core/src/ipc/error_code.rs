@@ -75,7 +75,18 @@ pub enum IpcErrorCode {
     /// 内部詳細秘匿のため `MigrationError → IpcError` マッピング表 (`vek-cache-and-ipc.md`)
     /// で 1:1 集約、CLI 側は `reason` で `MSG-S08`〜`MSG-S12` に振り分け。
     Crypto {
-        /// 固定文言（kebab-case、許容セットは設計書 SSoT）。
+        /// 固定文言（kebab-case、許容セットは設計書 `SSoT`）。
+        reason: String,
+    },
+
+    /// 指定ホットキーが既に別エントリに登録済み（409 相当）。
+    HotkeyConflict {
+        /// 固定文言（例: "hotkey conflict"）。
+        reason: String,
+    },
+    /// ホットキー文字列の形式が不正（422 相当）。
+    HotkeyParseError {
+        /// 固定文言（例: "invalid hotkey format"）。
         reason: String,
     },
 }
@@ -96,6 +107,8 @@ impl fmt::Display for IpcErrorCode {
             Self::RecoveryRequired => f.write_str("recovery path required"),
             Self::ProtocolDowngrade => f.write_str("V1 client cannot use V2-only request"),
             Self::Crypto { reason } => write!(f, "crypto error: {reason}"),
+            Self::HotkeyConflict { reason } => write!(f, "hotkey conflict: {reason}"),
+            Self::HotkeyParseError { reason } => write!(f, "invalid hotkey: {reason}"),
         }
     }
 }

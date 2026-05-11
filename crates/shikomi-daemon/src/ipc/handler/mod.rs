@@ -29,6 +29,10 @@ use shikomi_core::Vault;
 use shikomi_infra::persistence::VaultRepository;
 
 /// `IpcRequest` を `IpcResponse` に写像する pure 関数。
+///
+/// Note: ホットキーのドメイン操作（`Vault::assign_hotkey` / `Vault::clear_hotkey`）は
+/// 各ハンドラ内で実施する。OS バックエンド登録（`HotkeyManager::register_one`）は
+/// 呼び出し側（`dispatch_v2`）が vault Mutex 解放後に行う。
 pub fn handle_request<R: VaultRepository + ?Sized>(
     repo: &R,
     vault: &mut Vault,
@@ -48,13 +52,16 @@ pub fn handle_request<R: VaultRepository + ?Sized>(
             label,
             value,
             now,
-        } => add::handle_add(repo, vault, kind, label, value, now),
+            hotkey,
+        } => add::handle_add(repo, vault, kind, label, value, now, hotkey),
         IpcRequest::EditRecord {
             id,
             label,
             value,
             now,
-        } => edit::handle_edit(repo, vault, id, label, value, now),
+            hotkey,
+            clear_hotkey,
+        } => edit::handle_edit(repo, vault, id, label, value, now, hotkey, clear_hotkey),
         IpcRequest::RemoveRecord { id } => remove::handle_remove(repo, vault, id),
         // `#[non_exhaustive]` 防御的 wildcard（後続 V2 variant に対する多層防御、
         // cross-crate `non_exhaustive` のため明示分岐は実現不能）。

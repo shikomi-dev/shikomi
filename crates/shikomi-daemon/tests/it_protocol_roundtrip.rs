@@ -75,6 +75,7 @@ fn tc_it_003_roundtrip_add_record_text_preserves_value_bytes() {
         label: text_label("L"),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(b"v".to_vec())),
         now: fixed_time(),
+        hotkey: None,
     };
     let bytes = rmp_serde::to_vec(&req).unwrap();
     let decoded: IpcRequest = rmp_serde::from_slice(&bytes).unwrap();
@@ -84,6 +85,7 @@ fn tc_it_003_roundtrip_add_record_text_preserves_value_bytes() {
             label,
             value,
             now,
+            ..
         } => {
             assert_eq!(kind, RecordKind::Text);
             assert_eq!(label.as_str(), "L");
@@ -106,6 +108,7 @@ fn tc_it_004_secret_bytes_are_carried_but_redacted_in_debug() {
         label: text_label("api-key"),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(b"SECRET_TEST_VALUE".to_vec())),
         now: fixed_time(),
+        hotkey: None,
     };
     let bytes = rmp_serde::to_vec(&req).unwrap();
     // wire 上では平文 ASCII が出現する（OS プロセス境界 + UDS 0600 で保護される前提）
@@ -142,6 +145,7 @@ fn tc_it_005_roundtrip_records_response_preserves_projections() {
             label: text_label("t1"),
             value_preview: Some("hello".to_owned()),
             value_masked: false,
+            hotkey: None,
         },
         RecordSummary {
             id: id2,
@@ -149,6 +153,7 @@ fn tc_it_005_roundtrip_records_response_preserves_projections() {
             label: text_label("s1"),
             value_preview: None,
             value_masked: true,
+            hotkey: None,
         },
         RecordSummary {
             id: id3,
@@ -156,6 +161,7 @@ fn tc_it_005_roundtrip_records_response_preserves_projections() {
             label: text_label("t2"),
             value_preview: Some("world".to_owned()),
             value_masked: false,
+            hotkey: None,
         },
     ];
     // Sub-F (#44): `Records` 構造体化 (`{ records, protection_mode }`)。

@@ -3,13 +3,13 @@
 //! 銀ちゃん impl PR #58 (`5c21d10`) に対する黒盒結合テスト。
 //! 銀ちゃんが PR 本文で透明性報告した「3 つの妥協点」を機械検証で確定する:
 //!
-//! - **Bug-D-001 (HIGH)**: `verify_header_aead` が常に Ok() を返す簡略実装。
+//! - **Bug-D-001 (HIGH)**: `verify_header_aead` が常に `Ok()` を返す簡略実装。
 //!   設計書 C-17/C-18 のヘッダ AEAD タグ検証が実装段階で実質無効化されている。
 //!   `nonce_counter` 巻戻し攻撃が**ヘッダ AEAD タグでは検出されない**経路がある
-//!   （ただし wrapped_vek_by_pw の AEAD 経路で間接検出される妥協形）。
-//! - **Bug-D-002 (HIGH)**: `rekey_vault` ステップ 5 で wrapped_vek_by_pw /
-//!   wrapped_vek_by_recovery を**旧のまま維持**し records だけ新 VEK で
-//!   再暗号化。設計書 §F-D4 では新 VEK で wrapped_vek を再生成すべき。
+//!   （ただし `wrapped_vek_by_pw` の AEAD 経路で間接検出される妥協形）。
+//! - **Bug-D-002 (HIGH)**: `rekey_vault` ステップ 5 で `wrapped_vek_by_pw` /
+//!   `wrapped_vek_by_recovery` を**旧のまま維持**し records だけ新 VEK で
+//!   再暗号化。設計書 §F-D4 では新 VEK で `wrapped_vek` を再生成すべき。
 //!   実装通りだと **rekey 後の vault は load 時に旧 VEK が出てきて新 records
 //!   を復号できず破損状態**。これを TC-D-I03 で機械確定する。
 //! - **Bug-D-003 (Medium)**: composite container BLOB の妥協（vault-persistence
@@ -70,7 +70,7 @@ fn seed_plaintext_vault(repo: &shikomi_infra::persistence::SqliteVaultRepository
     save_with_test_rename_retry(repo, &vault);
 }
 
-/// TC-D-I01: encrypt_vault → unlock_with_password で同 plaintext records 復元.
+/// TC-D-I01: `encrypt_vault` → `unlock_with_password` で同 plaintext records 復元.
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
             test-design v8.5, run with --ignored locally. \
@@ -112,10 +112,10 @@ fn tc_d_i01_encrypt_then_unlock_password_roundtrip() {
     );
 }
 
-/// TC-D-I02: encrypt_vault → decrypt_vault で平文 vault 復元（DecryptConfirmation 経由）.
+/// TC-D-I02: `encrypt_vault` → `decrypt_vault` で平文 vault 復元（DecryptConfirmation 経由）.
 ///
 /// `DecryptConfirmation::confirm()` で型レベル証跡を作り、`decrypt_vault` の
-/// 引数として渡す。decrypt_vault は内部で `unlock_internal_with_password` →
+/// 引数として渡す。`decrypt_vault` は内部で `unlock_internal_with_password` →
 /// 全 records `decrypt_one_record` → 平文 vault 構築 → atomic write を実行。
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
@@ -170,12 +170,12 @@ fn tc_d_i02_encrypt_then_decrypt_roundtrip() {
 /// TC-D-I03: rekey 後の旧 VEK / 新 VEK の挙動を観察.
 ///
 /// **Bug-D-002 機械検証**: 設計書 §F-D4 では rekey 後の vault は新パスワードで
-/// unlock 可能なはず。実装は wrapped_vek_by_pw を旧のまま維持して records だけ
-/// 新 VEK で再暗号化するため、rekey 後 unlock_with_password が壊れる仮説を検証。
+/// unlock 可能なはず。実装は `wrapped_vek_by_pw` を旧のまま維持して records だけ
+/// 新 VEK で再暗号化するため、rekey 後 `unlock_with_password` が壊れる仮説を検証。
 ///
 /// 期待:
 /// - (a) rekey 自体は `Ok(())` で完了する
-/// - (b) **rekey 後 unlock_with_password が成功して vault load + records 復号できるか**
+/// - (b) **rekey 後 `unlock_with_password` が成功して vault load + records 復号できるか**
 ///   が Bug-D-002 の中核観察ポイント
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \
@@ -221,10 +221,7 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
     // キャッシュ統合工程で record 復号路が露出する時に再評価。
     let unlock_result = migration.unlock_with_password(STRONG_PASSWORD.to_string());
     if let Err(e) = &unlock_result {
-        eprintln!(
-            "[Bug-D-002 observation] post-rekey unlock_with_password failed: {:?}",
-            e
-        );
+        eprintln!("[Bug-D-002 observation] post-rekey unlock_with_password failed: {e:?}");
     }
     assert!(
         unlock_result.is_ok(),
@@ -234,8 +231,8 @@ fn tc_d_i03_rekey_then_unlock_with_same_password_observation() {
 
 /// TC-D-I04: rekey 後の `decrypt_vault` 全件成功（Bug-D-002 修正の機械検証）.
 ///
-/// Bug-D-002 修正後: rekey で wrapped_vek_by_pw を新 KEK で再ラップ + records
-/// 新 VEK で再暗号化。同パスワードで decrypt_vault が**全 records 復号成功**
+/// Bug-D-002 修正後: rekey で `wrapped_vek_by_pw` を新 KEK で再ラップ + records
+/// 新 VEK で再暗号化。同パスワードで `decrypt_vault` が**全 records 復号成功**
 /// するなら新 VEK 経路が完全に通っていることを意味する。
 #[test]
 #[ignore = "CI runner persistent VM-level file lock (13s+) — Bug-G-002〜G-006 articulated in \

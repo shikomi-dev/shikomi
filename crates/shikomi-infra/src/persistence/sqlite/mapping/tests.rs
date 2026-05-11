@@ -36,7 +36,8 @@ fn setup_schema(conn: &Connection) {
         "  ciphertext BLOB,",
         "  aad BLOB,",
         "  created_at TEXT NOT NULL,",
-        "  updated_at TEXT NOT NULL",
+        "  updated_at TEXT NOT NULL,",
+        "  hotkey_combo TEXT DEFAULT NULL",
         ");",
     ))
     .unwrap();
@@ -63,7 +64,8 @@ fn setup_schema_no_check(conn: &Connection) {
         "  ciphertext BLOB,",
         "  aad BLOB,",
         "  created_at TEXT NOT NULL,",
-        "  updated_at TEXT NOT NULL",
+        "  updated_at TEXT NOT NULL,",
+        "  hotkey_combo TEXT DEFAULT NULL",
         ");",
     ))
     .unwrap();
@@ -174,13 +176,13 @@ fn tc_u06_row_to_record_plaintext() {
     setup_schema(&conn);
     let id = Uuid::now_v7().to_string();
     conn.execute(
-        "INSERT INTO records VALUES (?, 'secret', 'test-label', 'plaintext', 'test value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        "INSERT INTO records VALUES (?, 'secret', 'test-label', 'plaintext', 'test value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL)",
         [&id],
     )
     .unwrap();
 
     let mut stmt = conn
-        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC")
         .unwrap();
     let record = stmt
         .query_row([], |row| Ok(Mapping::row_to_record(row).unwrap()))
@@ -197,13 +199,13 @@ fn tc_u07_row_to_record_invalid_uuid() {
     let conn = open_in_memory();
     setup_schema_no_check(&conn);
     conn.execute(
-        "INSERT INTO records VALUES ('not-a-uuid', 'secret', 'label', 'plaintext', 'value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        "INSERT INTO records VALUES ('not-a-uuid', 'secret', 'label', 'plaintext', 'value', NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL)",
         [],
     )
     .unwrap();
 
     let mut stmt = conn
-        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC")
         .unwrap();
     let result = stmt
         .query_row([], |row| Ok(Mapping::row_to_record(row)))
@@ -231,13 +233,13 @@ fn tc_u08_row_to_record_null_violation() {
     let id = Uuid::now_v7().to_string();
     // payload_variant='plaintext' だが plaintext_value=NULL
     conn.execute(
-        "INSERT INTO records VALUES (?, 'secret', 'label', 'plaintext', NULL, NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        "INSERT INTO records VALUES (?, 'secret', 'label', 'plaintext', NULL, NULL, NULL, NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL)",
         [&id],
     )
     .unwrap();
 
     let mut stmt = conn
-        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC")
         .unwrap();
     let result = stmt
         .query_row([], |row| Ok(Mapping::row_to_record(row)))
@@ -312,13 +314,14 @@ fn tc_u09_roundtrip_plaintext_record() {
             rp.aad_bytes.map(|b| b.to_vec()),
             rp.created_at,
             rp.updated_at,
+            rp.hotkey_combo,
         ],
     )
     .unwrap();
 
     // SELECT & verify
     let mut stmt = conn
-        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC")
         .unwrap();
     let loaded = stmt
         .query_row([], |row| Ok(Mapping::row_to_record(row).unwrap()))
@@ -361,6 +364,7 @@ fn tc_u10_roundtrip_record_updated_at_differs_from_created_at() {
         RecordPayload::Plaintext(secret),
         created_at,
         updated_at,
+        None,
     )
     .unwrap();
 
@@ -403,13 +407,14 @@ fn tc_u10_roundtrip_record_updated_at_differs_from_created_at() {
             rp.aad_bytes.map(|b| b.to_vec()),
             rp.created_at,
             rp.updated_at,
+            rp.hotkey_combo,
         ],
     )
     .unwrap();
 
     // SELECT & verify
     let mut stmt = conn
-        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at FROM records ORDER BY created_at ASC, id ASC")
+        .prepare("SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC")
         .unwrap();
     let loaded = stmt
         .query_row([], |row| Ok(Mapping::row_to_record(row).unwrap()))

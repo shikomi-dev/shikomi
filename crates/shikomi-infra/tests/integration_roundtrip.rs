@@ -138,7 +138,7 @@ fn tc_i09_no_sql_injection_patterns() {
     let status1 = std::process::Command::new("grep")
         .args([
             "-rEn",
-            r#"format!\s*\(.*(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA)"#,
+            r"format!\s*\(.*(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA)",
             "--include=*.rs",
             &src_path,
         ])

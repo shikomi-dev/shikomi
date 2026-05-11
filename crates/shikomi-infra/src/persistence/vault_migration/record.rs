@@ -4,7 +4,7 @@
 //! §`EncryptedRecord`
 //!
 //! shikomi-core 既存 `RecordPayloadEncrypted` (nonce + ciphertext + aad) と並列。
-//! shikomi-infra 側では label / kind / created_at / updated_at まで含めた完全な
+//! shikomi-infra 側では label / kind / `created_at` / `updated_at` まで含めた完全な
 //! per-record 永続化形を保持し、`VaultMigration` の AEAD 経路で利用する。
 
 use shikomi_core::{AuthTag, NonceBytes, RecordId, RecordKind, RecordLabel};
@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 /// - AAD は `Aad::Record { id, version, created_at }` で 26B 正規化 (Sub-A `Aad`)。
 #[derive(Debug, Clone)]
 pub struct EncryptedRecord {
-    /// レコード ID (UUIDv7)。
+    /// レコード ID (`UUIDv7`)。
     pub id: RecordId,
     /// レコード種別 (`Text` / `Secret`)。
     pub kind: RecordKind,

@@ -61,12 +61,20 @@ pub fn create_encrypted_vault(dir: &Path) -> anyhow::Result<()> {
         std::fs::remove_file(&vault_db).context("remove stale vault.db")?;
     }
 
-    // Unix 環境では infra 側が 0700/0600 を強制するため事前に合わせておく。
+    // Unix: infra 側が 0700/0600 を強制するため事前に合わせておく。
+    // Windows: TempDir が継承 DACL で作成される（SE_DACL_PROTECTED なし）ため、
+    //   infra の verify_dir が「owner-only DACL が設定されていない」と判断して失敗する。
+    //   shikomi_infra::persistence::ensure_vault_dir を呼んで DACL を設定する。
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
             .context("chmod 0700 dir")?;
+    }
+    #[cfg(windows)]
+    {
+        shikomi_infra::persistence::ensure_vault_dir(dir)
+            .context("set Windows DACL on vault dir")?;
     }
 
     let conn = Connection::open(&vault_db).context("open sqlite")?;
@@ -110,6 +118,13 @@ pub fn create_encrypted_vault(dir: &Path) -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&vault_db, std::fs::Permissions::from_mode(0o600))
             .context("chmod 0600 vault.db")?;
+    }
+    // Windows: vault.db も継承 DACL で作成されるため、owner-only DACL を明示設定する。
+    // ensure_vault_dir で dir 側は設定済みだが、ファイルは別途設定が必要。
+    #[cfg(windows)]
+    {
+        shikomi_infra::persistence::ensure_vault_file(&vault_db)
+            .context("set Windows DACL on vault.db")?;
     }
 
     Ok(())

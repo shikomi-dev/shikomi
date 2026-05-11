@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use shikomi_core::vault::record::Hotkey;
 use shikomi_core::{DomainError, ProtectionMode, RecordId, RecordPayload, VaultConsistencyReason};
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;
@@ -37,7 +38,13 @@ pub fn edit_record(
     }
 
     let id_for_return = input.id.clone();
-    let EditInput { id, label, value } = input;
+    let EditInput {
+        id,
+        label,
+        value,
+        hotkey,
+        clear_hotkey,
+    } = input;
     vault
         .update_record(&id, |mut record| {
             if let Some(new_label) = label {
@@ -49,6 +56,15 @@ pub fn edit_record(
             Ok(record)
         })
         .map_err(map_update_err)?;
+
+    // ホットキー更新（clear_hotkey と hotkey は排他、cli.rs の conflicts_with で保証）
+    if clear_hotkey {
+        vault.clear_hotkey(&id).map_err(CliError::Domain)?;
+    } else if let Some(ref combo) = hotkey {
+        let hk = Hotkey::parse(combo)
+            .map_err(|e| CliError::UsageError(format!("invalid hotkey combo '{combo}': {e}")))?;
+        vault.assign_hotkey(&id, hk).map_err(CliError::Domain)?;
+    }
 
     repo.save(&vault)?;
     Ok(id_for_return)

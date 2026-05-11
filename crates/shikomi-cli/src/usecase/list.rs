@@ -82,6 +82,7 @@ mod tests {
             label: label("k"),
             value_preview: None,
             value_masked: true,
+            hotkey: None,
         };
         let views = summaries_to_views(&[s]);
         assert_eq!(views.len(), 1);
@@ -96,6 +97,7 @@ mod tests {
             label: label("u"),
             value_preview: Some("https://example.com".to_owned()),
             value_masked: false,
+            hotkey: None,
         };
         let views = summaries_to_views(&[s]);
         match &views[0].value {
@@ -112,6 +114,7 @@ mod tests {
             label: label("u"),
             value_preview: None,
             value_masked: false,
+            hotkey: None,
         };
         let views = summaries_to_views(&[s]);
         assert!(matches!(views[0].value, ValueView::Masked));

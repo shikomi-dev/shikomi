@@ -135,7 +135,7 @@ fn tc_it_080_add_record_success_returns_daemon_id_and_emits_add_request() {
     let label = build_label("tc-it-080");
     let value = SecretString::from_string("v-it-080".to_owned());
     let returned = repo
-        .add_record(RecordKind::Text, label, value, fixed_time())
+        .add_record(RecordKind::Text, label, value, None, fixed_time())
         .expect("add_record ok");
 
     // 戻り値はスタブ送信 id と bit 同一（**id は daemon 集約**、CLI 側で生成しない）
@@ -154,6 +154,7 @@ fn tc_it_080_add_record_success_returns_daemon_id_and_emits_add_request() {
             label: lbl,
             value: _v,
             now,
+            ..
         } => {
             assert_eq!(*kind, RecordKind::Text);
             // RecordLabel は PartialEq を実装しないため Debug 文字列で比較
@@ -183,6 +184,7 @@ fn tc_it_081_add_record_persistence_error_maps_to_internal() {
         RecordKind::Text,
         build_label("tc-it-081"),
         SecretString::from_string("v".to_owned()),
+        None,
         fixed_time(),
     );
     match result {
@@ -211,6 +213,7 @@ fn tc_it_082_add_record_domain_error_maps_to_internal() {
         RecordKind::Text,
         build_label("tc-it-082"),
         SecretString::from_string("v".to_owned()),
+        None,
         fixed_time(),
     );
     match result {
@@ -243,6 +246,8 @@ fn tc_it_083_edit_record_label_only_succeeds() {
             daemon_id.clone(),
             Some(build_label("new")),
             None,
+            None,
+            false,
             fixed_time(),
         )
         .expect("edit ok");
@@ -279,6 +284,8 @@ fn tc_it_084_edit_record_value_only_succeeds_and_value_redacted() {
             daemon_id.clone(),
             None,
             Some(SecretString::from_string("new-value-it-084".to_owned())),
+            None,
+            false,
             fixed_time(),
         )
         .expect("edit ok");
@@ -320,6 +327,8 @@ fn tc_it_085_edit_record_not_found_maps_to_record_not_found() {
         daemon_id.clone(),
         Some(build_label("x")),
         None,
+        None,
+        false,
         fixed_time(),
     );
     match result {
@@ -419,6 +428,7 @@ fn tc_it_089_secret_marker_never_appears_in_request_debug() {
         RecordKind::Secret,
         build_label("tc-it-089"),
         SecretString::from_string(SECRET_MARKER.to_owned()),
+        None,
         fixed_time(),
     );
     let received = recorder.lock().unwrap().clone();

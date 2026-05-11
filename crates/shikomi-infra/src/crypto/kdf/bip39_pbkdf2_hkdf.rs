@@ -29,7 +29,7 @@ const KEK_LEN: usize = 32;
 // BIP-39 mnemonic → seed の出力長 (PBKDF2-HMAC-SHA512 → 64B、BIP-39 仕様固定)。
 const SEED_LEN: usize = 64;
 
-/// HKDF info 凍結値 (`tech-stack.md` §2.4 KEK_recovery 行 + Sub-0 凍結)。
+/// HKDF info 凍結値 (`tech-stack.md` §2.4 `KEK_recovery` 行 + Sub-0 凍結)。
 ///
 /// アプリ固有のラベル (RFC 5869 §3.2 Recommendations: HKDF-info によるドメイン分離)。
 /// 将来 KDF アルゴリズム変更時は `b"shikomi-kek-v2"` で別 const を追加し、

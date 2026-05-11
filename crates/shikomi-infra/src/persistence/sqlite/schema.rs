@@ -1,4 +1,4 @@
-//! SQLite スキーマ定数。
+//! `SQLite` スキーマ定数。
 //!
 //! テーブル定義・PRAGMA・DML クエリを一元管理する。
 
@@ -6,20 +6,21 @@
 // SchemaSql
 // -------------------------------------------------------------------
 
-/// SQLite スキーマに関連する全 SQL 定数を提供するゼロサイズ型。
+/// `SQLite` スキーマに関連する全 SQL 定数を提供するゼロサイズ型。
 pub(crate) struct SchemaSql;
 
 impl SchemaSql {
     /// shikomi vault DB の `application_id`。
     ///
-    /// ASCII: "shkm" = 0x73_68_6B_6D = 1936223085
+    /// ASCII: "shkm" = `0x73_68_6B_6D` = 1936223085
     pub(crate) const APPLICATION_ID: u32 = 0x73_68_6B_6D;
 
     /// 読み込みに対応する最小 `user_version`。
     pub(crate) const USER_VERSION_SUPPORTED_MIN: u32 = 1;
 
     /// 読み込みに対応する最大 `user_version`。
-    pub(crate) const USER_VERSION_SUPPORTED_MAX: u32 = 1;
+    /// V2: `records.hotkey_combo` カラム追加（Issue #89）。
+    pub(crate) const USER_VERSION_SUPPORTED_MAX: u32 = 2;
 
     /// `application_id` を取得する PRAGMA クエリ。
     pub(crate) const PRAGMA_APPLICATION_ID_GET: &'static str = "PRAGMA application_id;";
@@ -32,12 +33,12 @@ impl SchemaSql {
 
     /// `application_id` を shikomi の値に設定する PRAGMA クエリ。
     ///
-    /// 0x73_68_6B_6D = 1936223085
+    /// `0x73_68_6B_6D` = 1936223085
     pub(crate) const PRAGMA_APPLICATION_ID_SET: &'static str =
         "PRAGMA application_id = 1936223085;";
 
-    /// `user_version` を初期値に設定する PRAGMA クエリ。
-    pub(crate) const PRAGMA_USER_VERSION_SET: &'static str = "PRAGMA user_version = 1;";
+    /// `user_version` を最新値に設定する PRAGMA クエリ（新規 DB は V2 で作成）。
+    pub(crate) const PRAGMA_USER_VERSION_SET: &'static str = "PRAGMA user_version = 2;";
 
     /// `vault_header` テーブル作成クエリ。
     ///
@@ -65,7 +66,7 @@ impl SchemaSql {
         ")",
     );
 
-    /// `records` テーブル作成クエリ。
+    /// `records` テーブル作成クエリ（V2 スキーマ、`hotkey_combo` カラム含む）。
     ///
     /// CHECK 制約によりペイロードバリアントとカラムの整合性を DB レベルで強制する。
     pub(crate) const CREATE_RECORDS: &'static str = concat!(
@@ -80,6 +81,7 @@ impl SchemaSql {
         "  aad BLOB,",
         "  created_at TEXT NOT NULL,",
         "  updated_at TEXT NOT NULL,",
+        "  hotkey_combo TEXT DEFAULT NULL,",
         "  CHECK(",
         "    (payload_variant = 'plaintext'",
         "      AND plaintext_value IS NOT NULL",
@@ -94,13 +96,28 @@ impl SchemaSql {
         ")",
     );
 
+    /// `records.hotkey_combo` UNIQUE インデックス作成クエリ（NULL を除く）。
+    ///
+    /// V2 スキーマで新設。同一ホットキーの重複登録を DB レベルで防ぐ（domain 層の一次防衛を補完）。
+    pub(crate) const CREATE_HOTKEY_INDEX: &'static str = concat!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_records_hotkey_combo ",
+        "ON records (hotkey_combo) WHERE hotkey_combo IS NOT NULL",
+    );
+
     /// `vault_header` の SELECT クエリ（id=1 のみ）。
     pub(crate) const SELECT_VAULT_HEADER: &'static str =
         "SELECT protection_mode, vault_version, created_at, kdf_salt, wrapped_vek_by_pw, \
          wrapped_vek_by_recovery FROM vault_header WHERE id = 1";
 
-    /// `records` の SELECT クエリ（created_at ASC, id ASC でソート）。
+    /// `records` の SELECT クエリ（V2 スキーマ用、`hotkey_combo` カラム含む）。
+    /// `created_at` ASC, id ASC でソート。
     pub(crate) const SELECT_RECORDS_ORDERED: &'static str =
+        "SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, \
+         created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC";
+
+    /// `records` の SELECT クエリ（V1 スキーマ用、`hotkey_combo` カラムなし）。
+    /// V1 DB をロードする際のフォールバック。
+    pub(crate) const SELECT_RECORDS_ORDERED_V1: &'static str =
         "SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, \
          created_at, updated_at FROM records ORDER BY created_at ASC, id ASC";
 
@@ -109,9 +126,9 @@ impl SchemaSql {
         "INSERT INTO vault_header(id, protection_mode, vault_version, created_at, kdf_salt, \
          wrapped_vek_by_pw, wrapped_vek_by_recovery) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)";
 
-    /// `records` の INSERT クエリ。
+    /// `records` の INSERT クエリ（V2 スキーマ用、`hotkey_combo` カラム含む）。
     pub(crate) const INSERT_RECORD: &'static str =
         "INSERT INTO records(id, kind, label, payload_variant, plaintext_value, nonce, \
-         ciphertext, aad, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+         ciphertext, aad, created_at, updated_at, hotkey_combo) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 }

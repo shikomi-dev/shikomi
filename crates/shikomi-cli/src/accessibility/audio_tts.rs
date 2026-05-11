@@ -6,9 +6,9 @@
 //!   §セキュリティ設計 §`--output audio` TTS dictation 学習対策
 //!
 //! OS 別 TTS:
-//! - **macOS**: `say` コマンド (Apple SpeechSynthesis)
+//! - **macOS**: `say` コマンド (Apple `SpeechSynthesis`)
 //! - **Windows**: PowerShell + `[System.Speech.Synthesis.SpeechSynthesizer]::Speak`
-//! - **Linux**: `espeak` (PCM を音声サーバ PulseAudio / PipeWire にパイプ)
+//! - **Linux**: `espeak` (PCM を音声サーバ `PulseAudio` / `PipeWire` にパイプ)
 //! - その他: 未対応 → `CliError::Persistence` で fail (Fail Fast)
 //!
 //! 不変条件:
@@ -35,7 +35,7 @@ use crate::error::CliError;
 /// 空間で本ライブラリの責務外)。`expose_secret() -> &[u8]` から直接 byte 消費。
 ///
 /// 工程5 服部指摘 (BLOCKER 4) 解消: Windows は **`Err(unsupported)`** で fail
-/// fast。PowerShell `-Command` 経由だと ScriptBlockLogging (Event ID 4104) で
+/// fast。PowerShell `-Command` 経由だと `ScriptBlockLogging` (Event ID 4104) で
 /// 24 語が SIEM 転送可能な形で Event Log に記録される攻撃面があり、本ライブラリ
 /// 単体では遮断不能。Windows 向け本実装は **`shikomi-windows-tts.exe`** helper
 /// バイナリ + COM 経由 SAPI 呼出で Phase 8 以降に再設計する。
@@ -162,7 +162,7 @@ mod tests {
     use shikomi_core::SecretString;
 
     fn word(s: &str) -> SerializableSecretBytes {
-        SerializableSecretBytes::from_secret_string(SecretString::from_string(s.to_owned()))
+        SerializableSecretBytes::from_secret_string(&SecretString::from_string(s.to_owned()))
     }
 
     fn payload_as_str(p: &[u8]) -> &str {

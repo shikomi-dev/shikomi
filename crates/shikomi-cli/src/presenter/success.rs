@@ -310,7 +310,7 @@ mod tests {
         // (b) 借用渡しなので呼出後も words を再利用できる (所有権消費しない実装事実)。
         let words: Vec<SerializableSecretBytes> = (0..24)
             .map(|i| {
-                SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
+                SerializableSecretBytes::from_secret_string(&SecretString::from_string(format!(
                     "word{i:02}"
                 )))
             })
@@ -355,7 +355,7 @@ mod tests {
         //     screen presenter の出力に含まれる (Drop 発火前の表示経路の機械検証)。
         let words: Vec<SerializableSecretBytes> = (1..=24)
             .map(|i| {
-                SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
+                SerializableSecretBytes::from_secret_string(&SecretString::from_string(format!(
                     "wd{i:02}"
                 )))
             })
@@ -376,9 +376,9 @@ mod tests {
         let rendered_in_scope = {
             let inner_words: Vec<SerializableSecretBytes> = (1..=24)
                 .map(|i| {
-                    SerializableSecretBytes::from_secret_string(SecretString::from_string(format!(
-                        "scope{i:02}"
-                    )))
+                    SerializableSecretBytes::from_secret_string(&SecretString::from_string(
+                        format!("scope{i:02}"),
+                    ))
                 })
                 .collect();
             render_recovery_disclosure_screen(&inner_words, Locale::JapaneseEn)

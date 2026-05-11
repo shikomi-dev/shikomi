@@ -4,8 +4,8 @@
 //! `wrapped_vek_by_pw` 列は composite container BLOB として詰められ
 //! (`vault_migration::storage` で構築)、`nonce_counter` / `kdf_params` /
 //! `header_aead_envelope` を内包する。本層は BLOB を **不透明な `Vec<u8>` として**
-//! SQLite に保存・復元するだけで、暗号化アルゴリズムには無知 (REQ-P11 改訂、
-//! 設計書 §責務境界: SqliteVaultRepository は暗号化に「無知」のまま据え置き)。
+//! `SQLite` に保存・復元するだけで、暗号化アルゴリズムには無知 (REQ-P11 改訂、
+//! 設計書 §責務境界: `SqliteVaultRepository` は暗号化に「無知」のまま据え置き)。
 
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -169,95 +169,101 @@ impl Mapping {
                     source: Some(e),
                 }),
             ProtectionMode::Encrypted => {
-                // Col 3: kdf_salt (BLOB 16B)
-                let kdf_salt_raw: Option<Vec<u8>> = row
-                    .get(3)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let kdf_salt_bytes = kdf_salt_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation { column: "kdf_salt" },
-                    source: None,
-                })?;
-                let kdf_salt =
-                    KdfSalt::try_new(&kdf_salt_bytes).map_err(|e| PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: format!("invalid kdf_salt: {e}"),
-                        },
-                        source: Some(e),
-                    })?;
-
-                // Col 4: wrapped_vek_by_pw (BLOB, composite container >= 32B)
-                let pw_raw: Option<Vec<u8>> = row
-                    .get(4)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let pw_bytes = pw_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_pw",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_pw = deserialize_wrapped_vek(&pw_bytes).map_err(|e| {
-                    PersistenceError::Corrupted {
-                        table: "vault_header",
-                        row_key: Some("1".to_string()),
-                        reason: CorruptedReason::InvalidRowCombination {
-                            detail: format!("invalid wrapped_vek_by_pw: {e}"),
-                        },
-                        source: Some(e),
-                    }
-                })?;
-
-                // Col 5: wrapped_vek_by_recovery (BLOB)
-                let recovery_raw: Option<Vec<u8>> = row
-                    .get(5)
-                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
-                let recovery_bytes = recovery_raw.ok_or_else(|| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::NullViolation {
-                        column: "wrapped_vek_by_recovery",
-                    },
-                    source: None,
-                })?;
-                let wrapped_vek_by_recovery =
-                    deserialize_wrapped_vek(&recovery_bytes).map_err(|e| {
-                        PersistenceError::Corrupted {
-                            table: "vault_header",
-                            row_key: Some("1".to_string()),
-                            reason: CorruptedReason::InvalidRowCombination {
-                                detail: format!("invalid wrapped_vek_by_recovery: {e}"),
-                            },
-                            source: Some(e),
-                        }
-                    })?;
-
-                VaultHeader::new_encrypted(
-                    vault_version,
-                    created_at,
-                    kdf_salt,
-                    wrapped_vek_by_pw,
-                    wrapped_vek_by_recovery,
-                )
-                .map_err(|e| PersistenceError::Corrupted {
-                    table: "vault_header",
-                    row_key: Some("1".to_string()),
-                    reason: CorruptedReason::InvalidRowCombination {
-                        detail: e.to_string(),
-                    },
-                    source: Some(e),
-                })
+                Self::row_to_encrypted_header(row, vault_version, created_at)
             }
         }
+    }
+
+    /// 暗号化モード向けカラム（Col 3〜5）を読み込んで `VaultHeader::new_encrypted` を呼ぶ。
+    fn row_to_encrypted_header(
+        row: &rusqlite::Row<'_>,
+        vault_version: VaultVersion,
+        created_at: OffsetDateTime,
+    ) -> Result<VaultHeader, PersistenceError> {
+        // Col 3: kdf_salt (BLOB 16B)
+        let kdf_salt_raw: Option<Vec<u8>> = row
+            .get(3)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let kdf_salt_bytes = kdf_salt_raw.ok_or_else(|| PersistenceError::Corrupted {
+            table: "vault_header",
+            row_key: Some("1".to_string()),
+            reason: CorruptedReason::NullViolation { column: "kdf_salt" },
+            source: None,
+        })?;
+        let kdf_salt =
+            KdfSalt::try_new(&kdf_salt_bytes).map_err(|e| PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::InvalidRowCombination {
+                    detail: format!("invalid kdf_salt: {e}"),
+                },
+                source: Some(e),
+            })?;
+
+        // Col 4: wrapped_vek_by_pw (BLOB, composite container >= 32B)
+        let pw_raw: Option<Vec<u8>> = row
+            .get(4)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let pw_bytes = pw_raw.ok_or_else(|| PersistenceError::Corrupted {
+            table: "vault_header",
+            row_key: Some("1".to_string()),
+            reason: CorruptedReason::NullViolation {
+                column: "wrapped_vek_by_pw",
+            },
+            source: None,
+        })?;
+        let wrapped_vek_by_pw =
+            deserialize_wrapped_vek(&pw_bytes).map_err(|e| PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::InvalidRowCombination {
+                    detail: format!("invalid wrapped_vek_by_pw: {e}"),
+                },
+                source: Some(e),
+            })?;
+
+        // Col 5: wrapped_vek_by_recovery (BLOB)
+        let recovery_raw: Option<Vec<u8>> = row
+            .get(5)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let recovery_bytes = recovery_raw.ok_or_else(|| PersistenceError::Corrupted {
+            table: "vault_header",
+            row_key: Some("1".to_string()),
+            reason: CorruptedReason::NullViolation {
+                column: "wrapped_vek_by_recovery",
+            },
+            source: None,
+        })?;
+        let wrapped_vek_by_recovery =
+            deserialize_wrapped_vek(&recovery_bytes).map_err(|e| PersistenceError::Corrupted {
+                table: "vault_header",
+                row_key: Some("1".to_string()),
+                reason: CorruptedReason::InvalidRowCombination {
+                    detail: format!("invalid wrapped_vek_by_recovery: {e}"),
+                },
+                source: Some(e),
+            })?;
+
+        VaultHeader::new_encrypted(
+            vault_version,
+            created_at,
+            kdf_salt,
+            wrapped_vek_by_pw,
+            wrapped_vek_by_recovery,
+        )
+        .map_err(|e| PersistenceError::Corrupted {
+            table: "vault_header",
+            row_key: Some("1".to_string()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: e.to_string(),
+            },
+            source: Some(e),
+        })
     }
 }
 
 /// `WrappedVek` を `nonce(12) ‖ tag(16) ‖ ciphertext(N)` 形式に直列化する
-/// (vault_header 列保存用、N は composite container 含み可変)。
+/// (`vault_header` 列保存用、N は composite container 含み可変)。
 fn serialize_wrapped_vek(w: &WrappedVek) -> Vec<u8> {
     let mut out = Vec::with_capacity(12 + 16 + w.ciphertext().len());
     out.extend_from_slice(w.nonce().as_array());

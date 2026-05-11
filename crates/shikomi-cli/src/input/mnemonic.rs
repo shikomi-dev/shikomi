@@ -75,7 +75,7 @@ pub fn parse_mnemonic_line(line: &str) -> Result<Vec<SerializableSecretBytes>, C
             ));
         }
         out.push(SerializableSecretBytes::from_secret_string(
-            SecretString::from_string(w.to_owned()),
+            &SecretString::from_string(w.to_owned()),
         ));
     }
     Ok(out)

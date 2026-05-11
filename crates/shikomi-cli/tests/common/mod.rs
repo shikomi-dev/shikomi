@@ -37,7 +37,11 @@ pub fn fresh_repo() -> (TempDir, SqliteVaultRepository) {
     (dir, repo)
 }
 
-/// `TempDir` 配下のパーミッションを Unix では `0700` に揃える（no-op on non-Unix）。
+/// `TempDir` 配下のパーミッションを OS 要件に揃える。
+///
+/// - Unix: `0700` に chmod
+/// - Windows: `SE_DACL_PROTECTED` な owner-only DACL を設定
+///   （`TempDir` が継承 DACL で作成されるため、infra の `verify_dir` が失敗しないよう事前設定）
 #[cfg(unix)]
 pub fn tighten_perms_unix(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -46,7 +50,13 @@ pub fn tighten_perms_unix(path: &Path) {
     std::fs::set_permissions(path, perms).expect("chmod 0700");
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn tighten_perms_unix(path: &Path) {
+    shikomi_infra::persistence::ensure_vault_dir(path)
+        .expect("ensure_vault_dir (Windows DACL) failed");
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn tighten_perms_unix(_path: &Path) {}
 
 /// 決定的テスト用の固定時刻（UNIX_EPOCH + 1 時間）。

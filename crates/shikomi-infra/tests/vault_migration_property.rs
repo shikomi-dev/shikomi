@@ -5,13 +5,13 @@
 //! encrypt → decrypt 往復不変条件を確認する。
 //!
 //! TC-D-P01 (DC-1 / DC-2 / property): 任意の records (1..=16 件) + 任意 password
-//! → encrypt_vault → decrypt_vault → records 全件 bit-exact 一致（1000 ケース）.
+//! → `encrypt_vault` → `decrypt_vault` → records 全件 bit-exact 一致（1000 ケース）.
 //!
 //! TC-D-P02 (C-17 / property、4 軸改竄検出): 設計時に「ヘッダ任意 byte flip /
 //! per-record byte flip / ヘッダ AEAD タグ flip / per-record AEAD タグ flip」を
 //! 1000 ケースで検証要求していたが、SQLite ファイル直接書換は内部スキーマ依存で
-//! テスト裏口扱いになるため、本 PR では **AesGcmAeadAdapter::encrypt_record の
-//! 戻り値タグを直接 flip して decrypt_record で AeadTagMismatch を確認**する形に
+//! テスト裏口扱いになるため、本 PR では **`AesGcmAeadAdapter::encrypt_record` の
+//! 戻り値タグを直接 flip して `decrypt_record` で `AeadTagMismatch` を確認**する形に
 //! 簡略化（Sub-C 既存 TC-C-U05〜U08 + TC-C-P01 で 4 軸全網羅済、Sub-D 単独
 //! 重複は YAGNI）。本ファイルでは TC-D-P01 のみ実装。
 

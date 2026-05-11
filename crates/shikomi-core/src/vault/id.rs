@@ -16,7 +16,7 @@ use crate::error::{DomainError, InvalidRecordIdReason};
 ///
 /// `UUIDv7` 以外のバージョン・nil UUID は構築時に拒否される（Fail Fast）。
 ///
-/// IPC 経路では `String`（UUIDv7 表記）として送受信する（`Display` / `FromStr` 整合）。
+/// IPC 経路では `String`（`UUIDv7` 表記）として送受信する（`Display` / `FromStr` 整合）。
 ///
 /// `Hash` は `IpcVaultRepository` の差分検出（`HashSet` / `HashMap` キー利用）で
 /// 必要となる。Newtype 内部の `Uuid` は既に `Hash` 実装済みのため、derive で完結する。
@@ -139,7 +139,7 @@ mod tests {
     fn test_try_from_str_with_valid_uuidv7_string_ok() {
         // A valid UUIDv7 string (version=7, variant=10xx)
         let result = RecordId::try_from_str("01234567-0123-7000-8000-0123456789ab");
-        assert!(result.is_ok(), "expected Ok but got {:?}", result);
+        assert!(result.is_ok(), "expected Ok but got {result:?}");
     }
 
     #[test]

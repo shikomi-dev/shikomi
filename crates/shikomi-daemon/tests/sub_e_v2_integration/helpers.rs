@@ -122,12 +122,14 @@ pub async fn run_dispatch(
     };
     let vault = Mutex::new(vault_state);
 
+    let hotkey_manager = std::sync::Arc::new(shikomi_daemon::hotkey::HotkeyManager::new_null());
     let ctx = V2Context {
         repo,
         vault: &vault,
         cache,
         backoff,
         migration: &migration,
+        hotkey_manager: &hotkey_manager,
     };
     dispatch_v2(&ctx, state, request).await
 }

@@ -237,13 +237,15 @@ impl IpcVaultRepository {
         kind: RecordKind,
         label: RecordLabel,
         value: SecretString,
+        hotkey: Option<String>,
         now: OffsetDateTime,
     ) -> Result<RecordId, PersistenceError> {
         let request = IpcRequest::AddRecord {
             kind,
             label,
-            value: SerializableSecretBytes::from_secret_string(value),
+            value: SerializableSecretBytes::from_secret_string(&value),
             now,
+            hotkey,
         };
         match self.round_trip(&request)? {
             IpcResponse::Added { id } => Ok(id),
@@ -264,13 +266,17 @@ impl IpcVaultRepository {
         id: RecordId,
         label: Option<RecordLabel>,
         value: Option<SecretString>,
+        hotkey: Option<String>,
+        clear_hotkey: bool,
         now: OffsetDateTime,
     ) -> Result<RecordId, PersistenceError> {
         let request = IpcRequest::EditRecord {
             id,
             label,
-            value: value.map(SerializableSecretBytes::from_secret_string),
+            value: value.map(|s| SerializableSecretBytes::from_secret_string(&s)),
             now,
+            hotkey,
+            clear_hotkey,
         };
         match self.round_trip(&request)? {
             IpcResponse::Edited { id } => Ok(id),
@@ -322,7 +328,7 @@ impl IpcVaultRepository {
         accept_limits: bool,
     ) -> Result<Vec<SerializableSecretBytes>, CliError> {
         let request = IpcRequest::Encrypt {
-            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            master_password: SerializableSecretBytes::from_secret_string(&master_password),
             accept_limits,
         };
         match self.round_trip_for_vault(&request, "vault.encrypt")? {
@@ -340,7 +346,7 @@ impl IpcVaultRepository {
     /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
     pub fn decrypt(&self, master_password: SecretString, confirmed: bool) -> Result<(), CliError> {
         let request = IpcRequest::Decrypt {
-            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            master_password: SerializableSecretBytes::from_secret_string(&master_password),
             confirmed,
         };
         match self.round_trip_for_vault(&request, "vault.decrypt")? {
@@ -362,7 +368,7 @@ impl IpcVaultRepository {
         recovery: Option<Vec<SerializableSecretBytes>>,
     ) -> Result<(), CliError> {
         let request = IpcRequest::Unlock {
-            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            master_password: SerializableSecretBytes::from_secret_string(&master_password),
             recovery,
         };
         match self.round_trip_for_vault(&request, "vault.unlock")? {
@@ -394,8 +400,8 @@ impl IpcVaultRepository {
     /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
     pub fn change_password(&self, old: SecretString, new: SecretString) -> Result<(), CliError> {
         let request = IpcRequest::ChangePassword {
-            old: SerializableSecretBytes::from_secret_string(old),
-            new: SerializableSecretBytes::from_secret_string(new),
+            old: SerializableSecretBytes::from_secret_string(&old),
+            new: SerializableSecretBytes::from_secret_string(&new),
         };
         match self.round_trip_for_vault(&request, "vault.change_password")? {
             IpcResponse::PasswordChanged => Ok(()),
@@ -412,7 +418,7 @@ impl IpcVaultRepository {
     /// IPC 失敗 / daemon 側 V2 エラーは `CliError` に写像。
     pub fn rekey(&self, master_password: SecretString) -> Result<RekeyOutcome, CliError> {
         let request = IpcRequest::Rekey {
-            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            master_password: SerializableSecretBytes::from_secret_string(&master_password),
         };
         match self.round_trip_for_vault(&request, "vault.rekey")? {
             IpcResponse::Rekeyed {
@@ -440,7 +446,7 @@ impl IpcVaultRepository {
         master_password: SecretString,
     ) -> Result<RotateRecoveryOutcome, CliError> {
         let request = IpcRequest::RotateRecovery {
-            master_password: SerializableSecretBytes::from_secret_string(master_password),
+            master_password: SerializableSecretBytes::from_secret_string(&master_password),
         };
         match self.round_trip_for_vault(&request, "vault.rotate_recovery")? {
             IpcResponse::RecoveryRotated {

@@ -42,4 +42,6 @@ pub(crate) struct RecordParams<'a> {
     pub(crate) created_at: String,
     /// 更新時刻 RFC3339 文字列。
     pub(crate) updated_at: String,
+    /// ホットキーコンボ文字列（正規化済み、None = ホットキーなし）。
+    pub(crate) hotkey_combo: Option<String>,
 }

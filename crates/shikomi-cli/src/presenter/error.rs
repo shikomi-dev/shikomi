@@ -260,6 +260,20 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "`--recovery` and password input cannot be combined; choose one",
             "`--recovery` と password 入力は併用できません。どちらか一方を指定してください",
         ),
+        // Issue #89: ホットキー操作エラー文言（PG-①② 対応）。exit 1（UserError）。
+        CliError::HotkeyConflict { reason } => (
+            format!("hotkey conflict: {reason}"),
+            format!("ホットキーが競合しています: {reason}"),
+            // PG-②: ユーザへの行動案内を明示する
+            "specify a different hotkey combo".to_owned(),
+            "別のホットキーコンボを指定してください".to_owned(),
+        ),
+        CliError::HotkeyParseError { reason } => (
+            format!("invalid hotkey: {reason}"),
+            format!("不正なホットキー: {reason}"),
+            "use format like ctrl+alt+1 or shift+f1".to_owned(),
+            "ctrl+alt+1 や shift+f1 のような形式で指定してください".to_owned(),
+        ),
     }
 }
 

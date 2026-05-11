@@ -76,6 +76,7 @@ fn tc_i04_encrypted_vault_db_load_does_not_return_unsupported_yet() {
     // Unix: vault.db を rusqlite で直接作成 (CHECK 制約なし DDL でダミー暗号化行を挿入)
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(
             "PRAGMA application_id = 1936223085;
@@ -116,7 +117,6 @@ fn tc_i04_encrypted_vault_db_load_does_not_return_unsupported_yet() {
             [],
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -231,7 +231,7 @@ fn tc_i13_zero_byte_vault_db() {
     assert!(
         matches!(
             result,
-            Err(PersistenceError::Sqlite { .. }) | Err(PersistenceError::SchemaMismatch { .. })
+            Err(PersistenceError::Sqlite { .. } | PersistenceError::SchemaMismatch { .. })
         ),
         "Sqlite または SchemaMismatch を期待したが予期せぬ結果が返った"
     );
@@ -273,7 +273,7 @@ fn tc_i14_corrupt_vault_db() {
     assert!(
         matches!(
             result,
-            Err(PersistenceError::Sqlite { .. }) | Err(PersistenceError::SchemaMismatch { .. })
+            Err(PersistenceError::Sqlite { .. } | PersistenceError::SchemaMismatch { .. })
         ),
         "Sqlite または SchemaMismatch を期待したが予期せぬ結果が返った"
     );
@@ -308,8 +308,8 @@ fn tc_i15_orphan_new_file_on_save() {
     // Unix: ディレクトリを先に 0700 で作成し、その後 .new を置く
     #[cfg(unix)]
     {
-        std::fs::create_dir_all(dir.path()).unwrap();
         use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir.path()).unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 

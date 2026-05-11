@@ -5,7 +5,7 @@
 //!
 //! ## REQ-S13 型レベル強制契約
 //!
-//! 1. `disclose(self)` は `self` を消費 → 2 度呼出は compile_fail (C-19)。
+//! 1. `disclose(self)` は `self` を消費 → 2 度呼出は `compile_fail` (C-19)。
 //! 2. `RecoveryWords` は `Display` / `Serialize` 未実装 → 永続化禁止 (DC-6)。
 //! 3. `Drop` 連鎖で内包 `RecoveryMnemonic` の `SecretBox<Zeroizing<...>>` が zeroize。
 //! 4. `drop_without_disclose(self)` でクラッシュ・キャンセル経路の Fail Secure 提供。
@@ -86,7 +86,7 @@ impl Drop for RecoveryWords {
 
 /// 24 語初回 1 度表示の型レベル強制ラッパ (REQ-S13 / C-19)。
 ///
-/// `disclose(self)` は `self` を消費するため Rust の所有権ルールで 2 度呼出が compile_fail。
+/// `disclose(self)` は `self` を消費するため Rust の所有権ルールで 2 度呼出が `compile_fail`。
 /// `Drop` 連鎖で内包する `RecoveryMnemonic` の zeroize が発火する (Sub-A C-1 維持)。
 ///
 /// `Serialize` / `Display` 未実装で永続化・表示経路を型レベル封鎖。
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(s, "[REDACTED RECOVERY DISCLOSURE]");
     }
 
-    /// TC-D-U05: drop_without_disclose で内部 RecoveryMnemonic の Drop 連鎖発火。
+    /// TC-D-U05: `drop_without_disclose` で内部 `RecoveryMnemonic` の Drop 連鎖発火。
     /// メモリパターン直接観測は OS/Allocator 依存のため、API として呼び出せて
     /// panic しないこと + `self` 消費で 2 度呼べないことを確認する。
     #[test]
