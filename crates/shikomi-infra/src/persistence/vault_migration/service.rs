@@ -844,6 +844,7 @@ fn encrypt_one_record(
         RecordPayload::Encrypted(encrypted_payload),
         record.created_at(),
         record.updated_at(),
+        record.hotkey().cloned(),
     )
     .map_err(MigrationError::Domain)
 }
@@ -872,6 +873,7 @@ fn decrypt_one_record(
                 plaintext_payload,
                 record.created_at(),
                 record.updated_at(),
+                record.hotkey().cloned(),
             )
             .map_err(MigrationError::Domain)
         }

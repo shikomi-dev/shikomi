@@ -1,12 +1,16 @@
 //! `IpcRequest::EditRecord` の処理。
 
 use shikomi_core::ipc::{IpcErrorCode, IpcResponse, SerializableSecretBytes};
-use shikomi_core::{RecordId, RecordLabel, RecordPayload, Vault};
+use shikomi_core::{
+    DomainError, Hotkey, HotkeyParseError, RecordId, RecordLabel, RecordPayload, Vault,
+    VaultConsistencyReason,
+};
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;
 
 use super::error_mapping::{map_domain_error, map_persistence_error};
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_edit<R: VaultRepository + ?Sized>(
     repo: &R,
     vault: &mut Vault,
@@ -14,7 +18,16 @@ pub(super) fn handle_edit<R: VaultRepository + ?Sized>(
     label: Option<RecordLabel>,
     value: Option<SerializableSecretBytes>,
     now: OffsetDateTime,
+    hotkey: Option<String>,
+    clear_hotkey: bool,
 ) -> IpcResponse {
+    // `--hotkey` と `--clear-hotkey` を同時指定した場合はエラー（矛盾入力）
+    if clear_hotkey && hotkey.is_some() {
+        return IpcResponse::Error(IpcErrorCode::HotkeyParseError {
+            reason: "--hotkey と --clear-hotkey を同時指定することはできません".to_owned(),
+        });
+    }
+
     if vault.find_record(&id).is_none() {
         return IpcResponse::Error(IpcErrorCode::NotFound { id });
     }
@@ -46,8 +59,38 @@ pub(super) fn handle_edit<R: VaultRepository + ?Sized>(
     if let Err(err) = update_result {
         return IpcResponse::Error(map_domain_error(&err));
     }
+
+    // ホットキー操作（ドメイン層）
+    if clear_hotkey {
+        if let Err(err) = vault.clear_hotkey(&id) {
+            return IpcResponse::Error(map_domain_error(&err));
+        }
+    } else if let Some(hotkey_str) = hotkey {
+        match Hotkey::parse(&hotkey_str) {
+            Ok(hotkey) => {
+                if let Err(err) = vault.assign_hotkey(&id, hotkey) {
+                    return IpcResponse::Error(map_domain_error(&err));
+                }
+            }
+            Err(_) => {
+                return IpcResponse::Error(IpcErrorCode::HotkeyParseError {
+                    reason: format!("invalid hotkey combo: {hotkey_str}"),
+                });
+            }
+        }
+    }
+
     if let Err(err) = repo.save(vault) {
         return IpcResponse::Error(map_persistence_error(&err));
     }
     IpcResponse::Edited { id }
+}
+
+fn map_update_err(err: DomainError) -> IpcErrorCode {
+    match err {
+        DomainError::VaultConsistencyError(VaultConsistencyReason::RecordNotFound(id)) => {
+            IpcErrorCode::NotFound { id }
+        }
+        other => map_domain_error(&other),
+    }
 }

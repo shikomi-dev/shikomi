@@ -36,6 +36,7 @@ fn tc_it_020_edit_record_updates_only_label_when_value_is_none() {
             kind: RecordKind::Text,
             label: RecordLabel::try_new("OLD".to_owned()).unwrap(),
             value: SecretString::from_string("ORIG_VALUE".to_owned()),
+            hotkey: None,
         },
         now,
     )
@@ -46,6 +47,8 @@ fn tc_it_020_edit_record_updates_only_label_when_value_is_none() {
         id: id.clone(),
         label: Some(RecordLabel::try_new("NEW".to_owned()).unwrap()),
         value: None,
+        hotkey: None,
+        clear_hotkey: false,
     };
     let returned_id = edit_record(&repo, input, edit_now, dir.path()).expect("edit_record");
     assert_eq!(returned_id, id);
@@ -75,6 +78,7 @@ fn tc_it_021_edit_record_updates_both_fields_when_both_are_some() {
             kind: RecordKind::Text,
             label: RecordLabel::try_new("OLD".to_owned()).unwrap(),
             value: SecretString::from_string("OLD_VAL".to_owned()),
+            hotkey: None,
         },
         now,
     )
@@ -85,6 +89,8 @@ fn tc_it_021_edit_record_updates_both_fields_when_both_are_some() {
         id: id.clone(),
         label: Some(RecordLabel::try_new("NEW".to_owned()).unwrap()),
         value: Some(SecretString::from_string("NEW_VAL".to_owned())),
+        hotkey: None,
+        clear_hotkey: false,
     };
     edit_record(&repo, input, edit_now, dir.path()).expect("edit_record");
 
@@ -112,6 +118,7 @@ fn tc_it_022_edit_record_with_nonexistent_id_returns_record_not_found() {
             kind: RecordKind::Text,
             label: RecordLabel::try_new("L".to_owned()).unwrap(),
             value: SecretString::from_string("V".to_owned()),
+            hotkey: None,
         },
         now,
     )
@@ -122,6 +129,8 @@ fn tc_it_022_edit_record_with_nonexistent_id_returns_record_not_found() {
         id: missing_id.clone(),
         label: Some(RecordLabel::try_new("X".to_owned()).unwrap()),
         value: None,
+        hotkey: None,
+        clear_hotkey: false,
     };
     let err = edit_record(&repo, input, now, dir.path()).expect_err("expected error");
     match err {
@@ -143,6 +152,8 @@ fn tc_it_023_edit_record_on_encrypted_vault_returns_encryption_unsupported() {
         id: RecordId::new(Uuid::now_v7()).unwrap(),
         label: Some(RecordLabel::try_new("L".to_owned()).unwrap()),
         value: None,
+        hotkey: None,
+        clear_hotkey: false,
     };
     let err = edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
     assert!(
@@ -162,6 +173,8 @@ fn tc_it_050a_edit_record_on_uninitialized_vault_returns_vault_not_initialized()
         id: RecordId::new(Uuid::now_v7()).unwrap(),
         label: Some(RecordLabel::try_new("L".to_owned()).unwrap()),
         value: None,
+        hotkey: None,
+        clear_hotkey: false,
     };
     let err = edit_record(&repo, input, fixed_time(), dir.path()).expect_err("expected error");
     assert!(

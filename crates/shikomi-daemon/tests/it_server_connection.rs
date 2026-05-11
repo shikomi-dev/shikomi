@@ -127,6 +127,7 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let cache = VekCache::new();
     let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
+    let hotkey_manager = Arc::new(shikomi_daemon::hotkey::HotkeyManager::new_null());
     let mut server = IpcServer::new(
         ListenerEnum::Unix {
             listener,
@@ -136,6 +137,7 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
         Arc::clone(&vault_arc),
         cache,
         backoff,
+        hotkey_manager,
     );
     let server_handle = tokio::spawn(async move {
         let _ = server.start_with_shutdown(shutdown_rx).await;
@@ -208,6 +210,7 @@ async fn tc_it_011_add_then_list_roundtrip() {
         label: RecordLabel::try_new("L".into()).unwrap(),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(b"V".to_vec())),
         now: fixed_time(),
+        hotkey: None,
     };
     send_request(&mut framed, &add_req).await;
     let resp = recv_response(&mut framed).await;
@@ -247,6 +250,7 @@ async fn tc_it_012_edit_label_returns_edited() {
         label: RecordLabel::try_new("old".into()).unwrap(),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(b"V".to_vec())),
         now: fixed_time(),
+        hotkey: None,
     };
     send_request(&mut framed, &add).await;
     let added = recv_response(&mut framed).await;
@@ -261,6 +265,8 @@ async fn tc_it_012_edit_label_returns_edited() {
         label: Some(RecordLabel::try_new("new".into()).unwrap()),
         value: None,
         now: fixed_time() + time::Duration::seconds(1),
+        hotkey: None,
+        clear_hotkey: false,
     };
     send_request(&mut framed, &edit).await;
     let edited = recv_response(&mut framed).await;
@@ -287,6 +293,7 @@ async fn tc_it_013_remove_existing_returns_removed() {
         label: RecordLabel::try_new("bye".into()).unwrap(),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(b"V".to_vec())),
         now: fixed_time(),
+        hotkey: None,
     };
     send_request(&mut framed, &add).await;
     let added = recv_response(&mut framed).await;
@@ -321,6 +328,8 @@ async fn tc_it_015_edit_nonexistent_id_returns_not_found() {
         label: Some(RecordLabel::try_new("new".into()).unwrap()),
         value: None,
         now: fixed_time(),
+        hotkey: None,
+        clear_hotkey: false,
     };
     send_request(&mut framed, &req).await;
     let resp = recv_response(&mut framed).await;
@@ -511,6 +520,7 @@ async fn tc_it_016_invalid_utf8_value_returns_invalid_label_with_fixed_reason() 
         label: RecordLabel::try_new("L".into()).unwrap(),
         value: SerializableSecretBytes::new(SecretBytes::from_vec(invalid_utf8)),
         now: fixed_time(),
+        hotkey: None,
     };
     send_request(&mut framed, &add).await;
     let resp = recv_response(&mut framed).await;

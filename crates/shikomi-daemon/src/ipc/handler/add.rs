@@ -1,7 +1,9 @@
 //! `IpcRequest::AddRecord` の処理。
 
 use shikomi_core::ipc::{IpcErrorCode, IpcResponse, SerializableSecretBytes};
-use shikomi_core::{Record, RecordId, RecordKind, RecordLabel, RecordPayload, Vault};
+use shikomi_core::{
+    Hotkey, HotkeyParseError, Record, RecordId, RecordKind, RecordLabel, RecordPayload, Vault,
+};
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -15,6 +17,7 @@ pub(super) fn handle_add<R: VaultRepository + ?Sized>(
     label: RecordLabel,
     value: SerializableSecretBytes,
     now: OffsetDateTime,
+    hotkey: Option<String>,
 ) -> IpcResponse {
     let secret = match value.into_inner().into_secret_string() {
         Ok(s) => s,
@@ -41,6 +44,23 @@ pub(super) fn handle_add<R: VaultRepository + ?Sized>(
     if let Err(err) = vault.add_record(record) {
         return IpcResponse::Error(map_domain_error(&err));
     }
+
+    // ホットキー設定（ドメイン層操作）
+    if let Some(hotkey_str) = hotkey {
+        match Hotkey::parse(&hotkey_str) {
+            Ok(hotkey) => {
+                if let Err(err) = vault.assign_hotkey(&record_id, hotkey) {
+                    return IpcResponse::Error(map_domain_error(&err));
+                }
+            }
+            Err(_) => {
+                return IpcResponse::Error(IpcErrorCode::HotkeyParseError {
+                    reason: format!("invalid hotkey combo: {hotkey_str}"),
+                });
+            }
+        }
+    }
+
     if let Err(err) = repo.save(vault) {
         return IpcResponse::Error(map_persistence_error(&err));
     }

@@ -4,7 +4,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use shikomi_core::{
-    Aad, CipherText, NonceBytes, Record, RecordId, RecordKind, RecordLabel, RecordPayload,
+    Aad, CipherText, Hotkey, NonceBytes, Record, RecordId, RecordKind, RecordLabel, RecordPayload,
     RecordPayloadEncrypted, SecretString, VaultVersion,
 };
 
@@ -52,6 +52,8 @@ impl Mapping {
                     source: None,
                 })?;
 
+        let hotkey_combo = record.hotkey().map(|h| h.as_str().to_owned());
+
         match record.payload() {
             RecordPayload::Plaintext(secret) => Ok(RecordParams {
                 id,
@@ -64,6 +66,7 @@ impl Mapping {
                 aad_bytes: None,
                 created_at,
                 updated_at,
+                hotkey_combo,
             }),
             RecordPayload::Encrypted(enc) => Ok(RecordParams {
                 id,
@@ -76,6 +79,7 @@ impl Mapping {
                 aad_bytes: Some(enc.aad().to_canonical_bytes()),
                 created_at,
                 updated_at,
+                hotkey_combo,
             }),
         }
     }
@@ -306,16 +310,272 @@ impl Mapping {
             }
         };
 
-        let record = Record::rehydrate(record_id, kind, label, payload, created_at, updated_at)
-            .map_err(|e| PersistenceError::Corrupted {
+        // Col 10 (V2 only): hotkey_combo (TEXT, NULL OK)
+        let hotkey_combo_str: Option<String> = row
+            .get(10)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let hotkey = hotkey_combo_str
+            .map(|s| {
+                Hotkey::parse(&s).map_err(|e| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.clone()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: format!("invalid hotkey_combo: {e}"),
+                    },
+                    source: None,
+                })
+            })
+            .transpose()?;
+
+        let record = Record::rehydrate(
+            record_id, kind, label, payload, created_at, updated_at, hotkey,
+        )
+        .map_err(|e| PersistenceError::Corrupted {
+            table: "records",
+            row_key: Some(id_str.clone()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: format!("failed to rehydrate record: {e}"),
+            },
+            source: Some(e),
+        })?;
+
+        Ok(record)
+    }
+
+    /// `SQLite` 行（V1 スキーマ、`hotkey_combo` カラムなし）→ `Record` に変換する。
+    ///
+    /// V1 DB の下位互換ロードで使用する。全レコードの `hotkey` は `None` になる。
+    ///
+    /// # Errors
+    ///
+    /// `row_to_record` と同じエラーを返すが、Col 10 (hotkey_combo) は読まない。
+    pub(crate) fn row_to_record_v1(row: &rusqlite::Row<'_>) -> Result<Record, PersistenceError> {
+        // Col 0〜9 は row_to_record と同じ処理
+        let id_str: String = row
+            .get(0)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let record_id =
+            RecordId::try_from_str(&id_str).map_err(|e| PersistenceError::Corrupted {
                 table: "records",
                 row_key: Some(id_str.clone()),
-                reason: CorruptedReason::InvalidRowCombination {
-                    detail: format!("failed to rehydrate record: {e}"),
+                reason: CorruptedReason::InvalidUuidString {
+                    raw: id_str.clone(),
                 },
                 source: Some(e),
             })?;
 
+        let kind_str: String = row
+            .get(1)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let kind = match kind_str.as_str() {
+            "text" => RecordKind::Text,
+            "secret" => RecordKind::Secret,
+            other => {
+                return Err(PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.clone()),
+                    reason: CorruptedReason::InvalidRowCombination {
+                        detail: format!("unknown kind: {other:?}"),
+                    },
+                    source: None,
+                });
+            }
+        };
+
+        let label_str: String = row
+            .get(2)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let label = RecordLabel::try_new(label_str).map_err(|e| PersistenceError::Corrupted {
+            table: "records",
+            row_key: Some(id_str.clone()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: format!("invalid label: {e}"),
+            },
+            source: Some(e),
+        })?;
+
+        let payload_variant: String = row
+            .get(3)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+
+        let created_at_raw: String = row
+            .get(8)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let created_at = OffsetDateTime::parse(&created_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "created_at",
+                    raw: created_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
+
+        let updated_at_raw: String = row
+            .get(9)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let updated_at = OffsetDateTime::parse(&updated_at_raw, &Rfc3339).map_err(|_| {
+            PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.clone()),
+                reason: CorruptedReason::InvalidRfc3339 {
+                    column: "updated_at",
+                    raw: updated_at_raw.clone(),
+                },
+                source: None,
+            }
+        })?;
+
+        let payload = Self::build_payload_v1(row, &id_str, &payload_variant, created_at)?;
+
+        // V1 スキーマには hotkey_combo なし → None
+        let record = Record::rehydrate(
+            record_id, kind, label, payload, created_at, updated_at, None,
+        )
+        .map_err(|e| PersistenceError::Corrupted {
+            table: "records",
+            row_key: Some(id_str.clone()),
+            reason: CorruptedReason::InvalidRowCombination {
+                detail: format!("failed to rehydrate record: {e}"),
+            },
+            source: Some(e),
+        })?;
+
         Ok(record)
+    }
+
+    /// V1 ペイロード構築（Cols 4〜7 を使用）。`row_to_record_v1` の内部ヘルパ。
+    fn build_payload_v1(
+        row: &rusqlite::Row<'_>,
+        id_str: &str,
+        payload_variant: &str,
+        created_at: OffsetDateTime,
+    ) -> Result<RecordPayload, PersistenceError> {
+        match payload_variant {
+            "plaintext" => {
+                let plaintext: Option<String> = row
+                    .get(4)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let value = plaintext.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.to_owned()),
+                    reason: CorruptedReason::NullViolation {
+                        column: "plaintext_value",
+                    },
+                    source: None,
+                })?;
+                Ok(RecordPayload::Plaintext(SecretString::from_string(value)))
+            }
+            "encrypted" => {
+                let nonce_raw: Option<Vec<u8>> = row
+                    .get(5)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let nonce_bytes = nonce_raw.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.to_owned()),
+                    reason: CorruptedReason::NullViolation { column: "nonce" },
+                    source: None,
+                })?;
+                let nonce =
+                    NonceBytes::try_new(&nonce_bytes).map_err(|e| PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("invalid nonce: {e}"),
+                        },
+                        source: Some(e),
+                    })?;
+
+                let ct_raw: Option<Vec<u8>> = row
+                    .get(6)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let ct_bytes = ct_raw.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.to_owned()),
+                    reason: CorruptedReason::NullViolation {
+                        column: "ciphertext",
+                    },
+                    source: None,
+                })?;
+                let ciphertext = CipherText::try_new(ct_bytes.into_boxed_slice()).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("invalid ciphertext: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
+
+                let aad_raw: Option<Vec<u8>> = row
+                    .get(7)
+                    .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                let aad_bytes = aad_raw.ok_or_else(|| PersistenceError::Corrupted {
+                    table: "records",
+                    row_key: Some(id_str.to_owned()),
+                    reason: CorruptedReason::NullViolation { column: "aad" },
+                    source: None,
+                })?;
+
+                let record_id =
+                    RecordId::try_from_str(id_str).map_err(|e| PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidUuidString {
+                            raw: id_str.to_owned(),
+                        },
+                        source: Some(e),
+                    })?;
+
+                let vault_version_raw = u16::from_be_bytes([aad_bytes[16], aad_bytes[17]]);
+                let vault_version = VaultVersion::try_new(vault_version_raw).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("invalid vault version in aad: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
+
+                let aad = Aad::new(record_id, vault_version, created_at).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("failed to reconstruct aad: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
+
+                let enc = RecordPayloadEncrypted::new(nonce, ciphertext, aad).map_err(|e| {
+                    PersistenceError::Corrupted {
+                        table: "records",
+                        row_key: Some(id_str.to_owned()),
+                        reason: CorruptedReason::InvalidRowCombination {
+                            detail: format!("failed to build encrypted payload: {e}"),
+                        },
+                        source: Some(e),
+                    }
+                })?;
+
+                Ok(RecordPayload::Encrypted(enc))
+            }
+            other => Err(PersistenceError::Corrupted {
+                table: "records",
+                row_key: Some(id_str.to_owned()),
+                reason: CorruptedReason::InvalidRowCombination {
+                    detail: format!(
+                        "unknown payload_variant: {other:?}; expected 'plaintext' or 'encrypted'"
+                    ),
+                },
+                source: None,
+            }),
+        }
     }
 }

@@ -31,6 +31,8 @@ pub struct RecordSummary {
     pub value_preview: Option<String>,
     /// マスク表示ヒント（Secret は true）。
     pub value_masked: bool,
+    /// ホットキーコンボ文字列（未設定の場合は None）。
+    pub hotkey: Option<String>,
 }
 
 impl RecordSummary {
@@ -50,6 +52,7 @@ impl RecordSummary {
             label: record.label().clone(),
             value_preview,
             value_masked,
+            hotkey: record.hotkey().map(|h| h.as_str().to_owned()),
         }
     }
 }

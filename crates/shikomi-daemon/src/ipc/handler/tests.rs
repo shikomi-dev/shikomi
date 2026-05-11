@@ -161,6 +161,7 @@ fn test_add_text_record_returns_added_and_calls_save_once() {
         label: text_label("L"),
         value: secret_bytes(b"V"),
         now: fixed_time(),
+        hotkey: None,
     };
     let res = handle_request(&repo, &mut vault, req);
     assert!(matches!(res, IpcResponse::Added { .. }));
@@ -185,12 +186,14 @@ fn test_add_two_records_with_same_label_both_succeed_with_distinct_ids() {
         label: text_label("dup"),
         value: secret_bytes(b"a"),
         now: fixed_time(),
+        hotkey: None,
     };
     let req2 = IpcRequest::AddRecord {
         kind: RecordKind::Text,
         label: text_label("dup"),
         value: secret_bytes(b"b"),
         now: fixed_time(),
+        hotkey: None,
     };
     let res1 = handle_request(&repo, &mut vault, req1);
     let res2 = handle_request(&repo, &mut vault, req2);
@@ -223,6 +226,8 @@ fn test_edit_nonexistent_id_returns_not_found() {
         label: Some(text_label("X")),
         value: None,
         now: fixed_time(),
+        hotkey: None,
+        clear_hotkey: false,
     };
     let res = handle_request(&repo, &mut vault, req);
     match res {
@@ -245,6 +250,8 @@ fn test_edit_label_returns_edited_and_saves() {
         label: Some(text_label("new")),
         value: None,
         now: fixed_time() + time::Duration::seconds(1),
+        hotkey: None,
+        clear_hotkey: false,
     };
     let res = handle_request(&repo, &mut vault, req);
     match res {
@@ -313,6 +320,7 @@ fn test_add_when_save_fails_returns_persistence_with_fixed_reason() {
         label: text_label("L"),
         value: secret_bytes(b"V"),
         now: fixed_time(),
+        hotkey: None,
     };
     let res = handle_request(&repo, &mut vault, req);
     match &res {
@@ -341,6 +349,7 @@ fn test_add_when_repo_returns_unsupported_encrypted_returns_encryption_unsupport
         label: text_label("L"),
         value: secret_bytes(b"V"),
         now: fixed_time(),
+        hotkey: None,
     };
     let res = handle_request(&repo, &mut vault, req);
     assert!(matches!(

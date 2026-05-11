@@ -237,6 +237,7 @@ impl IpcVaultRepository {
         kind: RecordKind,
         label: RecordLabel,
         value: SecretString,
+        hotkey: Option<String>,
         now: OffsetDateTime,
     ) -> Result<RecordId, PersistenceError> {
         let request = IpcRequest::AddRecord {
@@ -244,6 +245,7 @@ impl IpcVaultRepository {
             label,
             value: SerializableSecretBytes::from_secret_string(value),
             now,
+            hotkey,
         };
         match self.round_trip(&request)? {
             IpcResponse::Added { id } => Ok(id),
@@ -264,6 +266,8 @@ impl IpcVaultRepository {
         id: RecordId,
         label: Option<RecordLabel>,
         value: Option<SecretString>,
+        hotkey: Option<String>,
+        clear_hotkey: bool,
         now: OffsetDateTime,
     ) -> Result<RecordId, PersistenceError> {
         let request = IpcRequest::EditRecord {
@@ -271,6 +275,8 @@ impl IpcVaultRepository {
             label,
             value: value.map(SerializableSecretBytes::from_secret_string),
             now,
+            hotkey,
+            clear_hotkey,
         };
         match self.round_trip(&request)? {
             IpcResponse::Edited { id } => Ok(id),

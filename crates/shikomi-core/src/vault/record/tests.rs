@@ -201,6 +201,7 @@ fn test_record_rehydrate_updated_at_before_created_at_returns_invalid_updated_at
         RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
         created_at,
         updated_at,
+        None,
     );
     assert!(
         matches!(
@@ -227,6 +228,7 @@ fn test_record_rehydrate_truncates_subsecond_to_microseconds() {
         RecordPayload::Plaintext(SecretString::from_string("value".to_string())),
         created_at,
         updated_at,
+        None,
     )
     .expect("rehydrate が失敗した");
 

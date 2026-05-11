@@ -18,6 +18,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use crate::backoff::UnlockBackoff;
 use crate::cache::VekCache;
 use crate::error::ServerError;
+use crate::hotkey::HotkeyManager;
 use crate::ipc::v2_handler::{dispatch_v2, ClientState, V2Context};
 use crate::ipc::{framing, handshake};
 use crate::permission::peer_credential;
@@ -42,10 +43,12 @@ pub struct IpcServer {
     vault: Arc<Mutex<Vault>>,
     cache: VekCache,
     backoff: Arc<Mutex<UnlockBackoff>>,
+    /// Issue #89: OS ホットキー登録管理（IPC add/edit ハンドラが使用）。
+    hotkey_manager: Arc<HotkeyManager>,
 }
 
 impl IpcServer {
-    /// IpcServer を構築する (Sub-E (#43): cache / backoff を注入)。
+    /// IpcServer を構築する。
     #[must_use]
     pub fn new(
         listener: ListenerEnum,
@@ -53,6 +56,7 @@ impl IpcServer {
         vault: Arc<Mutex<Vault>>,
         cache: VekCache,
         backoff: Arc<Mutex<UnlockBackoff>>,
+        hotkey_manager: Arc<HotkeyManager>,
     ) -> Self {
         Self {
             listener: Some(listener),
@@ -60,6 +64,7 @@ impl IpcServer {
             vault,
             cache,
             backoff,
+            hotkey_manager,
         }
     }
 
@@ -175,9 +180,10 @@ impl IpcServer {
                     let vault = Arc::clone(&self.vault);
                     let cache = self.cache.clone();
                     let backoff = Arc::clone(&self.backoff);
+                    let hotkey_manager = Arc::clone(&self.hotkey_manager);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, shutdown_for_task)
+                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
                             .await;
                     });
                 }
@@ -243,9 +249,10 @@ impl IpcServer {
                     let vault = Arc::clone(&self.vault);
                     let cache = self.cache.clone();
                     let backoff = Arc::clone(&self.backoff);
+                    let hotkey_manager = Arc::clone(&self.hotkey_manager);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, shutdown_for_task)
+                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
                             .await;
                     });
                 }
@@ -272,6 +279,7 @@ async fn handle_connection<S>(
     vault: Arc<Mutex<Vault>>,
     cache: VekCache,
     backoff: Arc<Mutex<UnlockBackoff>>,
+    hotkey_manager: Arc<HotkeyManager>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -357,6 +365,7 @@ async fn handle_connection<S>(
                             cache: &cache,
                             backoff: &backoff,
                             migration: &migration,
+                            hotkey_manager: &hotkey_manager,
                         };
 
                         let response = dispatch_v2(&ctx, client_state, request).await;

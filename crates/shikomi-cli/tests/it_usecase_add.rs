@@ -28,6 +28,7 @@ fn tc_it_010_add_record_text_auto_initializes_vault_and_roundtrips() {
         kind: RecordKind::Text,
         label: RecordLabel::try_new("L".to_owned()).unwrap(),
         value: SecretString::from_string("V".to_owned()),
+        hotkey: None,
     };
     let id = add_record(&repo, input, now).expect("add_record");
 
@@ -54,6 +55,7 @@ fn tc_it_011_add_record_secret_persists_as_masked_view_without_leaking_value() {
         kind: RecordKind::Secret,
         label: RecordLabel::try_new("S".to_owned()).unwrap(),
         value: SecretString::from_string("SECRET_TEST_VALUE".to_owned()),
+        hotkey: None,
     };
     let id = add_record(&repo, input, now).expect("add_record secret");
 
@@ -86,6 +88,7 @@ fn tc_it_012_add_record_on_encrypted_vault_returns_encryption_unsupported() {
         kind: RecordKind::Text,
         label: RecordLabel::try_new("L".to_owned()).unwrap(),
         value: SecretString::from_string("V".to_owned()),
+        hotkey: None,
     };
     let err = add_record(&repo, input, fixed_time()).expect_err("expected error");
     assert!(

@@ -170,6 +170,10 @@ pub enum VaultConsistencyReason {
     /// `updated_at` が `created_at` より前の時刻になる更新は拒否。
     #[error("updated_at must not precede created_at")]
     InvalidUpdatedAt,
+
+    /// 指定ホットキーが既に別レコードに登録済み。
+    #[error("hotkey is already assigned to another record")]
+    HotkeyConflict,
 }
 
 // -------------------------------------------------------------------

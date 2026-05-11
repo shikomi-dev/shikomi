@@ -1,11 +1,13 @@
 //! レコードおよび関連型（`RecordKind` / `RecordLabel` / `RecordPayload`）。
 
 mod aggregate;
+pub mod hotkey;
 mod kind;
 mod label;
 mod payload;
 
 pub use aggregate::Record;
+pub use hotkey::{Hotkey, HotkeyParseError};
 pub use kind::RecordKind;
 pub use label::RecordLabel;
 pub use payload::{RecordPayload, RecordPayloadEncrypted};

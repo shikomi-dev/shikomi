@@ -18,6 +18,8 @@ pub struct AddInput {
     pub kind: RecordKind,
     pub label: RecordLabel,
     pub value: SecretString,
+    /// グローバルホットキーコンボ文字列（正規化済み、None = ホットキーなし）。
+    pub hotkey: Option<String>,
 }
 
 // -------------------------------------------------------------------
@@ -26,13 +28,18 @@ pub struct AddInput {
 
 /// `edit` UseCase の入力 DTO。
 ///
-/// `label` / `value` は少なくとも 1 つが `Some` である必要がある（呼び出し側の事前条件、
-/// `run_edit` で検証）。`kind` フィールドは持たない（Phase 1 スコープ外）。
+/// `label` / `value` / `hotkey` / `clear_hotkey` のうち少なくとも 1 つが有効な変更を
+/// 指定している必要がある（呼び出し側の事前条件、`run_edit` で検証）。
+/// `kind` フィールドは持たない（Phase 1 スコープ外）。
 #[derive(Debug)]
 pub struct EditInput {
     pub id: RecordId,
     pub label: Option<RecordLabel>,
     pub value: Option<SecretString>,
+    /// 新しいホットキーコンボ（`None` = 変更なし）。
+    pub hotkey: Option<String>,
+    /// `true` の場合ホットキーを解除する（`hotkey` と排他）。
+    pub clear_hotkey: bool,
 }
 
 // -------------------------------------------------------------------

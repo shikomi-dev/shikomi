@@ -110,6 +110,7 @@ pub(crate) fn run_add(
         kind: args.kind.into(),
         label,
         value,
+        hotkey: args.hotkey.clone(),
     };
 
     let now = OffsetDateTime::now_utc();
@@ -125,7 +126,13 @@ pub(crate) fn run_add(
             }
             id
         }
-        RepositoryHandle::Ipc(ipc) => ipc.add_record(input.kind, input.label, input.value, now)?,
+        RepositoryHandle::Ipc(ipc) => ipc.add_record(
+            input.kind,
+            input.label,
+            input.value,
+            input.hotkey.clone(),
+            now,
+        )?,
     };
 
     if !quiet {
@@ -141,9 +148,15 @@ pub(crate) fn run_edit(
     locale: Locale,
     quiet: bool,
 ) -> Result<(), CliError> {
-    if args.label.is_none() && args.value.is_none() && !args.stdin {
+    if args.label.is_none()
+        && args.value.is_none()
+        && !args.stdin
+        && args.hotkey.is_none()
+        && !args.clear_hotkey
+    {
         return Err(CliError::UsageError(
-            "at least one of --label/--value/--stdin is required".to_owned(),
+            "at least one of --label/--value/--stdin/--hotkey/--clear-hotkey is required"
+                .to_owned(),
         ));
     }
 
@@ -197,6 +210,8 @@ pub(crate) fn run_edit(
         id: id.clone(),
         label,
         value,
+        hotkey: args.hotkey.clone(),
+        clear_hotkey: args.clear_hotkey,
     };
 
     let now = OffsetDateTime::now_utc();
@@ -206,7 +221,14 @@ pub(crate) fn run_edit(
             let vault_dir = repo.paths().dir().to_path_buf();
             usecase::edit::edit_record(repo, input, now, &vault_dir)?
         }
-        RepositoryHandle::Ipc(ipc) => ipc.edit_record(input.id, input.label, input.value, now)?,
+        RepositoryHandle::Ipc(ipc) => ipc.edit_record(
+            input.id,
+            input.label,
+            input.value,
+            input.hotkey,
+            input.clear_hotkey,
+            now,
+        )?,
     };
 
     if !quiet {

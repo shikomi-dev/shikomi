@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 use crate::error::{DomainError, VaultConsistencyReason};
 use crate::vault::id::RecordId;
 
+use super::hotkey::Hotkey;
 use super::kind::RecordKind;
 use super::label::RecordLabel;
 use super::payload::RecordPayload;
@@ -39,6 +40,7 @@ pub struct Record {
     payload: RecordPayload,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+    hotkey: Option<Hotkey>,
 }
 
 impl Record {
@@ -61,6 +63,7 @@ impl Record {
             payload,
             created_at: ts,
             updated_at: ts,
+            hotkey: None,
         }
     }
 
@@ -79,6 +82,7 @@ impl Record {
         payload: RecordPayload,
         created_at: OffsetDateTime,
         updated_at: OffsetDateTime,
+        hotkey: Option<Hotkey>,
     ) -> Result<Self, DomainError> {
         let created_at = truncate_to_microsecond(created_at);
         let updated_at = truncate_to_microsecond(updated_at);
@@ -94,6 +98,7 @@ impl Record {
             payload,
             created_at,
             updated_at,
+            hotkey,
         })
     }
 
@@ -173,6 +178,26 @@ impl Record {
         self.payload = payload;
         self.updated_at = ts;
         Ok(self)
+    }
+
+    /// ホットキーへの参照を返す（未設定の場合は `None`）。
+    #[must_use]
+    pub fn hotkey(&self) -> Option<&Hotkey> {
+        self.hotkey.as_ref()
+    }
+
+    /// ホットキーを設定した新しい `Record` を返す（self を消費）。
+    #[must_use]
+    pub fn with_hotkey(mut self, hotkey: Hotkey) -> Self {
+        self.hotkey = Some(hotkey);
+        self
+    }
+
+    /// ホットキーをクリアした新しい `Record` を返す（self を消費）。
+    #[must_use]
+    pub fn without_hotkey(mut self) -> Self {
+        self.hotkey = None;
+        self
     }
 
     /// Text レコードの平文プレビュー（先頭 `max_chars` char）を返す。

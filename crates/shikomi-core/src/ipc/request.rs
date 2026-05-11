@@ -40,6 +40,9 @@ pub enum IpcRequest {
         /// クライアント側で生成した UTC 時刻（RFC3339）。
         #[serde(with = "time::serde::rfc3339")]
         now: OffsetDateTime,
+        /// ホットキーコンボ文字列（任意。None = ホットキーなし）。
+        #[serde(default)]
+        hotkey: Option<String>,
     },
     /// 既存レコードの部分更新。
     EditRecord {
@@ -52,6 +55,12 @@ pub enum IpcRequest {
         /// クライアント側で生成した UTC 時刻（RFC3339）。
         #[serde(with = "time::serde::rfc3339")]
         now: OffsetDateTime,
+        /// 新ホットキーコンボ文字列（任意）。
+        #[serde(default)]
+        hotkey: Option<String>,
+        /// true でホットキー解除（hotkey フィールドより優先）。
+        #[serde(default)]
+        clear_hotkey: bool,
     },
     /// レコード削除。
     RemoveRecord {

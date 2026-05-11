@@ -13,7 +13,10 @@ pub use header::{VaultHeader, VaultHeaderEncrypted, VaultHeaderPlaintext};
 pub use id::RecordId;
 pub use nonce::{NonceBytes, NonceCounter};
 pub use protection_mode::ProtectionMode;
-pub use record::{Record, RecordKind, RecordLabel, RecordPayload, RecordPayloadEncrypted};
+pub use record::{
+    Hotkey, HotkeyParseError, Record, RecordKind, RecordLabel, RecordPayload,
+    RecordPayloadEncrypted,
+};
 pub use version::VaultVersion;
 
 use crate::crypto::Vek;
@@ -219,6 +222,69 @@ impl Vault {
         }
 
         Ok(())
+    }
+
+    /// ホットキーをレコードに割り当てる。
+    ///
+    /// # Errors
+    /// - 対象 ID が存在しない: `DomainError::VaultConsistencyError(RecordNotFound)`
+    /// - 同一ホットキーが既に別レコードに登録済み: `DomainError::VaultConsistencyError(HotkeyConflict)`
+    pub fn assign_hotkey(
+        &mut self,
+        id: &RecordId,
+        hotkey: crate::vault::record::Hotkey,
+    ) -> Result<(), DomainError> {
+        // 競合チェック（対象レコード以外で同一ホットキーを持つレコードがあるか）
+        let conflict = self
+            .records
+            .iter()
+            .filter(|r| r.id() != id)
+            .any(|r| r.hotkey() == Some(&hotkey));
+        if conflict {
+            return Err(DomainError::VaultConsistencyError(
+                VaultConsistencyReason::HotkeyConflict,
+            ));
+        }
+        let pos = self
+            .records
+            .iter()
+            .position(|r| r.id() == id)
+            .ok_or_else(|| {
+                DomainError::VaultConsistencyError(VaultConsistencyReason::RecordNotFound(
+                    id.clone(),
+                ))
+            })?;
+        self.records[pos] = self.records[pos].clone().with_hotkey(hotkey);
+        Ok(())
+    }
+
+    /// ホットキーを解除する（None に設定する）。
+    ///
+    /// # Errors
+    /// 対象 ID が存在しない: `DomainError::VaultConsistencyError(RecordNotFound)`
+    pub fn clear_hotkey(&mut self, id: &RecordId) -> Result<(), DomainError> {
+        let pos = self
+            .records
+            .iter()
+            .position(|r| r.id() == id)
+            .ok_or_else(|| {
+                DomainError::VaultConsistencyError(VaultConsistencyReason::RecordNotFound(
+                    id.clone(),
+                ))
+            })?;
+        self.records[pos] = self.records[pos].clone().without_hotkey();
+        Ok(())
+    }
+
+    /// ホットキーが設定されている全レコードのイテレータを返す。
+    pub fn hotkey_entries(&self) -> impl Iterator<Item = &Record> {
+        self.records.iter().filter(|r| r.hotkey().is_some())
+    }
+
+    /// 指定ホットキーを持つレコードを線形探索で返す。
+    #[must_use]
+    pub fn find_by_hotkey(&self, hotkey: &crate::vault::record::Hotkey) -> Option<&Record> {
+        self.hotkey_entries().find(|r| r.hotkey() == Some(hotkey))
     }
 }
 

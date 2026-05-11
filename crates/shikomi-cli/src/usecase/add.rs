@@ -1,5 +1,6 @@
 //! `add` UseCase — 新規レコードを追加する。vault 未作成なら平文 vault を初期化。
 
+use shikomi_core::vault::record::Hotkey;
 use shikomi_core::{
     ProtectionMode, Record, RecordId, RecordPayload, Vault, VaultHeader, VaultVersion,
 };
@@ -41,6 +42,14 @@ pub fn add_record(
     let record = Record::new(id.clone(), input.kind, input.label, payload, now);
 
     vault.add_record(record).map_err(CliError::Domain)?;
+
+    // ホットキー割り当て（add 時に指定された場合のみ）
+    if let Some(ref combo) = input.hotkey {
+        let hotkey = Hotkey::parse(combo)
+            .map_err(|e| CliError::UsageError(format!("invalid hotkey combo '{combo}': {e}")))?;
+        vault.assign_hotkey(&id, hotkey).map_err(CliError::Domain)?;
+    }
+
     repo.save(&vault)?;
 
     Ok(id)

@@ -150,6 +150,8 @@ impl AtomicWriter {
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
         conn.execute_batch(SchemaSql::CREATE_RECORDS)
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        conn.execute_batch(SchemaSql::CREATE_HOTKEY_INDEX)
+            .map_err(|e| PersistenceError::Sqlite { source: e })?;
 
         // トランザクション: vault_header と全レコードを挿入
         {
@@ -186,6 +188,7 @@ impl AtomicWriter {
                         p.aad_bytes.map(|b| b.to_vec()),
                         p.created_at,
                         p.updated_at,
+                        p.hotkey_combo,
                     ],
                 )
                 .map_err(|e| PersistenceError::Sqlite { source: e })?;

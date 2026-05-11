@@ -182,8 +182,8 @@ impl SqliteVaultRepository {
         let user_version: u32 = conn
             .query_row(SchemaSql::PRAGMA_USER_VERSION_GET, [], |row| row.get(0))
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
-        if user_version < SchemaSql::USER_VERSION_SUPPORTED_MIN
-            || user_version > SchemaSql::USER_VERSION_SUPPORTED_MAX
+        if !(SchemaSql::USER_VERSION_SUPPORTED_MIN..=SchemaSql::USER_VERSION_SUPPORTED_MAX)
+            .contains(&user_version)
         {
             return Err(PersistenceError::SchemaMismatch {
                 expected_application_id: SchemaSql::APPLICATION_ID,
@@ -203,8 +203,8 @@ impl SqliteVaultRepository {
         // Step 13: Vault 集約を構築
         let mut vault = Vault::new(header);
 
-        // Step 14-15: records を SELECT して追加
-        let records = Self::select_records(&conn)?;
+        // Step 14-15: records を SELECT して追加（user_version で V1/V2 クエリを選択）
+        let records = Self::select_records(&conn, user_version)?;
         let record_count = records.len();
         for record in records {
             let row_key = record.id().to_string();
@@ -265,9 +265,23 @@ impl SqliteVaultRepository {
     }
 
     /// records テーブルから全行を読み込む。
-    fn select_records(conn: &Connection) -> Result<Vec<Record>, PersistenceError> {
+    ///
+    /// `user_version = 1` の V1 DB は `hotkey_combo` カラムが存在しないため
+    /// `SELECT_RECORDS_ORDERED_V1` を使用し、`row_to_record_v1` でマッピングする。
+    /// `user_version >= 2` の V2 DB は `hotkey_combo` カラムを含む
+    /// `SELECT_RECORDS_ORDERED` を使用し、`row_to_record` でマッピングする。
+    fn select_records(
+        conn: &Connection,
+        user_version: u32,
+    ) -> Result<Vec<Record>, PersistenceError> {
+        let (sql, use_v1) = if user_version <= 1 {
+            (SchemaSql::SELECT_RECORDS_ORDERED_V1, true)
+        } else {
+            (SchemaSql::SELECT_RECORDS_ORDERED, false)
+        };
+
         let mut stmt = conn
-            .prepare(SchemaSql::SELECT_RECORDS_ORDERED)
+            .prepare(sql)
             .map_err(|e| PersistenceError::Sqlite { source: e })?;
         let mut rows = stmt
             .query([])
@@ -278,7 +292,12 @@ impl SqliteVaultRepository {
             .next()
             .map_err(|e| PersistenceError::Sqlite { source: e })?
         {
-            records.push(Mapping::row_to_record(row)?);
+            let record = if use_v1 {
+                Mapping::row_to_record_v1(row)?
+            } else {
+                Mapping::row_to_record(row)?
+            };
+            records.push(record);
         }
         Ok(records)
     }
