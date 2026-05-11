@@ -8,5 +8,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    shikomi_gui::run().expect("error while running tauri application");
+    if let Err(e) = shikomi_gui::run() {
+        eprintln!("shikomi-gui: {e}");
+        std::process::exit(1);
+    }
 }

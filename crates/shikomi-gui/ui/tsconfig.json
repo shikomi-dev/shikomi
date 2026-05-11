@@ -9,7 +9,8 @@
     "lib": ["ESNext", "DOM"],
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "noEmit": true
   },
   "include": ["src"]
 }
