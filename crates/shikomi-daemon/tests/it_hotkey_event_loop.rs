@@ -137,12 +137,15 @@ fn spawn_event_loop(
     let backend = Arc::new(BackendEnum::Mock(mock_backend));
     let vault_arc = Arc::new(Mutex::new(vault));
 
+    // Sub-D: countdown_started_at はテスト用ダミー（HotkeyEventLoop 共有状態、ITでは観測しない）
+    let countdown_started_at = Arc::new(Mutex::new(None::<std::time::Instant>));
     let event_loop = HotkeyEventLoop::new(
         Arc::clone(&backend),
         vault_arc,
         vek_cache,
         clipboard,
         notifier,
+        countdown_started_at,
     );
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

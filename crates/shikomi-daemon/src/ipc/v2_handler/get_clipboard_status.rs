@@ -81,4 +81,12 @@ mod tests {
         let started_at = now;
         assert_eq!(calc_remaining(started_at, now), Some(30));
     }
+
+    // TC-TRAY-UT09: elapsed=29s → Some(1)（最小正値境界。CLEAR_TIMEOUT_SECS=30 の前後境界）
+    #[test]
+    fn returns_one_when_29_seconds_elapsed() {
+        let now = Instant::now();
+        let started_at = now - Duration::from_secs(29);
+        assert_eq!(calc_remaining(started_at, now), Some(1));
+    }
 }

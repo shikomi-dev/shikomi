@@ -190,4 +190,13 @@ mod tests {
         let text = tooltip_text(Some(1));
         assert_eq!(text, "shikomi — クリップボードを自動消去まで 1 秒");
     }
+
+    // TC-TRAY-UT09: calc_remaining — elapsed=29s → Some(1)（最小正値境界）
+    #[test]
+    fn ut09_calc_remaining_one_second_before_timeout() {
+        let now = Instant::now();
+        let started_at = now - Duration::from_secs(29);
+        // elapsed=29 < CLEAR_TIMEOUT_SECS(30) → remaining = 1（最小正値境界）
+        assert_eq!(calc_remaining(started_at, now), Some(1));
+    }
 }

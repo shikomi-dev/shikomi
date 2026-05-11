@@ -168,6 +168,8 @@ mod tests {
         let cache = VekCache::new();
         let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
 
+        // Sub-D: countdown_started_at はテスト用ダミー（GetClipboardStatus IT では使用しない）
+        let countdown_started_at = Arc::new(Mutex::new(None::<std::time::Instant>));
         let mut server = IpcServer::new(
             ListenerEnum::Unix {
                 listener,
@@ -178,6 +180,7 @@ mod tests {
             cache,
             backoff,
             Arc::clone(&hotkey_manager),
+            countdown_started_at,
         );
         let server_handle = tokio::spawn(async move {
             let _ = server.start_with_shutdown(shutdown_rx).await;

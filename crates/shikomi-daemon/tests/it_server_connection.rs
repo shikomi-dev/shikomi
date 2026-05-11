@@ -128,6 +128,8 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
     let cache = VekCache::new();
     let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
     let hotkey_manager = Arc::new(shikomi_daemon::hotkey::HotkeyManager::new_null());
+    // Sub-D: countdown_started_at はテスト用ダミー（接続シナリオ IT ではカウントダウンを観測しない）
+    let countdown_started_at = Arc::new(Mutex::new(None::<std::time::Instant>));
     let mut server = IpcServer::new(
         ListenerEnum::Unix {
             listener,
@@ -138,6 +140,7 @@ async fn spawn_test_server(dir: &TempDir) -> TestServerHandle {
         cache,
         backoff,
         hotkey_manager,
+        countdown_started_at,
     );
     let server_handle = tokio::spawn(async move {
         let _ = server.start_with_shutdown(shutdown_rx).await;
