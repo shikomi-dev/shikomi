@@ -150,21 +150,31 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 
 以下の `ipc_code` 文字列を**凍結 API 契約**とする。変更は本設計書の改訂 + Sub-C 更新を伴う PR で行うこと：
 
-| `ipc_code` 値（凍結） | 対応 `IpcErrorCode` variant | Sub-C の表示責務 |
-|----------------------|----------------------------|-----------------|
-| `"vault_locked"` | `VaultLocked` | アンロックモーダルを表示（R1-GUI-13） |
-| `"hotkey_conflict"` | `HotkeyConflict { reason }` | 「競合エントリ名」を表示（R1-GUI-08, UC-GUI-003） |
-| `"not_found"` | `NotFound { id }` | 「エントリが見つかりません」エラーダイアログ |
-| `"crypto_error"` | `Crypto { reason }` | `reason` により分岐：`"wrong-password"` → 「パスワードが一致しません」、`"weak-password"` → 「パスワードが脆弱です」、`"nonce-limit-exceeded"` → 「再暗号化が必要です」（UC-GUI-006）。`reason` は kebab-case 固定文言のみ（`IpcErrorCode` 設計書 SSoT） |
-| `"backoff_active"` | `BackoffActive { wait_secs }` | `message` 中の待機秒数を表示（`message` の数値は安定値、UI 表示に使用可） |
-| `"recovery_required"` | `RecoveryRequired` | recovery 語 入力モーダルへ誘導 |
-| `"hotkey_parse_error"` | `HotkeyParseError { reason }` | 「ホットキー形式が不正です」を表示 |
-| `"encryption_unsupported"` | `EncryptionUnsupported` | 「この操作は現在サポートされていません」エラーダイアログ |
-| `"invalid_label"` | `InvalidLabel { reason }` | 「ラベルが不正です」を表示 |
-| `"persistence_error"` | `Persistence { reason }` | 「データ保存エラーが発生しました」エラーダイアログ |
-| `"domain_error"` | `Domain { reason }` | 「操作を完了できませんでした」エラーダイアログ |
-| `"internal_error"` | `Internal { reason }` | 「予期しないエラーが発生しました」エラーダイアログ |
-| `"protocol_downgrade"` | `ProtocolDowngrade` | 「daemon との通信エラーが発生しました。再起動してください」エラーダイアログ |
+| `ipc_code` 値（凍結） | 対応 `IpcErrorCode` variant | 追加フィールド | Sub-C の表示責務 |
+|----------------------|----------------------------|---------------|-----------------|
+| `"vault_locked"` | `VaultLocked` | なし | アンロックモーダルを表示（R1-GUI-13） |
+| `"hotkey_conflict"` | `HotkeyConflict { reason }` | なし | 「競合エントリ名」を表示（R1-GUI-08, UC-GUI-003） |
+| `"not_found"` | `NotFound { id }` | なし | 「エントリが見つかりません」エラーダイアログ |
+| `"crypto"` | `Crypto { reason }` | `"crypto_reason": "<kebab-case固定文言>"` | `crypto_reason` により分岐：`"wrong-password"` → 「パスワードが一致しません」、`"weak-password"` → 「パスワードが脆弱です」、`"nonce-limit-exceeded"` → 「再暗号化が必要です」（UC-GUI-006）。凍結許容値セットは `IpcErrorCode::Crypto.reason` 設計書 SSoT 参照 |
+| `"backoff_active"` | `BackoffActive { wait_secs }` | `"wait_secs": <u32>` | **`wait_secs` フィールドの値**（秒数）を UI に表示する。`message` への依存は禁止 |
+| `"recovery_required"` | `RecoveryRequired` | なし | recovery 語 入力モーダルへ誘導 |
+| `"hotkey_parse_error"` | `HotkeyParseError { reason }` | なし | 「ホットキー形式が不正です」を表示 |
+| `"encryption_unsupported"` | `EncryptionUnsupported` | なし | 「この操作は現在サポートされていません」エラーダイアログ |
+| `"invalid_label"` | `InvalidLabel { reason }` | なし | 「ラベルが不正です」を表示 |
+| `"persistence"` | `Persistence { reason }` | なし | 「データ保存エラーが発生しました」エラーダイアログ |
+| `"domain"` | `Domain { reason }` | なし | 「操作を完了できませんでした」エラーダイアログ |
+| `"internal"` | `Internal { reason }` | なし | 「予期しないエラーが発生しました」エラーダイアログ |
+| `"protocol_downgrade"` | `ProtocolDowngrade` | なし | 「daemon との通信エラーが発生しました。再起動してください」エラーダイアログ |
+
+**追加フィールド仕様**: `crypto` と `backoff_active` のみ標準の `kind` / `ipc_code` / `message` 3フィールドに加えて専用フィールドを持つ。完全な JSON 例：
+
+```
+// backoff_active
+{ "kind": "ipc_error", "ipc_code": "backoff_active", "wait_secs": 30, "message": "unlock blocked by backoff for 30s" }
+
+// crypto
+{ "kind": "ipc_error", "ipc_code": "crypto", "crypto_reason": "wrong-password", "message": "crypto error: wrong-password" }
+```
 
 ---
 
