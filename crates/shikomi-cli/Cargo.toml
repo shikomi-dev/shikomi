@@ -81,5 +81,11 @@ rusqlite      = { workspace = true }
 # 設計根拠: docs/features/vault-persistence/test-design/integration/index.md
 shikomi-infra = { path = "../shikomi-infra", features = ["test-fixtures"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+# Sub-F (#77) TC-F-I01/I02/I02b/I03/I03b/I05/I06/I07/I07c/I08 で PTY 経由パスワード入力を
+# シミュレートする目的。Unix 限定（Windows は #[cfg_attr(target_os = "windows", ignore)] で除外）。
+# 設計根拠: docs/features/cli-vault-commands/test-design/integration.md §10.3
+expectrl       = { workspace = true }
+
 [lints]
 workspace = true
