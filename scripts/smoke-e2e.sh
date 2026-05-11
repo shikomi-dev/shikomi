@@ -126,10 +126,19 @@ echo "[smoke] IPC connection OK"
 # ---------------------------------------------------------------------------
 echo "[smoke] Sending SIGTERM to GUI (PID=$GUI_PID) ..."
 kill -TERM "$GUI_PID"
-if ! timeout "$GUI_TERM_SECS" wait "$GUI_PID"; then
-    echo "[smoke] FAIL: GUI did not terminate within ${GUI_TERM_SECS}s after SIGTERM"
-    exit 1
-fi
+# wait はシェル組み込みのため timeout と直接組み合わせられない。
+# ポーリングでプロセス終了を確認してから wait で回収する。
+# 設計根拠: e2e.md §6.6 / §6.7
+WAITED=0
+while kill -0 "$GUI_PID" 2>/dev/null; do
+    if [ "$WAITED" -ge "$((GUI_TERM_SECS * 2))" ]; then
+        echo "[smoke] FAIL: GUI did not terminate within ${GUI_TERM_SECS}s after SIGTERM"
+        exit 1
+    fi
+    sleep 0.5
+    WAITED=$((WAITED + 1))
+done
+wait "$GUI_PID" 2>/dev/null || true
 GUI_PID=""  # cleanup で二重 kill しないよう解除
 echo "[smoke] GUI terminated cleanly"
 
