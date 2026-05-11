@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "dev.shikomi.app",
   "build": {
-    "frontendDist": "../ui/dist",
+    "frontendDist": "ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
