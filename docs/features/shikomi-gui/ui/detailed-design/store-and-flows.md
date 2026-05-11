@@ -19,14 +19,15 @@
 | `entries` | `RecordSummary[]` | エントリ一覧（`list_entries` 最終結果） |
 | `vaultMode` | `"plaintext" \| "encrypted_locked" \| "encrypted_unlocked" \| "unknown"` | 保護モード |
 | `vaultLockPending` | `boolean` | `vault_locked` エラーを受けて `UnlockModal` 表示中 |
-| `pendingOperation` | `(() => Promise<void>) \| null` | `UnlockModal` 解除後に再試行する操作 |
+| `pendingOperation` | `(() => Promise<void>) \| null` | `UnlockModal` 解除後に再試行する操作。**機密値を含むクロージャの格納を禁止する**（REQ-UI-14）。`add_entry` / `update_entry` が `vault_locked` を返した場合は格納せずフォームクローズ（→ §2.2 参照）|
 
 ### 2.2 ストア操作
 
 | 操作 | トリガー | 副作用 |
 |------|---------|-------|
 | `refreshEntries()` | 追加・編集・削除・アンロック成功後 | `list_entries` 呼び出し → `entries` + `vaultMode` 更新 |
-| `handleVaultLocked(operation)` | 任意 Command が `vault_locked` を返した時 | `pendingOperation` にセット、`vaultLockPending = true` |
+| `handleVaultLocked(operation)` | `delete_entry` / `assign_hotkey` / `remove_hotkey` / vault 操作系 Command が `vault_locked` を返した時 | `pendingOperation` にセット、`vaultLockPending = true`。**機密値を含まないクロージャのみ格納可** |
+| `handleVaultLockedEntryForm()` | `EntryForm`（`add_entry` / `update_entry`）が `vault_locked` を返した時 | `pendingOperation` に格納 **しない**。フォームをクローズし「vault がロックされています。アンロック後、エントリを再入力してください」を表示する。`vaultLockPending = true` はセットし `UnlockModal` を表示する（REQ-UI-14：機密値クロージャのシグナル格納禁止）|
 | `handleUnlockSuccess()` | `unlock_vault` 成功後 | `pendingOperation()` 再試行、`vaultLockPending = false`、`refreshEntries()` |
 | `handleDisconnect()` | `connection_failed` / `not_connected` 受信時 | `connectionStatus = "disconnected"` |
 

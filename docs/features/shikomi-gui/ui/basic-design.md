@@ -23,7 +23,7 @@
 | REQ-UI-10 | `VaultDecryptPanel` がチェックボックス（「vault の暗号化を解除します。登録済みのエントリが平文で保存されます」）+ 「解除する」ボタンの 2 ステップ確認を提供する。`confirmed: true` はチェックボックス状態から得る（R1-GUI-12） |
 | REQ-UI-11 | `UnlockModal` が `ipc_code == "vault_locked"` 受信時に自動表示され、`unlock_vault` 成功後に元操作を再試行する（R1-GUI-13） |
 | REQ-UI-12 | 全入力フォームが JS 側 validation を UX の first line として実施する（空文字・形式チェック等）。Rust 側 Fail Fast との二重防御を構成する（R1-GUI-19） |
-| REQ-UI-13 | 全 Tauri Command エラーを `GUIError.kind` で switch し日本語メッセージを表示する。`ipc_code` が存在する場合は専用フィールド（`hotkey_conflict_entry` / `crypto_reason` / `wait_secs`）で補足表示する。`message` フィールドをユーザーに表示してはならない（ipc-client `detailed-design.md §2.3` 凍結 API 契約） |
+| REQ-UI-13 | 全 Tauri Command エラーを `GUIError.kind` で switch し日本語メッセージを表示する。`ipc_code` が存在する場合は専用フィールド（`hotkey_conflict_entry` / `crypto_reason` / `wait_secs`）で補足表示する。`kind == "invalid_input"` の場合は `invalid_input_code` フィールドで switch し日本語変換する。**`message` フィールドのパースおよびユーザーへの表示を禁止する**（ipc-client `detailed-design.md §2.3` 凍結 API 契約）。`invalid_input_code` の安定識別子一覧（凍結）: `"label_empty"` / `"value_empty"` / `"password_empty"` / `"confirmation_required"` / `"id_invalid"` / `"label_invalid"` / `"hotkey_invalid"` |
 | REQ-UI-14 | 機密変数（マスターパスワード・recovery 24 語）は DOM ref または短命変数経由のみで保持し、Tauri Command 呼び出し直後にゼロ化する。`createSignal` / `createStore` の state への格納を禁止する（R1-GUI-18） |
 
 ## 1. モジュール構成
@@ -161,7 +161,7 @@ flowchart LR
 | `ipc_error` | `crypto` + `crypto_reason == "nonce-limit-exceeded"` | エラーダイアログ | 「vault の再暗号化が必要です。`shikomi vault rekey` を実行してください」 |
 | `ipc_error` | `backoff_active` + `wait_secs` | `UnlockModal` インライン | 「試行回数の上限に達しました。`{wait_secs}` 秒後に再試行してください」 |
 | `ipc_error` | `recovery_required` | `UnlockModal` インライン | 「パスワードによるアンロックができません。recovery 語でアンロックしてください（Sub-D 対応予定）」 |
-| `invalid_input` | — | 操作元フォームインライン | `message` 内容から変換した日本語（`errors.ts` マッピング表） |
+| `invalid_input` | `invalid_input_code`（構造化フィールド） | 操作元フォームインライン | `invalid_input_code` で switch した日本語（`errors.ts` マッピング表）。**`message` パース禁止**（詳細: `detailed-design/ux-and-visual.md §6`）|
 
 ## 4. feature-spec との対応（R1-GUI → REQ-UI トレーサビリティ）
 
