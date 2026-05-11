@@ -35,16 +35,34 @@
 
 `errors.ts` が `GUIError` オブジェクトを受け取り、Sub-C が表示すべき日本語メッセージ（または `null`、制御フロー用エラー種別）を返す単一変換モジュール。
 
+**`message` フィールドのパースを禁止する**。`message` はデバッグ用途のみであり、Sub-B の工程で確立した「安定識別子による分岐」方針（`ipc_code`）と同原則を `invalid_input` にも適用する。`message` の文言変更に対して UI が無音で壊れる構造的欠陥を設計レベルで排除する。
+
+### 6.1 `kind` 別変換表
+
 | 入力 | 戻り値の種類 | 備考 |
 |------|------------|------|
 | `{ kind: "daemon_not_running" }` | 日本語文字列 | 「daemon が起動していません…」 |
 | `{ kind: "ipc_error", ipc_code: "vault_locked" }` | 制御フロー信号 | コンポーネントは `UnlockModal` 表示に切り替える |
 | `{ kind: "ipc_error", ipc_code: "hotkey_conflict", hotkey_conflict_entry: "..." }` | 日本語文字列 | 競合エントリ名を文字列補間 |
-| `{ kind: "ipc_error", ipc_code: "crypto", crypto_reason: "..." }` | 日本語文字列 | `crypto_reason` で分岐 |
-| `{ kind: "ipc_error", ipc_code: "backoff_active", wait_secs: N }` | 日本語文字列 | `wait_secs` を文字列補間 |
-| `{ kind: "invalid_input" }` | 日本語文字列 | `message` の内容から変換（`errors.ts` 内マッピング表）|
+| `{ kind: "ipc_error", ipc_code: "crypto", crypto_reason: "..." }` | 日本語文字列 | `crypto_reason` で分岐（§6.1 参照）|
+| `{ kind: "ipc_error", ipc_code: "backoff_active", wait_secs: N }` | 日本語文字列 | `wait_secs` を文字列補間。**0 は「しばらく」に fallback** |
+| `{ kind: "invalid_input", invalid_input_code: "..." }` | 日本語文字列 | `invalid_input_code` で switch（§6.2 参照）。`message` パース禁止 |
 
-**`message` フィールドを戻り値に含めてはならない**。`errors.ts` が変換責務を一手に担い、コンポーネントは変換後の文字列のみを受け取る。
+### 6.2 `invalid_input_code` 安定識別子（凍結 API 契約）
+
+`GUIError::InvalidInput` の `invalid_input_code` フィールドは Rust 側 `error.rs` が出力する安定識別子。**文字列の変更は breaking change** として扱い、フロントエンド側のテストが CI で検出する。
+
+| `invalid_input_code` | 日本語メッセージ | 表示場所 |
+|---|---|---|
+| `"label_empty"` | 「ラベルを入力してください」 | `EntryForm` フィールド直下 |
+| `"value_empty"` | 「値を入力してください」 | `EntryForm` フィールド直下 |
+| `"password_empty"` | 「パスワードを入力してください」 | `VaultEncryptPanel` / `VaultDecryptPanel` / `UnlockModal` フォーム直下 |
+| `"confirmation_required"` | 「確認チェックボックスをオンにしてください」 | `VaultDecryptPanel` チェックボックス直下 |
+| `"id_invalid"` | 「エントリが見つかりません（一覧を更新します）」 | フォームインライン、`list_entries` 再取得 |
+| `"hotkey_invalid"` | 「無効なホットキーです」 | `HotkeySelector` インライン |
+| 未知の値 | 「入力内容に問題があります」 | 操作元フォームインライン（`message` 表示は禁止）|
+
+**`errors.ts` 内での `message` 参照禁止**: `resolveInvalidInput` は `invalid_input_code` フィールドのみで分岐し、`err.message` の `includes()` / `match()` 等のパースは一切行わない。コンポーネントも `message` を表示してはならない。
 
 ---
 
