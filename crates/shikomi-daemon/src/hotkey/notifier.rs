@@ -58,16 +58,23 @@ impl Notifier for NotifyRustNotifier {
     fn notify(&self, level: NotifyLevel, title: &str, body: &str) -> Result<(), NotifyError> {
         use notify_rust::Notification;
 
-        let urgency = match level {
-            NotifyLevel::Low => notify_rust::Urgency::Low,
-            NotifyLevel::Normal => notify_rust::Urgency::Normal,
-        };
+        let mut notification = Notification::new();
+        notification.summary(title).body(body);
 
-        let result = Notification::new()
-            .summary(title)
-            .body(body)
-            .urgency(urgency)
-            .show();
+        // urgency は Linux (D-Bus) のみサポート。macOS / Windows は設定不可。
+        #[cfg(target_os = "linux")]
+        {
+            let urgency = match level {
+                NotifyLevel::Low => notify_rust::Urgency::Low,
+                NotifyLevel::Normal => notify_rust::Urgency::Normal,
+            };
+            notification.urgency(urgency);
+        }
+        // macOS / Windows では urgency を設定せず level を無視する（best-effort）
+        #[cfg(not(target_os = "linux"))]
+        let _ = level;
+
+        let result = notification.show();
 
         match result {
             Ok(_) => Ok(()),
@@ -107,6 +114,7 @@ impl Notifier for NullNotifier {
 
 /// テスト用の記録型 Notifier。送信履歴を `Vec` に蓄積する。
 #[cfg(test)]
+#[derive(Default)]
 pub struct MockNotifier {
     pub records: Mutex<Vec<(NotifyLevel, String, String)>>,
 }
@@ -116,15 +124,19 @@ impl MockNotifier {
     /// 空の `MockNotifier` を構築する。
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            records: Mutex::new(Vec::new()),
-        }
+        Self::default()
     }
 
     /// 記録された通知の件数を返す。
     #[must_use]
     pub fn len(&self) -> usize {
         self.records.lock().unwrap().len()
+    }
+
+    /// 通知履歴が空かどうかを返す。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.records.lock().unwrap().is_empty()
     }
 }
 

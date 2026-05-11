@@ -115,6 +115,7 @@ impl ClipboardWriter for NullClipboardWriter {
 
 /// テスト用の記録型クリップボード。操作履歴を `Vec<String>` に蓄積する。
 #[cfg(test)]
+#[derive(Default)]
 pub struct MockClipboardWriter {
     pub history: Vec<String>,
 }
@@ -124,9 +125,7 @@ impl MockClipboardWriter {
     /// 空の `MockClipboardWriter` を構築する。
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            history: Vec::new(),
-        }
+        Self::default()
     }
 }
 
