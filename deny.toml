@@ -193,6 +193,10 @@ skip = [
     { name = "windows_x86_64_gnullvm", version = "0.52" },
     { name = "windows_x86_64_msvc", version = "0.42" },
     { name = "windows_x86_64_msvc", version = "0.52" },
+    # tauri-plugin-shell v2.3.5 → shared_child → windows-sys 0.60 → windows-targets 0.53 が
+    # 既存依存と windows_i686_gnullvm 0.53.1 の重複を生じさせる。Issue #97 で導入。
+    # tauri-plugin-shell が windows-sys 0.61 系に追従次第、本エントリを削除して重複解消する。
+    { name = "windows_i686_gnullvm", version = "0.53" },
 ]
 skip-tree = []
 

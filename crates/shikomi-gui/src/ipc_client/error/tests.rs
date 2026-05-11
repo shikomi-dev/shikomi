@@ -336,7 +336,7 @@ fn ut15_ipc_code_key_exhaustive_contract_check() {
         ),
         (
             GUIError::Ipc(IpcErrorCode::NotFound {
-                id: RecordId::new(Uuid::nil()).unwrap(),
+                id: RecordId::new(Uuid::now_v7()).unwrap(),
             }),
             "not_found",
         ),

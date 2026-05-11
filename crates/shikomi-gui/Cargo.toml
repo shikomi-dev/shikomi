@@ -21,7 +21,11 @@ path = "src/main.rs"
 # Tauri v2 ランタイム（tech-stack.md §2.1 / §2.6）
 # tray-icon: UC-GUI-005 システムトレイ常駐（Sub-D で実装）
 tauri = { version = "2", features = ["tray-icon"] }
+# Sub-D (#97): daemon 再起動コマンド実行（basic-design.md §1 / §6.1）
+tauri-plugin-shell = "2"
 serde           = { workspace = true }
+# tauri::generate_context!() マクロが serde_json を直接参照するため必須
+serde_json      = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror       = { workspace = true }

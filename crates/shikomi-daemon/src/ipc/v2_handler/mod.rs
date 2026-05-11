@@ -17,12 +17,14 @@
 
 pub mod change_password;
 pub mod error_mapping;
+pub mod get_clipboard_status;
 pub mod lock;
 pub mod rekey;
 pub mod rotate_recovery;
 pub mod unlock;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use shikomi_core::ipc::{IpcErrorCode, IpcProtocolVersion, IpcRequest, IpcResponse};
 use shikomi_core::Vault;
@@ -136,6 +138,11 @@ pub struct V2Context<'a, R: VaultRepository + ?Sized> {
     pub migration: &'a VaultMigration<'a>,
     /// Issue #89: OS ホットキー登録管理（add/edit ハンドラが vault 更新後に使用）。
     pub hotkey_manager: &'a Arc<HotkeyManager>,
+    /// Sub-D (#97): クリップボード自動消去カウントダウン基点時刻。
+    ///
+    /// `HotkeyEventLoop` と共有する `Arc<Mutex<Option<Instant>>>`。
+    /// `GetClipboardStatus` ハンドラが残秒を計算するために参照する。
+    pub countdown_started_at: &'a Arc<Mutex<Option<Instant>>>,
 }
 
 // -------------------------------------------------------------------
@@ -166,6 +173,9 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
 
     match request {
         // ---------- V2 専用 variant ----------
+        IpcRequest::GetClipboardStatus => {
+            get_clipboard_status::handle_get_clipboard_status(ctx).await
+        }
         IpcRequest::Unlock {
             master_password,
             recovery,

@@ -131,6 +131,13 @@ pub enum IpcRequest {
         /// 大文字一致を確認済の証跡。`false` の場合 daemon は受理拒否)。
         confirmed: bool,
     },
+
+    // ---------------- Sub-D (#97) システムトレイ ----------------
+    /// **V2 only (Sub-D)**: クリップボード自動消去カウントダウン残秒を問い合わせる。
+    ///
+    /// GUI カウントダウンタスクが 1 秒ポーリングで呼び出す。
+    /// daemon は `countdown_started_at` から残秒を計算して `ClipboardStatus` で返す。
+    GetClipboardStatus,
 }
 
 impl IpcRequest {
@@ -150,6 +157,7 @@ impl IpcRequest {
             Self::Rekey { .. } => "rekey",
             Self::Encrypt { .. } => "encrypt",
             Self::Decrypt { .. } => "decrypt",
+            Self::GetClipboardStatus => "get_clipboard_status",
         }
     }
 
@@ -167,6 +175,7 @@ impl IpcRequest {
                 | Self::Rekey { .. }
                 | Self::Encrypt { .. }
                 | Self::Decrypt { .. }
+                | Self::GetClipboardStatus
         )
     }
 }

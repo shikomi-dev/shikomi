@@ -26,6 +26,7 @@ pub use error::DaemonExit;
 
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Instant;
 
 use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tokio::sync::Mutex;
@@ -129,6 +130,10 @@ pub async fn run() -> ExitCode {
     let cache = VekCache::new();
     let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
 
+    // Sub-D (#97): クリップボード自動消去カウントダウン基点時刻。
+    // HotkeyEventLoop と IpcServer::handle_connection で共有する。
+    let countdown_started_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+
     // Issue #89: ホットキーバックエンド + マネージャ + イベントループの初期化
     let hotkey_backend = BackendEnum::detect();
     let hotkey_notifier = Arc::new(NotifyRustNotifier);
@@ -177,6 +182,7 @@ pub async fn run() -> ExitCode {
             cache.clone(),
             Arc::clone(&clipboard),
             Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
+            Arc::clone(&countdown_started_at),
         );
         let rx = shutdown_rx.clone();
         tokio::spawn(async move { event_loop.run(rx).await })
@@ -190,6 +196,7 @@ pub async fn run() -> ExitCode {
         cache.clone(),
         Arc::clone(&backoff),
         Arc::clone(&hotkey_manager),
+        Arc::clone(&countdown_started_at),
     );
     let server_result = server.start_with_shutdown(shutdown_rx).await;
 

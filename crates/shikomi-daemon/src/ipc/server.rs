@@ -1,7 +1,7 @@
 //! IpcServer — listener / accept ループ / 接続ごとのタスク管理。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -45,6 +45,8 @@ pub struct IpcServer {
     backoff: Arc<Mutex<UnlockBackoff>>,
     /// Issue #89: OS ホットキー登録管理（IPC add/edit ハンドラが使用）。
     hotkey_manager: Arc<HotkeyManager>,
+    /// Sub-D (#97): クリップボード自動消去カウントダウン基点時刻（HotkeyEventLoop と共有）。
+    countdown_started_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl IpcServer {
@@ -57,6 +59,7 @@ impl IpcServer {
         cache: VekCache,
         backoff: Arc<Mutex<UnlockBackoff>>,
         hotkey_manager: Arc<HotkeyManager>,
+        countdown_started_at: Arc<Mutex<Option<Instant>>>,
     ) -> Self {
         Self {
             listener: Some(listener),
@@ -65,6 +68,7 @@ impl IpcServer {
             cache,
             backoff,
             hotkey_manager,
+            countdown_started_at,
         }
     }
 
@@ -176,15 +180,17 @@ impl IpcServer {
                         continue;
                     }
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
-                    let repo = Arc::clone(&self.repo);
-                    let vault = Arc::clone(&self.vault);
-                    let cache = self.cache.clone();
-                    let backoff = Arc::clone(&self.backoff);
-                    let hotkey_manager = Arc::clone(&self.hotkey_manager);
+                    let deps = ConnectionDeps {
+                        repo: Arc::clone(&self.repo),
+                        vault: Arc::clone(&self.vault),
+                        cache: self.cache.clone(),
+                        backoff: Arc::clone(&self.backoff),
+                        hotkey_manager: Arc::clone(&self.hotkey_manager),
+                        countdown_started_at: Arc::clone(&self.countdown_started_at),
+                    };
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
-                            .await;
+                        handle_connection(stream, deps, shutdown_for_task).await;
                     });
                 }
             }
@@ -245,15 +251,17 @@ impl IpcServer {
                         continue;
                     }
                     tracing::info!(target: "shikomi_daemon::ipc::server", "client connected");
-                    let repo = Arc::clone(&self.repo);
-                    let vault = Arc::clone(&self.vault);
-                    let cache = self.cache.clone();
-                    let backoff = Arc::clone(&self.backoff);
-                    let hotkey_manager = Arc::clone(&self.hotkey_manager);
+                    let deps = ConnectionDeps {
+                        repo: Arc::clone(&self.repo),
+                        vault: Arc::clone(&self.vault),
+                        cache: self.cache.clone(),
+                        backoff: Arc::clone(&self.backoff),
+                        hotkey_manager: Arc::clone(&self.hotkey_manager),
+                        countdown_started_at: Arc::clone(&self.countdown_started_at),
+                    };
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
-                            .await;
+                        handle_connection(stream, deps, shutdown_for_task).await;
                     });
                 }
             }
@@ -265,6 +273,19 @@ impl IpcServer {
 // 接続単位タスク
 // -------------------------------------------------------------------
 
+/// `handle_connection` に渡すサーバ共有状態。
+///
+/// 引数を束ねることで `clippy::too_many_arguments` を回避する。
+struct ConnectionDeps {
+    repo: Arc<SqliteVaultRepository>,
+    vault: Arc<Mutex<Vault>>,
+    cache: VekCache,
+    backoff: Arc<Mutex<UnlockBackoff>>,
+    hotkey_manager: Arc<HotkeyManager>,
+    /// Sub-D (#97): クリップボード自動消去カウントダウン基点時刻（HotkeyEventLoop と共有）。
+    countdown_started_at: Arc<Mutex<Option<Instant>>>,
+}
+
 /// 接続ハンドラ。ハンドシェイク 1 往復 → リクエスト/レスポンス N 往復 → 切断。
 ///
 /// Sub-E (#43): handshake 完了後 `ClientState::Handshake { version }` を構築し、
@@ -273,17 +294,18 @@ impl IpcServer {
 /// (cheap、各 adapter は zero-sized 相当)。
 ///
 /// `shutdown` 受信時にも in-flight リクエストの応答送信は完了させる。
-async fn handle_connection<S>(
-    stream: S,
-    repo: Arc<SqliteVaultRepository>,
-    vault: Arc<Mutex<Vault>>,
-    cache: VekCache,
-    backoff: Arc<Mutex<UnlockBackoff>>,
-    hotkey_manager: Arc<HotkeyManager>,
-    mut shutdown: watch::Receiver<bool>,
-) where
+async fn handle_connection<S>(stream: S, deps: ConnectionDeps, mut shutdown: watch::Receiver<bool>)
+where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let ConnectionDeps {
+        repo,
+        vault,
+        cache,
+        backoff,
+        hotkey_manager,
+        countdown_started_at,
+    } = deps;
     let mut framed: Framed<S, LengthDelimitedCodec> = Framed::new(stream, framing::codec());
 
     if let Err(err) = handshake::negotiate(&mut framed).await {
@@ -366,6 +388,7 @@ async fn handle_connection<S>(
                             backoff: &backoff,
                             migration: &migration,
                             hotkey_manager: &hotkey_manager,
+                            countdown_started_at: &countdown_started_at,
                         };
 
                         let response = dispatch_v2(&ctx, client_state, request).await;

@@ -123,6 +123,8 @@ pub async fn run_dispatch(
     let vault = Mutex::new(vault_state);
 
     let hotkey_manager = std::sync::Arc::new(shikomi_daemon::hotkey::HotkeyManager::new_null());
+    // Sub-D: countdown_started_at はテスト用ダミー（V2 統合 IT ではカウントダウン状態を観測しない）
+    let countdown_started_at = std::sync::Arc::new(Mutex::new(None::<std::time::Instant>));
     let ctx = V2Context {
         repo,
         vault: &vault,
@@ -130,6 +132,7 @@ pub async fn run_dispatch(
         backoff,
         migration: &migration,
         hotkey_manager: &hotkey_manager,
+        countdown_started_at: &countdown_started_at,
     };
     dispatch_v2(&ctx, state, request).await
 }
