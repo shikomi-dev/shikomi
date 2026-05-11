@@ -145,12 +145,14 @@
 
 *改訂 v9.0: セル（設計担当）/ 2026-05-11 — Issue #86（fix(ci): Windows CI DACL テスト失敗）反映。Issue #65（VM レベル rename 遅延 = Bug-G-002〜G-008 articulate 済）とは**独立した別問題軸**として新規 articulate。*
 
-*問題の核心: `tempfile::TempDir::new()` が `windows-latest` CI ランナー上で作成するディレクトリは、親ディレクトリ（`%TEMP%`）から DACL を継承した状態（`SE_DACL_PROTECTED` ビット未設定）を持つ。`PermissionGuard::verify_dir` の不変条件①（`SE_DACL_PROTECTED` チェック）が TempDir の DACL 継承により先行失敗し、TC-I24〜I29 系の Windows DACL 検証 TC が意図したアサーションに到達できない。*
+*問題の核心: `tempfile::TempDir::new()` が `windows-latest` CI ランナー上で作成するディレクトリは、親ディレクトリ（`%TEMP%`）から DACL を継承した状態（`SE_DACL_PROTECTED` ビット未設定）を持つ。`repo.load()` が内部で `PermissionGuard::verify_dir` を呼び（`repository.rs:178`）、DACL 継承により不変条件①が先行失敗する。`repo.from_directory` は DACL チェックを行わない（`VaultPaths::new()` 呼出のみ）。`repo.save()` は `ensure_dir` で DACL を設定するため、`save()` 後に `load()` するパターンは影響を受けない。影響するのは「vault.db を事前生成し `load()` を直接呼ぶ」パターン（TC-I13 / TC-I14 等）。*
 
 *本対応:*
 
-*- **§0.1「Issue #86: Windows `TempDir` DACL 正規化要件」を新規追加** — `normalize_tempdir_dacl` ヘルパの設計（`crates/shikomi-infra/tests/helpers/mod.rs` + `crates/shikomi-cli/tests/common/windows_dacl.rs`、`#[cfg(windows)]` ガード）、呼出タイミング（`TempDir::new()` 直後・`SqliteVaultRepository::from_directory` 前）、Windows API 3 ステップアルゴリズム（`GetNamedSecurityInfoW` → `SetEntriesInAclW` → `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`）、reviewer 却下基準（`normalize_tempdir_dacl` 欠落 → [却下]）を明記*
+*- **`index/` ディレクトリ分割**: 旧 `index.md`（535行+）を `index/overview.md`（前提条件 + §0 + §0.1）/ `index/tc-i01-i11.md` / `index/tc-i12-i23.md` / `index/tc-i24-i29d.md` の 4 ファイルに分割（ペガサス指摘対応）*
+
+*- **`overview.md §0.1`「Issue #86: Windows `TempDir` DACL 正規化要件」を新規追加** — 影響テスト一覧（TC-I13 / TC-I14 infra 側 / tc_it_012/023/033/040 cli 側 / e2e_edit / e2e_encrypted）、呼出タイミング（`TempDir::new()` 直後・`repo.load()` 前）、DRY 設計（shikomi-infra が `ensure_vault_dir` を `feature = "test-fixtures"` でゲート公開、cli 側は dev-dependencies 経由で直接呼出・コード複製なし、オプション (b) 既採用）、Windows API 3 ステップ（`GetNamedSecurityInfoW` → `SetEntriesInAclW` with `EXPECTED_DIR_MASK`（`FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_TRAVERSE = 0x0012_01BF`）→ `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`）、`SE_SECURITY_PRIVILEGE` 不要注記（DACL_SECURITY_INFORMATION 変更は所有者権限で十分、SACL のみ特権必要）、エラー時振る舞い（`panic!`、Fail Fast）、reviewer 却下基準（呼出欠落 → [却下] / API 改変による verify_dir スキップ → [却下] / 独自 Win32 コード複製 → [却下]）を明記*
 
 *- **Issue #65 との問題軸分離**: Issue #65 = AtomicWriter rename タイミング（Bug-G-002〜G-008、VM レベルロック介入）/ Issue #86 = `TempDir` fixture DACL 継承（DACL 正規化漏れ）。両者は現象が異なり、#86 は #65 の派生ではなく独立した設計上の取りこぼし*
 
-*対応 Issue: #86 / 参照: `./index.md §0.1`*
+*対応 Issue: #86 / 参照: `./index/overview.md §0.1`*
