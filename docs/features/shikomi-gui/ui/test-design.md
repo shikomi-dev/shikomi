@@ -89,7 +89,7 @@ IT テストでのみ使用する。`@tauri-apps/api/core` の `invoke` を `vi.
 | TC-GUI-UI-UT12 | REQ-UI-04, REQ-UI-12 | `detailed-design.md §1.5` | `EntryForm`（追加モード）— ラベル空文字送信 → 「ラベルを入力してください」フィールド直下表示・`add_entry` 未呼び出し | 異常系 |
 | TC-GUI-UI-UT13 | REQ-UI-04, REQ-UI-12 | `detailed-design.md §1.5` | `EntryForm`（追加モード）— 値空文字送信 → 「値を入力してください」フィールド直下表示・`add_entry` 未呼び出し | 異常系 |
 | TC-GUI-UI-UT14 | REQ-UI-05 | `detailed-design.md §1.5` | `EntryForm`（編集モード）— 初期値から変更なし → フォーム送信しても `update_entry` invoke を呼ばない | 異常系（Silent Skip） |
-| TC-GUI-UI-UT15 | REQ-UI-09, REQ-UI-18 | `detailed-design.md §1.11 / §4` | `RecoveryPhraseDisplay` — 24 語 props を受け取り番号付きで全語表示する | 正常系 |
+| TC-GUI-UI-UT15 | REQ-UI-09, REQ-UI-14 | `detailed-design.md §1.11 / §4` | `RecoveryPhraseDisplay` — 24 語 props を受け取り番号付きで全語表示する | 正常系 |
 | TC-GUI-UI-UT16 | REQ-UI-09 | `detailed-design.md §1.11` | `RecoveryPhraseDisplay` — 「転記完了」ボタン押下 → `onConfirmed()` 呼び出し | 正常系 |
 | TC-GUI-UI-UT17 | REQ-UI-13 | `detailed-design.md §6` | `errors.ts` — `{ kind: "daemon_not_running" }` → 「daemon が起動していません。`shikomi start` を実行してください」 | 正常系 |
 | TC-GUI-UI-UT18 | REQ-UI-07, REQ-UI-13 | `detailed-design.md §6` | `errors.ts` — `{ kind: "ipc_error", ipc_code: "hotkey_conflict", hotkey_conflict_entry: "my-entry" }` → 「`{combo}` は別エントリ（`my-entry`）に割り当て済みです」（`message` フィールド不使用） | 正常系 |
@@ -98,8 +98,8 @@ IT テストでのみ使用する。`@tauri-apps/api/core` の `invoke` を `vi.
 | TC-GUI-UI-UT21 | REQ-UI-13 | `detailed-design.md §6` | `errors.ts` — `{ kind: "ipc_error", ipc_code: "crypto", crypto_reason: "nonce-limit-exceeded" }` → 「vault の再暗号化が必要です…」 | 正常系 |
 | TC-GUI-UI-UT22 | REQ-UI-13 | `detailed-design.md §6` | `errors.ts` — `{ kind: "ipc_error", ipc_code: "backoff_active", wait_secs: 30 }` → 「`30` 秒後に再試行してください」（`wait_secs` 補間） | 正常系 |
 | TC-GUI-UI-UT23 | REQ-UI-11, REQ-UI-13 | `detailed-design.md §6` | `errors.ts` — `{ kind: "ipc_error", ipc_code: "vault_locked" }` → 制御フロー信号（`UnlockModal` 表示用、日本語文字列でない） | 正常系 |
-| TC-GUI-UI-UT24 | REQ-UI-18 | `detailed-design.md §4` | `VaultEncryptPanel` — `invoke` 呼び出し直後にパスワード DOM ref が `""` に上書きされること（機密変数ゼロ化、R1-GUI-18） | 正常系（機密ライフサイクル）|
-| TC-GUI-UI-UT25 | REQ-UI-18 | `detailed-design.md §4` | `UnlockModal` — `unlock_vault` invoke 後にパスワード DOM ref が `""` に上書きされること（R1-GUI-18）| 正常系（機密ライフサイクル）|
+| TC-GUI-UI-UT24 | REQ-UI-14 | `detailed-design.md §4` | `VaultEncryptPanel` — `invoke` 呼び出し直後にパスワード DOM ref が `""` に上書きされること（機密変数ゼロ化、R1-GUI-18） | 正常系（機密ライフサイクル）|
+| TC-GUI-UI-UT25 | REQ-UI-14 | `detailed-design.md §4` | `UnlockModal` — `unlock_vault` invoke 後にパスワード DOM ref が `""` に上書きされること（R1-GUI-18）| 正常系（機密ライフサイクル）|
 | TC-GUI-UI-UT26 | REQ-UI-02 | `detailed-design.md §1.4` | `EntryList` — 種別 `text` → 「テキスト」/ 種別 `secret` → 「シークレット」表示 | 正常系 |
 | TC-GUI-UI-UT27 | REQ-UI-02 | `detailed-design.md §1.4` | `EntryList` — ホットキー設定済みエントリに「Ctrl+Alt+X」バッジ表示。未設定エントリは空欄 | 正常系 |
 
@@ -170,7 +170,7 @@ IT テストでのみ使用する。`@tauri-apps/api/core` の `invoke` を `vi.
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-GUI-UI-UT24 |
-| 対応する要件ID | REQ-UI-18（R1-GUI-18） |
+| 対応する要件ID | REQ-UI-14（R1-GUI-18） |
 | 対応する工程 | 階層 3 詳細設計（`detailed-design.md §4`） |
 | 種別 | 正常系（機密ライフサイクル） |
 | 前提条件 | `VaultEncryptPanel` を MockIPC 環境でレンダリング。DOM ref で `<input type="password">` を保持 |
