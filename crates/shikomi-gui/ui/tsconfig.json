@@ -8,7 +8,8 @@
     "jsxImportSource": "solid-js",
     "lib": ["ESNext", "DOM"],
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
