@@ -1,6 +1,6 @@
-//! IPC ホットキーハンドラ結合テスト（TC-HD-DI04〜TC-HD-DI06）。
+//! IPC ホットキーハンドラ結合テスト（TC-HD-DI04〜TC-HD-DI09）。
 //!
-//! IpcServer + MockBackend を使って IPC 経由のホットキー登録・競合・クリア経路を検証する。
+//! IpcServer + MockBackend を使って IPC 経由のホットキー登録・競合・クリア・解除・Fail Fast 経路を検証する。
 //! Unix UDS ソケットで実際の IPC を行うため Unix 専用 (`#[cfg(unix)]`)。
 //!
 //! 設計根拠: `docs/features/daemon-hotkey-clipboard/daemon/test-design.md §5`
@@ -133,6 +133,15 @@ mod tests {
                 _ => panic!("expected MockBackend"),
             }
         }
+
+        /// 指定コンボの OS 登録を強制失敗させる（Fail Fast テスト用）。
+        /// `combo` は正規化済み形式で渡すこと（e.g. `"alt+ctrl+3"`）。
+        fn set_fail_on_register(&self, normalized_combo: &str) {
+            match self.mock_backend.as_ref() {
+                BackendEnum::Mock(m) => m.set_fail_on_register(normalized_combo),
+                _ => panic!("expected MockBackend"),
+            }
+        }
     }
 
     /// MockBackend を持つ IpcServer を起動して `TestServerHandle` を返す。
@@ -187,11 +196,12 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // TC-HD-DI04: IPC AddRecord でホットキーが vault と OS に登録される
+    // TC-HD-DI04: IPC AddRecord でホットキーが vault と OS に正規化登録される
     // -------------------------------------------------------------------
 
     /// TC-HD-DI04: `AddRecord { hotkey: "ctrl+alt+1", ... }` を送信すると
-    /// MockBackend に `ctrl+alt+1`（正規化後）が登録される。
+    /// `HotkeyManager::register_one` が `Hotkey::parse` で正規化し、
+    /// MockBackend に `"alt+ctrl+1"`（正規化後: alt→ctrl 辞書順）が登録される（SEC-003 / INFO-001 修正）。
     #[tokio::test]
     async fn tc_hd_di04_add_record_with_hotkey_registers_os_hotkey() {
         let dir = fresh_socket_dir();
@@ -214,13 +224,13 @@ mod tests {
             other => panic!("expected Added response, got {other:?}"),
         }
 
-        // MockBackend に IPC で受け取ったホットキー文字列が登録されていること。
-        // dispatch_v2 は IPC リクエストの raw combo 文字列を register_one に渡すため、
-        // MockBackend には "ctrl+alt+1" として登録される（正規化は GlobalHotkeyBackend 側責務）。
+        // MockBackend には正規化済みコンボ "alt+ctrl+1" が登録される。
+        // HotkeyManager::register_one は Hotkey::parse で正規化してから OS 登録するため、
+        // raw の "ctrl+alt+1" ではなく辞書順正規化後の "alt+ctrl+1" が MockBackend に入る。
         let registered = handle.registered_hotkeys();
         assert!(
-            registered.contains("ctrl+alt+1"),
-            "OS hotkey 'ctrl+alt+1' should be registered after AddRecord, got: {registered:?}"
+            registered.contains("alt+ctrl+1"),
+            "OS hotkey should be normalized to 'alt+ctrl+1' after AddRecord, got: {registered:?}"
         );
 
         drop(framed);
@@ -324,6 +334,101 @@ mod tests {
                 IpcResponse::Error(IpcErrorCode::HotkeyParseError { .. })
             ),
             "conflicting hotkey+clear_hotkey should return HotkeyParseError, got: {edit_resp:?}"
+        );
+
+        drop(framed);
+        handle.shutdown_and_join().await;
+    }
+
+    // -------------------------------------------------------------------
+    // TC-HD-DI08: IPC RemoveRecord 後に OS ホットキーが解除される（SEC-002）
+    // -------------------------------------------------------------------
+
+    /// TC-HD-DI08: `ctrl+alt+1` を割り当てたエントリを `RemoveRecord` すると
+    /// MockBackend から `"alt+ctrl+1"`（正規化コンボ）が解除される。
+    #[tokio::test]
+    async fn tc_hd_di08_remove_record_unregisters_os_hotkey() {
+        let dir = fresh_socket_dir();
+        let handle = spawn_test_server_with_mock_backend(&dir).await;
+        let mut framed = connect_framed(&handle.socket_path).await;
+        client_handshake(&mut framed).await;
+
+        // 1. ホットキー付きでエントリを追加
+        let add_req = IpcRequest::AddRecord {
+            kind: RecordKind::Text,
+            label: RecordLabel::try_new("remove-target".to_owned()).unwrap(),
+            value: empty_secret_bytes(),
+            now: fixed_time(),
+            hotkey: Some("ctrl+alt+1".to_owned()),
+        };
+        send_request(&mut framed, &add_req).await;
+        let add_resp = recv_response(&mut framed).await;
+        let record_id = match add_resp {
+            IpcResponse::Added { id } => id,
+            other => panic!("expected Added, got {other:?}"),
+        };
+
+        // OS に "alt+ctrl+1" が登録されていること（正規化済み）
+        let registered_before = handle.registered_hotkeys();
+        assert!(
+            registered_before.contains("alt+ctrl+1"),
+            "hotkey should be registered before RemoveRecord, got: {registered_before:?}"
+        );
+
+        // 2. RemoveRecord
+        let remove_req = IpcRequest::RemoveRecord { id: record_id };
+        send_request(&mut framed, &remove_req).await;
+        let remove_resp = recv_response(&mut framed).await;
+        assert!(
+            matches!(remove_resp, IpcResponse::Removed { .. }),
+            "expected Removed, got {remove_resp:?}"
+        );
+
+        // OS からホットキーが解除されていること（SEC-002 修正検証）
+        let registered_after = handle.registered_hotkeys();
+        assert!(
+            !registered_after.contains("alt+ctrl+1"),
+            "OS hotkey 'alt+ctrl+1' should be unregistered after RemoveRecord, got: {registered_after:?}"
+        );
+
+        drop(framed);
+        handle.shutdown_and_join().await;
+    }
+
+    // -------------------------------------------------------------------
+    // TC-HD-DI09: OS 登録失敗時は IPC が HotkeyConflict を返す（Fail Fast / P1-②）
+    // -------------------------------------------------------------------
+
+    /// TC-HD-DI09: vault ドメインの `AddRecord` は成功するが MockBackend の OS 登録が失敗する場合、
+    /// IPC は `IpcErrorCode::HotkeyConflict` を返す（Fail Fast: vault と OS の不整合を防ぐ）。
+    #[tokio::test]
+    async fn tc_hd_di09_os_register_failure_returns_hotkey_conflict() {
+        let dir = fresh_socket_dir();
+        let handle = spawn_test_server_with_mock_backend(&dir).await;
+        let mut framed = connect_framed(&handle.socket_path).await;
+        client_handshake(&mut framed).await;
+
+        // MockBackend に "alt+ctrl+5"（正規化済み）の登録を強制失敗させる
+        handle.set_fail_on_register("alt+ctrl+5");
+
+        // vault ドメインとしては初出コンボなので競合なし → domain は Ok だが OS が失敗する
+        let add_req = IpcRequest::AddRecord {
+            kind: RecordKind::Text,
+            label: RecordLabel::try_new("fail-target".to_owned()).unwrap(),
+            value: empty_secret_bytes(),
+            now: fixed_time(),
+            hotkey: Some("ctrl+alt+5".to_owned()),
+        };
+        send_request(&mut framed, &add_req).await;
+        let resp = recv_response(&mut framed).await;
+
+        // Fail Fast: OS 登録失敗は HotkeyConflict として返す（IpcResponse::Added ではない）
+        assert!(
+            matches!(
+                resp,
+                IpcResponse::Error(IpcErrorCode::HotkeyConflict { .. })
+            ),
+            "OS registration failure should return HotkeyConflict (Fail Fast), got: {resp:?}"
         );
 
         drop(framed);

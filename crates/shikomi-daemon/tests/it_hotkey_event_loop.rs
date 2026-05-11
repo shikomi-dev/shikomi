@@ -271,12 +271,18 @@ async fn tc_hd_di03_secret_entry_schedules_clear_timer() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // 書き込みが 1 件発生していること（Secret でも write は呼ばれる）
+    // SEC-001: clipboard_value() が RecordKind::Secret で実際の値を返すこと（text_preview は None を返す）
     {
         let cb = mock_cb.lock().await;
         assert_eq!(
             cb.history.len(),
             1,
             "clipboard should have one write before clear timer fires"
+        );
+        assert_eq!(
+            cb.history[0].as_str(),
+            "secret_val",
+            "clipboard should contain actual secret value (SEC-001: clipboard_value() for RecordKind::Secret)"
         );
     }
 

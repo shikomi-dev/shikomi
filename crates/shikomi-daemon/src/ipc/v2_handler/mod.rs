@@ -298,7 +298,10 @@ pub async fn dispatch_v2<R: VaultRepository + ?Sized>(
 /// （`VekCache` は起動時に常に `Locked` 状態のため、plaintext vault では `is_unlocked()` が
 /// false を返す。IPC handler の統一契約として plaintext を特別扱いする）。
 async fn is_vault_locked(vault: &Vault, cache: &VekCache) -> bool {
-    let is_plaintext = matches!(vault.protection_mode(), shikomi_core::ProtectionMode::Plaintext);
+    let is_plaintext = matches!(
+        vault.protection_mode(),
+        shikomi_core::ProtectionMode::Plaintext
+    );
     !is_plaintext && !cache.is_unlocked().await
 }
 

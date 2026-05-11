@@ -95,8 +95,9 @@ impl HotkeyManager {
     /// # Errors
     /// コンボ文字列解析失敗 / OS 登録失敗 / バックエンド未対応。
     pub fn register_one(&self, combo: &str) -> Result<(), HotkeyError> {
-        let hotkey = shikomi_core::Hotkey::parse(combo)
-            .map_err(|_| HotkeyError::ParseFailed { combo: combo.to_owned() })?;
+        let hotkey = shikomi_core::Hotkey::parse(combo).map_err(|_| HotkeyError::ParseFailed {
+            combo: combo.to_owned(),
+        })?;
         let normalized = hotkey.as_str().to_owned();
         self.backend.register(&normalized)?;
         self.registered.lock().unwrap().insert(normalized);
@@ -110,8 +111,9 @@ impl HotkeyManager {
     /// # Errors
     /// コンボ文字列解析失敗 / OS 解除失敗 / バックエンド未対応。
     pub fn unregister_one(&self, combo: &str) -> Result<(), HotkeyError> {
-        let hotkey = shikomi_core::Hotkey::parse(combo)
-            .map_err(|_| HotkeyError::ParseFailed { combo: combo.to_owned() })?;
+        let hotkey = shikomi_core::Hotkey::parse(combo).map_err(|_| HotkeyError::ParseFailed {
+            combo: combo.to_owned(),
+        })?;
         let normalized = hotkey.as_str().to_owned();
         self.backend.unregister(&normalized)?;
         self.registered.lock().unwrap().remove(&normalized);
@@ -200,7 +202,6 @@ impl Drop for HotkeyManager {
         }
     }
 }
-
 
 // -------------------------------------------------------------------
 // ユニットテスト（TC-HD-DU01〜DU03）
