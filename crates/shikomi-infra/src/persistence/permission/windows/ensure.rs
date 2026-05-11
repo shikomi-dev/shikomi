@@ -85,7 +85,7 @@ pub(in crate::persistence::permission) fn verify_dir(path: &Path) -> Result<(), 
 /// Win32 API 失敗時は `expect()` でパニックする（Fail Fast 原則、テストセットアップ失敗は即断）。
 /// `SE_SECURITY_PRIVILEGE` 不要（DACL 変更は所有者権限で動作）。
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(super) fn normalize_tempdir_dacl(path: &Path) {
+pub(crate) fn normalize_tempdir_dacl(path: &Path) {
     // Step 1: GetNamedSecurityInfoW — 現在の所有者 SID を取得
     let (_sd_guard, owner_sid) = fetch_owner_sid_from_path(path)
         .expect("normalize_tempdir_dacl: fetch_owner_sid_from_path failed");
