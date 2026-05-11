@@ -210,3 +210,54 @@ pub async fn delete_entry(
     })
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc_client::{AppState, GuiIpcClient};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    fn build_none_app() -> tauri::App<tauri::test::MockRuntime> {
+        mock_builder()
+            .manage(tokio::sync::Mutex::new(None::<GuiIpcClient>) as AppState)
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock Tauri app")
+    }
+
+    // TC-GUI-IPC-UT01 — add_entry: ラベル空文字 → InvalidInput (IPC 未送信)
+    #[tokio::test]
+    async fn ut01_add_entry_empty_label_returns_invalid_input() {
+        let app = build_none_app();
+        let state = app.state::<AppState>();
+        let result = add_entry(state, RecordKind::Text, String::new(), "hello".to_owned(), None).await;
+        assert!(
+            matches!(&result, Err(GUIError::InvalidInput(m)) if m == "label must not be empty"),
+            "Expected InvalidInput(label must not be empty), got: {result:?}"
+        );
+    }
+
+    // TC-GUI-IPC-UT02 — add_entry: 値空文字 → InvalidInput
+    #[tokio::test]
+    async fn ut02_add_entry_empty_value_returns_invalid_input() {
+        let app = build_none_app();
+        let state = app.state::<AppState>();
+        let result = add_entry(state, RecordKind::Text, "my-label".to_owned(), String::new(), None).await;
+        assert!(
+            matches!(&result, Err(GUIError::InvalidInput(m)) if m == "value must not be empty"),
+            "Expected InvalidInput(value must not be empty), got: {result:?}"
+        );
+    }
+
+    // TC-GUI-IPC-UT08 — delete_entry: 不正 UUID → InvalidInput
+    #[tokio::test]
+    async fn ut08_delete_entry_bad_uuid_returns_invalid_input() {
+        let app = build_none_app();
+        let state = app.state::<AppState>();
+        let result = delete_entry(state, "not-a-uuid".to_owned()).await;
+        assert!(
+            matches!(&result, Err(GUIError::InvalidInput(m)) if m == "invalid record id format"),
+            "Expected InvalidInput(invalid record id format), got: {result:?}"
+        );
+    }
+}

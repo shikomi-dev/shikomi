@@ -139,3 +139,56 @@ fn validate_hotkey_combo(combo: &str) -> Result<(), GUIError> {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_hotkey_combo;
+
+    // TC-GUI-IPC-UT03 — 境界値: Ctrl+Alt+0 は範囲外
+    #[test]
+    fn ut03_ctrl_alt_0_is_rejected() {
+        assert!(
+            validate_hotkey_combo("Ctrl+Alt+0").is_err(),
+            "Ctrl+Alt+0 (digit 0) must be rejected"
+        );
+    }
+
+    // TC-GUI-IPC-UT04 — 大文字小文字: ctrl+alt+1 は拒否
+    #[test]
+    fn ut04_lowercase_ctrl_alt_is_rejected() {
+        assert!(
+            validate_hotkey_combo("ctrl+alt+1").is_err(),
+            "lowercase combo must be rejected"
+        );
+    }
+
+    // TC-GUI-IPC-UT05 — 境界値最小: Ctrl+Alt+1 は受理
+    #[test]
+    fn ut05_ctrl_alt_1_is_accepted() {
+        assert!(
+            validate_hotkey_combo("Ctrl+Alt+1").is_ok(),
+            "Ctrl+Alt+1 (minimum valid) must be accepted"
+        );
+    }
+
+    // TC-GUI-IPC-UT06 — 境界値最大: Ctrl+Alt+9 は受理
+    #[test]
+    fn ut06_ctrl_alt_9_is_accepted() {
+        assert!(
+            validate_hotkey_combo("Ctrl+Alt+9").is_ok(),
+            "Ctrl+Alt+9 (maximum valid) must be accepted"
+        );
+    }
+
+    // 追加境界値: "Ctrl+Alt+" only (missing digit) → rejected
+    #[test]
+    fn ut03b_ctrl_alt_no_digit_is_rejected() {
+        assert!(validate_hotkey_combo("Ctrl+Alt+").is_err());
+    }
+
+    // 追加境界値: "Ctrl+Alt+10" (two digits) → rejected
+    #[test]
+    fn ut03c_ctrl_alt_two_digits_is_rejected() {
+        assert!(validate_hotkey_combo("Ctrl+Alt+10").is_err());
+    }
+}

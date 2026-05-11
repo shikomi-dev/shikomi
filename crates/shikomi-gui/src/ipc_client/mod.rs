@@ -14,12 +14,13 @@ use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest, IpcResponse, MAX_FRAME_L
 use tokio::sync::Mutex;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use super::error::GUIError;
+use self::error::GUIError;
 
 // ---------------------------------------------------------------------------
 // Re-exports and sub-modules
 // ---------------------------------------------------------------------------
 
+pub mod error;
 pub mod commands;
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,12 @@ impl GuiIpcClient {
                 if server_version == IpcProtocolVersion::current() =>
             {
                 Ok(Self { framed })
+            }
+            IpcResponse::Handshake { server_version } => {
+                Err(GUIError::ProtocolVersionMismatch {
+                    server: server_version.to_string(),
+                    client: IpcProtocolVersion::current().to_string(),
+                })
             }
             IpcResponse::ProtocolVersionMismatch { server, client } => {
                 Err(GUIError::ProtocolVersionMismatch {

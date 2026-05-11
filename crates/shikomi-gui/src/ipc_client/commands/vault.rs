@@ -219,3 +219,30 @@ pub async fn unlock_vault(
     })
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc_client::{AppState, GuiIpcClient};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    fn build_none_app() -> tauri::App<tauri::test::MockRuntime> {
+        mock_builder()
+            .manage(tokio::sync::Mutex::new(None::<GuiIpcClient>) as AppState)
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock Tauri app")
+    }
+
+    // TC-GUI-IPC-UT07 — decrypt_vault: confirmed=false → InvalidInput (Fail Fast)
+    #[tokio::test]
+    async fn ut07_decrypt_vault_confirmed_false_returns_invalid_input() {
+        let app = build_none_app();
+        let state = app.state::<AppState>();
+        let result = decrypt_vault(state, "correct-password".to_owned(), false).await;
+        assert!(
+            matches!(&result, Err(GUIError::InvalidInput(m)) if m == "decrypt confirmation required"),
+            "Expected InvalidInput(decrypt confirmation required), got: {result:?}"
+        );
+    }
+}

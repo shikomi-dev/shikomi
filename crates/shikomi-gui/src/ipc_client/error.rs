@@ -104,3 +104,61 @@ impl Serialize for GUIError {
         map.end()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::GUIError;
+    use shikomi_core::ipc::IpcErrorCode;
+
+    // TC-GUI-IPC-UT10
+    #[test]
+    fn ut10_daemon_not_running_kind() {
+        let e = GUIError::DaemonNotRunning;
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "daemon_not_running");
+        assert!(!v["message"].as_str().unwrap_or("").is_empty());
+    }
+
+    // TC-GUI-IPC-UT11
+    #[test]
+    fn ut11_not_connected_kind() {
+        let e = GUIError::NotConnected;
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "not_connected");
+        assert!(!v["message"].as_str().unwrap_or("").is_empty());
+    }
+
+    // TC-GUI-IPC-UT12
+    #[test]
+    fn ut12_protocol_version_mismatch_kind_and_message() {
+        let e = GUIError::ProtocolVersionMismatch {
+            server: "v1".to_owned(),
+            client: "v2".to_owned(),
+        };
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "protocol_version_mismatch");
+        let msg = v["message"].as_str().unwrap();
+        assert!(msg.contains("v1"), "message should contain server version: {msg}");
+        assert!(msg.contains("v2"), "message should contain client version: {msg}");
+    }
+
+    // TC-GUI-IPC-UT13
+    #[test]
+    fn ut13_ipc_vault_locked_kind_and_message() {
+        let e = GUIError::Ipc(IpcErrorCode::VaultLocked);
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "ipc_error");
+        let msg = v["message"].as_str().unwrap();
+        let expected = IpcErrorCode::VaultLocked.to_string();
+        assert_eq!(msg, expected, "message must match IpcErrorCode::VaultLocked Display");
+    }
+
+    // TC-GUI-IPC-UT14
+    #[test]
+    fn ut14_invalid_input_kind_and_message() {
+        let e = GUIError::InvalidInput("test message".to_owned());
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "invalid_input");
+        assert_eq!(v["message"].as_str().unwrap(), "test message");
+    }
+}
