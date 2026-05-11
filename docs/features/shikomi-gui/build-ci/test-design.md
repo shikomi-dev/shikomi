@@ -11,12 +11,12 @@
 
 **build-ci sub-feature 固有の特性**:
 
-`build-ci` の実装成果物は `.github/workflows/bundler.yml`（新規）・`test-gui.yml` への `e2e-smoke` ジョブ追記・`audit.yml` 拡張・`deny.toml` 更新・`scripts/smoke.sh`（新規）であり、`crates/` 配下に Rust ソースコードを持たない。したがってテスト設計は以下の 2 種類に集約される:
+`build-ci` の実装成果物は `.github/workflows/bundler.yml`（新規）・`test-gui.yml` への `e2e-smoke` ジョブ追記・`audit.yml` 拡張・`deny.toml` 更新・`scripts/smoke-e2e.sh`（新規）であり、`crates/` 配下に Rust ソースコードを持たない。したがってテスト設計は以下の 2 種類に集約される:
 
 1. **IT（結合テスト）**: `e2e-smoke` ジョブで実行する E2E smoke テスト（TC-GUI-E01）— 実バイナリを xvfb 環境で起動し、shikomi-daemon との IPC 結合を検証する
 2. **UT（静的検証 / CI設定検証）**: ワークフロー YAML の `actionlint` 検証（正常系 + 異常系）・`cargo deny check` による依存 RUSTSEC クリーン確認
 
-**smoke スクリプト SSoT**: E2E smoke の実装は `scripts/smoke.sh` 単一ファイルに集約する（`test-gui.yml` にインライン記述しない）。YAML インライン shell は `shellcheck` の対象外になるため、`scripts/smoke.sh` として独立させ CI YAML からは `bash scripts/smoke.sh` で呼び出す。
+**smoke スクリプト SSoT**: E2E smoke の実装は `scripts/smoke-e2e.sh` 単一ファイルに集約する（`test-gui.yml` にインライン記述しない）。YAML インライン shell は `shellcheck` の対象外になるため、`scripts/smoke-e2e.sh` として独立させ CI YAML からは `bash scripts/smoke-e2e.sh` で呼び出す。
 
 ---
 
@@ -25,9 +25,9 @@
 | テスト | 外部 I/O | 依存対象 | 対処 | Fixture 状態 |
 |-------|---------|---------|------|------------|
 | IT（TC-GUI-E01 smoke） | OS プロセス（shikomi-daemon） | `shikomi start` バックグラウンド起動 | 実バイナリを直接起動。ソケットファイル生成をポーリングで待機（固定 sleep 廃止）| 不要（実バイナリ使用）|
-| IT（TC-GUI-E01 smoke） | UDS ソケット（IPC） | `shikomi list` + daemon 状態確認コマンドで接続確認 | 実 IPC を通す（モック不要）| 不要 |
+| IT（TC-GUI-E01 smoke） | UDS ソケット（IPC） | `shikomi list` で IPC 接続確認（exit 0 = 接続成立）| 実 IPC を通す（モック不要）。逆正常性（IT04）で「接続失敗 → exit 非ゼロ」を別途固定済み | 不要 |
 | IT（TC-GUI-E01 smoke） | 仮想ディスプレイ（xvfb） | `Xvfb :99 -screen 0 1280x720x24` セッション | CI ubuntu-22.04 ランナーで直接起動（`DISPLAY=:99`）。`trap EXIT` で終了を保証 | 不要 |
-| IT（TC-GUI-CI-IT04 逆正常性） | OS プロセス（shikomi-daemon） | **意図的に起動しない**（`--no-daemon` フラグ） | `scripts/smoke.sh --no-daemon` で daemon 起動ステップをスキップ | 不要 |
+| IT（TC-GUI-CI-IT04 逆正常性） | OS プロセス（shikomi-daemon） | **意図的に起動しない**（fault injection） | `e2e-smoke-fault` 独立ジョブで `! ./target/release/shikomi list` を実行。daemon 未起動のまま CLI を叩き exit 非ゼロを shell 反転で PASS に変換（`detailed-design.md §6.8`） | 不要 |
 | UT（actionlint 正常系） | なし（静的 YAML 解析） | — | 外部依存なし | 不要 |
 | UT（actionlint 負例） | なし（静的 YAML 解析） | 意図的に壊した YAML 断片 | `actionlint` が非ゼロ exit を返すことを確認 | 不要 |
 | UT（cargo deny） | RUSTSEC advisory DB（オンライン） | `deny.toml` + advisory feed | `deny.toml` の `[advisories.ignore]` エントリで対処 | 不要 |
@@ -43,11 +43,11 @@
 | UT（actionlint 正常系）| `.github/workflows/bundler.yml`・`.github/workflows/test-gui.yml`（設定ファイル）| `actionlint .github/workflows/bundler.yml`、`actionlint .github/workflows/test-gui.yml` |
 | UT（actionlint 負例）| 一時 YAML ファイル（CI スクリプト内で `mktemp` 生成・使用後削除）| `actionlint <temp>.yml`（非ゼロ exit を期待）|
 | UT（cargo deny）| `deny.toml`（設定ファイル）| `cargo deny check` |
-| IT（E2E smoke 正常系）| `scripts/smoke.sh`（SSoT）← `test-gui.yml` `e2e-smoke` ジョブが呼び出す | `bash scripts/smoke.sh`（CI）/ `bash scripts/smoke.sh` ローカル（要 xvfb + ビルド済みバイナリ）|
-| IT（E2E smoke 逆正常性）| `scripts/smoke.sh --no-daemon` ← `test-gui.yml` `e2e-smoke-no-daemon` ジョブが呼び出す | `bash scripts/smoke.sh --no-daemon`（exit 1 を期待）|
+| IT（E2E smoke 正常系）| `scripts/smoke-e2e.sh`（SSoT）← `test-gui.yml` `e2e-smoke` ジョブが呼び出す | `bash scripts/smoke-e2e.sh`（CI）/ `bash scripts/smoke-e2e.sh` ローカル（要 xvfb + ビルド済みバイナリ）|
+| IT（E2E smoke 逆正常性）| `e2e-smoke-fault` 独立ジョブ（`test-gui.yml`）← `! ./target/release/shikomi list` で fault injection | `! ./target/release/shikomi list`（daemon 未起動 → `shikomi list` exit 非ゼロ → shell 反転 → ジョブ PASS）|
 
 > **`cargo test` 対象外**: build-ci sub-feature の成果物は YAML + シェルスクリプトのみ。`crates/` 配下に Rust テストファイルを配置しない。
-> **shellcheck 対象**: `scripts/smoke.sh` は `lint.yml` の shellcheck ステップで検証する。YAML インライン shell は shellcheck 対象外になるため SSoT 化が必須。
+> **shellcheck 対象**: `scripts/smoke-e2e.sh` は `lint.yml` の shellcheck ステップで検証する。YAML インライン shell は shellcheck 対象外になるため SSoT 化が必須。
 
 ---
 
@@ -57,7 +57,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 | テスト対象 | ダブル要否 | 実装方法 |
 |----------|---------|---------|
-| shikomi-daemon | **不要** | 実バイナリ（`./target/release/shikomi`）をバックグラウンド起動。`--no-daemon` フラグ指定時は起動しない |
+| shikomi-daemon | **不要** | IT01〜IT03: 実バイナリ（`./target/release/shikomi`）をバックグラウンド起動。IT04（`e2e-smoke-fault` ジョブ）: 意図的に起動しない（fault injection）。`! ./target/release/shikomi list` でダイレクトに検証 |
 | shikomi-gui | **不要** | 実バイナリ（`./target/release/shikomi-gui`）を `DISPLAY=:99` で起動 |
 | xvfb 仮想ディスプレイ | **不要（実環境）** | CI ランナーで `Xvfb :99` を直接起動。`trap EXIT` でプロセス終了を保証 |
 | APPLE_* Secrets（macOS 公証） | **スキップ（条件分岐）** | fork PR では `if: github.event.pull_request.head.repo.full_name == github.repository` でジョブ全体をスキップ |
@@ -81,9 +81,9 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 | テスト ID | REQ-CI | 設計根拠 | テスト内容 | 種別 |
 |---------|--------|--------|----------|------|
 | TC-GUI-CI-IT01 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.5`（ポーリング待機）・`§6.6`（起動確認） | `shikomi gui` を xvfb 環境で起動し、ポーリングループで生存確認（`kill -0`）。プロセス生存を確認 | 正常系 |
-| TC-GUI-CI-IT02 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.6`（IPC 接続確認） | daemon 起動済み状態で `shikomi list` が exit 0 + daemon 状態確認コマンドが正常応答（IPC 接続を二重確認） | 正常系 |
+| TC-GUI-CI-IT02 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.6`（IPC 接続確認）・`§6.7`（合否判定ロジック）| daemon 起動済み状態で `shikomi list` が exit 0（IPC 接続確認）。exit 0 = IPC 接続成立の等価性は IT04 逆正常性で固定済み | 正常系 |
 | TC-GUI-CI-IT03 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.6`（正常終了確認）・`§6.5`（`trap EXIT` 設計） | GUI プロセスへ `SIGTERM` 送信後 5 秒以内に exit 0 で終了。`trap EXIT` によりリソースは必ず解放される | 正常系 |
-| TC-GUI-CI-IT04 | REQ-CI-07 | `detailed-design.md §9.1`（smoke 失敗シナリオ）・`§6.5`（`--no-daemon` フラグ）| `bash scripts/smoke.sh --no-daemon` 実行（daemon 起動ステップをスキップ）→ `shikomi list` が非ゼロ exit → smoke スクリプトが exit 1。**CI ジョブ `e2e-smoke-no-daemon` で自動検証** | 異常系 |
+| TC-GUI-CI-IT04 | REQ-CI-07 | `detailed-design.md §6.8`（`e2e-smoke-fault` ジョブ設計）| `e2e-smoke-fault` ジョブで daemon を起動せず `! ./target/release/shikomi list` を実行。daemon 未接続 → `shikomi list` exit 非ゼロ → `!` 反転 → ジョブ PASS。**CI 自動実行（逆正常性確認）** | 異常系 |
 
 ---
 
@@ -130,11 +130,11 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 | 対応する要件ID | REQ-CI-07 |
 | 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6`） |
 | 種別 | 正常系 |
-| 前提条件 | `test-gui.yml` に `e2e-smoke`・`e2e-smoke-no-daemon` ジョブが追記済み |
+| 前提条件 | `test-gui.yml` に `e2e-smoke`・`e2e-smoke-fault` ジョブが追記済み |
 | 操作 | `actionlint .github/workflows/test-gui.yml` |
-| 期待結果 | exit 0、エラーなし。`xvfb` インストールステップ・`bash scripts/smoke.sh` 呼び出し・`bash scripts/smoke.sh --no-daemon` 呼び出しが有効と判定される |
+| 期待結果 | exit 0、エラーなし。`xvfb` インストールステップ・`bash scripts/smoke-e2e.sh` 呼び出し（`e2e-smoke` ジョブ）・`! ./target/release/shikomi list` 呼び出し（`e2e-smoke-fault` ジョブ）が有効な YAML 式と判定される |
 
-**設計根拠**: `detailed-design.md §6.3` のステップ一覧が YAML として実行可能であること、および `scripts/smoke.sh --no-daemon` フラグ引数渡しが正当な shell コマンドであることを確認する。
+**設計根拠**: `detailed-design.md §6.3` のステップ一覧が YAML として実行可能であること、および `e2e-smoke-fault` ジョブの `! ./target/release/shikomi list` がシェルコマンドとして正当（shell negation）であることを静的に確認する。
 
 ---
 
@@ -171,9 +171,9 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 ## §6. 結合テスト詳細設計（E2E smoke: TC-GUI-E01）
 
-本セクションの TC-GUI-CI-IT01〜IT04 は `basic-design.md §4` の `TC-GUI-E01` を IT レベル（モジュール間結合）として詳細化したものである。IT01〜IT03 は `scripts/smoke.sh` 内でシーケンシャルに実行される（`detailed-design.md §6.5` シーケンス図参照）。IT04 は `--no-daemon` フラグを用いた別ジョブで自動実行する。
+本セクションの TC-GUI-CI-IT01〜IT04 は `basic-design.md §4` の `TC-GUI-E01` を IT レベル（モジュール間結合）として詳細化したものである。IT01〜IT03 は `scripts/smoke-e2e.sh` 内でシーケンシャルに実行される（`detailed-design.md §6.6` シーケンス図参照）。IT04 は `scripts/smoke-e2e.sh` とは独立した `e2e-smoke-fault` ジョブで `! ./target/release/shikomi list` を直接実行する（`detailed-design.md §6.8`）。
 
-**`scripts/smoke.sh` の共通前提**: スクリプト冒頭で `trap 'kill $GUI_PID $DAEMON_PID $XVFB_PID 2>/dev/null; exit' EXIT` を設定し、exit ハンドラで Xvfb・daemon・GUI プロセスの終了を保証する。これにより CI ジョブ失敗時もランナーリソースが残留しない（`detailed-design.md §9.3` の Keychain `if: always()` と対称な設計）。
+**`scripts/smoke-e2e.sh` の共通前提**: スクリプト冒頭で `trap 'kill $GUI_PID $DAEMON_PID $XVFB_PID 2>/dev/null; exit' EXIT` を設定し、exit ハンドラで Xvfb・daemon・GUI プロセスの終了を保証する。これにより CI ジョブ失敗時もランナーリソースが残留しない（`detailed-design.md §9.3` の Keychain `if: always()` と対称な設計）。
 
 ---
 
@@ -199,16 +199,14 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-IT02 |
 | 対応する要件ID | REQ-CI-07、AC-GUI-01 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.6` IPC 接続確認） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.6` IPC 接続確認・`§6.7` 合否判定ロジック） |
 | 種別 | 正常系 |
 | 前提条件 | TC-GUI-CI-IT01 通過後（GUI プロセス生存）、shikomi-daemon 起動・UDS ソケット生成済み |
-| 操作 | ①`./target/release/shikomi list` を実行し exit 0 を確認。②`./target/release/shikomi status`（または `shikomi daemon-version` 相当コマンド）を実行し daemon が正常応答することを確認 |
-| 期待結果 | ①`shikomi list` が exit 0（0 件以上）。②daemon 状態確認コマンドが exit 0 かつ daemon 情報を返す。両方が成功することで IPC 接続を二重確認 |
-| 失敗条件 | いずれかが非ゼロ exit → スクリプトが exit 1 |
+| 操作 | `./target/release/shikomi list` を実行し exit 0 を確認（`scripts/smoke-e2e.sh` 内のシーケンシャルステップとして実行） |
+| 期待結果 | `shikomi list` が exit 0（0 件以上の出力）。exit 0 は daemon IPC ソケットへの接続成功を証明する（接続失敗時は exit 非ゼロ。`detailed-design.md §6.7` 参照） |
+| 失敗条件 | exit 非ゼロ → スクリプトが exit 1 → `e2e-smoke` ジョブ FAIL |
 
-**設計根拠**: `shikomi list` の exit 0 のみでは、「daemon 未接続でも空リスト exit 0 を返す実装が将来導入された場合」に接続失敗を見逃す。daemon 状態確認コマンドを二重チェックとして加えることで、接続確立を確実に証明する（`AC-GUI-01`「daemon と IPC 接続が確立される」の厳密な検証）。
-
-> **実装注意**: `detailed-design.md §6` が設計する daemon 状態確認コマンドの名称・シグネチャに合わせて本 TC の操作②を実装すること（`shikomi status` / `shikomi daemon-version` 等、セルの設計に従う）。
+**設計根拠**: `shikomi list` が IPC 接続失敗時に exit 非ゼロを返すことは TC-GUI-CI-IT04（`e2e-smoke-fault` ジョブ）で構造的に検証済み。「`shikomi list` exit 0 = IPC 接続確立」の等価性を逆正常性テストで固定しているため、IT02 は単一コマンドで十分（`detailed-design.md §6.7` 参照）。存在しない `shikomi status` / `shikomi daemon-version` サブコマンドは参照しない。
 
 ---
 
@@ -228,20 +226,21 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 ---
 
-### TC-GUI-CI-IT04: daemon 未起動時 smoke FAIL 検証（逆正常性 — CI 自動実行）
+### TC-GUI-CI-IT04: daemon 未起動時 IPC 失敗検証（逆正常性 — CI 自動実行）
 
 | 項目 | 内容 |
 |------|------|
 | テストID | TC-GUI-CI-IT04 |
 | 対応する要件ID | REQ-CI-07 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §9.1` 失敗シナリオ・`§6.5` `--no-daemon` フラグ）|
+| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.8` `e2e-smoke-fault` ジョブ設計）|
 | 種別 | 異常系（逆正常性確認）|
-| 前提条件 | xvfb 起動済み。`scripts/smoke.sh` が `--no-daemon` フラグを受け付け、daemon 起動ステップをスキップする実装済み |
-| 操作 | `bash scripts/smoke.sh --no-daemon` を実行（`test-gui.yml` の `e2e-smoke-no-daemon` ジョブで自動実行）|
-| 期待結果 | daemon ソケット未生成のため `shikomi list` が非ゼロ exit → smoke スクリプトが exit 1。CI ジョブが FAIL と判定される |
-| CI での検証方法 | `e2e-smoke-no-daemon` ジョブの step に `continue-on-error: false` が設定され、`bash scripts/smoke.sh --no-daemon` の exit 1 がジョブ FAIL として記録される。ジョブ FAIL が「期待された失敗」であることを CI ログで確認する |
+| 前提条件 | `shikomi-cli` バイナリビルド済み（`cargo build --release -p shikomi-cli`）。**daemon は起動しない**（fault injection）。xvfb 不要（GUI 起動なし） |
+| 操作 | `e2e-smoke-fault` ジョブ（`test-gui.yml`）の fault check ステップで `! ./target/release/shikomi list` を実行 |
+| 期待結果 | daemon 未起動 → `shikomi list` が IPC ソケット未存在で exit 非ゼロ → shell `!` 演算子が反転して exit 0 → CI ステップ PASS |
+| 失敗条件（回帰検知）| daemon が誤って起動していた場合 → `shikomi list` exit 0 → `!` 反転 → exit 非ゼロ → CI ステップ FAIL（テスト前提条件違反として検知される）|
+| CI での検証方法 | `e2e-smoke-fault` ジョブが `e2e-smoke` ジョブと独立して実行される。ジョブ PASS = 「IPC 未接続で正しく失敗する」ことの自動証明 |
 
-**設計根拠**: 「smoke スクリプトは接続失敗を正しく検出できる」ことを CI で自動検証する。逆正常性テストをローカル手動に委ねると、スクリプト変更時の回帰に気付けない。`--no-daemon` フラグを追加することで手動操作不要の CI 完結設計にする。
+**設計根拠**: 「`shikomi list` は IPC 接続失敗を exit 非ゼロで正しく報告できる」ことを CI で構造的に固定する。IT02 の正常系チェック（`shikomi list` exit 0 = IPC 接続成立）はこの逆正常性テストによって「接続失敗 → exit 非ゼロ」が回帰テストで担保されることで信頼性を得る（`detailed-design.md §6.7` 参照）。`scripts/smoke-e2e.sh` への `--no-daemon` 引数フラグを使わず独立ジョブで直接実行することで KISS を維持する（`detailed-design.md §6.8` 末尾参照）。
 
 ---
 
@@ -267,10 +266,10 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 | テスト対象 | モック要否 | 実装方法 |
 |----------|---------|---------|
-| shikomi-daemon プロセス | **不要** | 実バイナリを起動（IT01〜03）/ 意図的に起動しない（IT04 `--no-daemon`）|
+| shikomi-daemon プロセス | **不要** | IT01〜IT03: 実バイナリを起動。IT04（`e2e-smoke-fault` ジョブ）: 意図的に起動しない（fault injection）|
 | shikomi-gui プロセス | **不要** | 実バイナリを起動 |
-| xvfb 仮想ディスプレイ | **不要（実環境）** | CI ランナーで `Xvfb :99` を直接起動。`trap EXIT` で終了保証 |
-| UDS ソケット（IPC）| **不要** | 実 IPC を使用（`shikomi list` + daemon 状態確認が実ソケットに接続）|
+| xvfb 仮想ディスプレイ | **不要（実環境）** | CI ランナーで `Xvfb :99` を直接起動。`trap EXIT` で終了保証。IT04 ジョブは xvfb 不要（GUI 起動なし）|
+| UDS ソケット（IPC）| **不要** | 実 IPC を使用（`shikomi list` が実ソケットに接続）|
 | APPLE_* Secrets（macOS 公証）| **スキップ（条件分岐）** | fork PR では `if:` 条件で macOS ジョブ全体をスキップ |
 | RUSTSEC advisory DB | **不要** | `deny.toml` の `[advisories.ignore]` で静的対処 |
 
@@ -287,8 +286,8 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 | TC-GUI-CI-UT03（test-gui.yml actionlint 正常系）| `lint.yml`（actionlint ステップ）| PR CI で毎回実行 |
 | TC-GUI-CI-UT04（test-gui.yml actionlint 負例）| `lint.yml`（actionlint 負例 step）| 同上、test-gui.yml 対象 |
 | TC-GUI-CI-UT05（cargo deny check）| `audit.yml` | shikomi-gui 依存追加後も継続実行 |
-| TC-GUI-CI-IT01〜IT03（E2E smoke 正常系）| `test-gui.yml` `e2e-smoke` ジョブ（`bash scripts/smoke.sh`）| ubuntu-22.04 + xvfb。PR / main / develop プッシュ時に自動実行 |
-| TC-GUI-CI-IT04（逆正常性 CI 自動）| `test-gui.yml` `e2e-smoke-no-daemon` ジョブ（`bash scripts/smoke.sh --no-daemon`）| exit 1 を期待。`e2e-smoke` ジョブと並列または直後に実行 |
+| TC-GUI-CI-IT01〜IT03（E2E smoke 正常系）| `test-gui.yml` `e2e-smoke` ジョブ（`bash scripts/smoke-e2e.sh`）| ubuntu-22.04 + xvfb。PR / main / develop プッシュ時に自動実行 |
+| TC-GUI-CI-IT04（逆正常性 CI 自動）| `test-gui.yml` `e2e-smoke-fault` ジョブ（`! ./target/release/shikomi list`）| daemon 未起動で `shikomi list` exit 非ゼロ → `!` 反転 → ジョブ PASS。`e2e-smoke` ジョブと独立して並列実行 |
 
 ---
 
@@ -305,10 +304,11 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 | CI 静的検証品質 | TC-GUI-CI-UT02 / UT04（actionlint 負例）により「linter が実際に機能している」ことを保証 |
 | cleanup 対称性 | `trap EXIT`（smoke）+ `if: always()`（macOS Keychain）の両方が設計に明示されていること |
 | 手動受入との役割分担 | AC-GUI-08（Windows SmartScreen）・AC-GUI-09（macOS Gatekeeper）・AC-GUI-10（Linux AppImage 起動）は `bundler.yml` 成果物を用いた手動受入で確認。本 test-design.md の自動テスト対象外 |
-| テスト非重複 | E2E smoke（TC-GUI-E01）は `e2e-smoke` ジョブで 1 回のみ実行。逆正常性（IT04）は `e2e-smoke-no-daemon` ジョブで独立実行。`bundler.yml` とジョブが独立しているため三重実行なし |
+| テスト非重複 | E2E smoke（TC-GUI-E01）は `e2e-smoke` ジョブで 1 回のみ実行。逆正常性（IT04）は `e2e-smoke-fault` ジョブで独立実行。`bundler.yml` とジョブが独立しているため三重実行なし |
 
 ---
 
 *作成: 涅マユリ（テスト担当）/ 2026-05-11*
-*改訂 v2（2026-05-11）: ペテルギウス・ロマネコンティ査読フィードバック対応 — TC-GUI-CI-IT04 CI 自動化・actionlint 負例追加・sleep 固定 → ポーリング・smoke SSoT（scripts/smoke.sh）・trap EXIT・IPC 二重確認・REQ-CI-02/03 カバレッジ articulate*
-*設計根拠: `docs/features/shikomi-gui/build-ci/basic-design.md` §モジュール契約 / `detailed-design.md §1〜9` / Issue #98*
+*改訂 v2（2026-05-11）: ペテルギウス・ロマネコンティ査読フィードバック対応 — TC-GUI-CI-IT04 CI 自動化・actionlint 負例追加・sleep 固定 → ポーリング・smoke SSoT（scripts/smoke-e2e.sh）・trap EXIT・REQ-CI-02/03 カバレッジ articulate*
+*改訂 v3（2026-05-11）: セル整合修正 — IT04 `--no-daemon` 方式 → `e2e-smoke-fault` 独立ジョブ + `! shikomi list` 反転方式（detailed-design §6.8 に準拠）・IT02 幻想コマンド排除（`shikomi status` / `shikomi daemon-version` は非存在）・§8 モック方針整合・UT03 期待結果整合*
+*設計根拠: `docs/features/shikomi-gui/build-ci/basic-design.md` §モジュール契約 / `detailed-design.md §1〜11` / Issue #98*
