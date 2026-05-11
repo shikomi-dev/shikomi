@@ -6,10 +6,9 @@
 //! 設計根拠: docs/features/shikomi-gui/system-tray/detailed-design.md §4
 //!          docs/features/shikomi-gui/system-tray/detailed-design.md §9
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use shikomi_core::ipc::{IpcRequest, IpcResponse};
-use shikomi_core::CLEAR_TIMEOUT_SECS;
 use tauri::tray::TrayIconId;
 use tauri::{AppHandle, Manager as _, Runtime};
 
@@ -92,34 +91,12 @@ fn tooltip_text(remaining: Option<u64>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// calc_remaining — 残秒計算純粋関数（§9、テスト用）
-// ---------------------------------------------------------------------------
-
-/// クリップボード投入開始時刻から残秒を計算する。
-///
-/// `now` を引数注入することで `Instant::now()` 依存を排除しテスト可能にする（§9）。
-///
-/// | 条件 | 戻り値 |
-/// |------|--------|
-/// | `elapsed >= CLEAR_TIMEOUT_SECS` | `None` |
-/// | `elapsed < CLEAR_TIMEOUT_SECS` | `Some(CLEAR_TIMEOUT_SECS - elapsed)` |
-fn calc_remaining(started_at: Instant, now: Instant) -> Option<u64> {
-    let elapsed_secs = now.duration_since(started_at).as_secs();
-    if elapsed_secs >= CLEAR_TIMEOUT_SECS {
-        None
-    } else {
-        Some(CLEAR_TIMEOUT_SECS - elapsed_secs)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     // TC-TRAY-UT01: tooltip_text — カウントダウン中（残 15 秒）
     #[test]
@@ -142,51 +119,10 @@ mod tests {
         assert_eq!(text, "shikomi");
     }
 
-    // TC-TRAY-UT03: calc_remaining — 残 20 秒
-    #[test]
-    fn ut03_calc_remaining_active() {
-        let now = Instant::now();
-        let started_at = now - Duration::from_secs(10);
-        assert_eq!(calc_remaining(started_at, now), Some(20));
-    }
-
-    // TC-TRAY-UT04: calc_remaining — タイムアウト超過
-    #[test]
-    fn ut04_calc_remaining_expired() {
-        let now = Instant::now();
-        let started_at = now - Duration::from_secs(31);
-        assert_eq!(calc_remaining(started_at, now), None);
-    }
-
-    // TC-TRAY-UT05: calc_remaining — 境界: elapsed == CLEAR_TIMEOUT_SECS（30 秒 = None）
-    #[test]
-    fn ut05_calc_remaining_boundary_exactly_timeout() {
-        let now = Instant::now();
-        let started_at = now - Duration::from_secs(30);
-        assert_eq!(calc_remaining(started_at, now), None);
-    }
-
-    // TC-TRAY-UT06: calc_remaining — 直後（elapsed ≈ 0）
-    #[test]
-    fn ut06_calc_remaining_just_started() {
-        let now = Instant::now();
-        // elapsed = 0 → remaining = 30
-        assert_eq!(calc_remaining(now, now), Some(30));
-    }
-
     // TC-TRAY-UT07: tooltip_text — 境界最小（残 1 秒）
     #[test]
     fn ut07_tooltip_text_one_second_remaining() {
         let text = tooltip_text(Some(1));
         assert_eq!(text, "shikomi — クリップボードを自動消去まで 1 秒");
-    }
-
-    // TC-TRAY-UT09: calc_remaining — elapsed=29s → Some(1)（最小正値境界）
-    #[test]
-    fn ut09_calc_remaining_one_second_before_timeout() {
-        let now = Instant::now();
-        let started_at = now - Duration::from_secs(29);
-        // elapsed=29 < CLEAR_TIMEOUT_SECS(30) → remaining = 1（最小正値境界）
-        assert_eq!(calc_remaining(started_at, now), Some(1));
     }
 }
