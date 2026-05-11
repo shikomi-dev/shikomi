@@ -170,26 +170,29 @@ function resolveCryptoError(reason: string | undefined): MessageResult {
   }
 }
 
-/** invalid_input の Rust-side message → 日本語マッピング（§3.2） */
+/**
+ * invalid_input サブ分岐（invalid_input_code で分岐、message パース廃止）。
+ *
+ * Rust 側 `invalid_input_code_key()` が出力する安定識別子で switch する。
+ * `message` フィールドをユーザー表示や条件分岐に使用してはならない（§2.2）。
+ */
 function resolveInvalidInput(err: GUIError): MessageResult {
-  // message はデバッグ専用だが、Rust側の固定文言をキーとして日本語に変換する
-  const msg = err.message ?? "";
-  if (msg.includes("label") || msg.includes("empty")) {
-    return { type: "message", text: "ラベルを入力してください" };
+  switch (err.invalid_input_code) {
+    case "label_empty":
+      return { type: "message", text: "ラベルを入力してください" };
+    case "value_empty":
+      return { type: "message", text: "値を入力してください" };
+    case "password_empty":
+      return { type: "message", text: "パスワードを入力してください" };
+    case "confirmation_required":
+      return { type: "message", text: "確認チェックボックスを有効にしてください" };
+    case "id_invalid":
+      return { type: "message", text: "無効なエントリIDです" };
+    case "hotkey_invalid":
+      return { type: "message", text: "ホットキーの形式が正しくありません" };
+    default:
+      return { type: "message", text: "入力内容に誤りがあります" };
   }
-  if (msg.includes("value")) {
-    return { type: "message", text: "値を入力してください" };
-  }
-  if (msg.includes("hotkey") || msg.includes("combo")) {
-    return { type: "message", text: "ホットキーの形式が正しくありません" };
-  }
-  if (msg.includes("uuid") || msg.includes("id")) {
-    return { type: "message", text: "無効なエントリIDです" };
-  }
-  if (msg.includes("confirmed")) {
-    return { type: "message", text: "確認チェックボックスを有効にしてください" };
-  }
-  return { type: "message", text: "入力内容に誤りがあります" };
 }
 
 // ---------------------------------------------------------------------------

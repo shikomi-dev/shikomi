@@ -45,10 +45,17 @@ export interface EncryptVaultResult {
 
 export interface GUIError {
   kind: string;
+  /** ipc_error 時のみ存在。daemon エラー種別の安定識別子（§2.3 凍結契約） */
   ipc_code?: string;
+  /** invalid_input 時のみ存在。バリデーション失敗種別の安定識別子（§2.2） */
+  invalid_input_code?: string;
+  /** デバッグ・ログ用英語技術情報。ユーザーに直接表示禁止 */
   message: string;
+  /** backoff_active のみ存在。次回試行可能までの待機秒数 */
   wait_secs?: number;
+  /** crypto のみ存在。暗号エラー詳細識別子（kebab-case 固定文言） */
   crypto_reason?: string;
+  /** hotkey_conflict のみ存在。競合している既存エントリ名 */
   hotkey_conflict_entry?: string;
 }
 

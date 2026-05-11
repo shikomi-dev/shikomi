@@ -8,6 +8,7 @@ import type { Component } from "solid-js";
 import { createSignal, For } from "solid-js";
 import type { GUIError } from "../lib/ipc";
 import { assignHotkey, removeHotkey } from "../lib/ipc";
+import { resolveMessage } from "../lib/errors";
 
 interface Props {
   entryId: string;
@@ -37,9 +38,8 @@ const HotkeySelector: Component<Props> = (props) => {
     } catch (e) {
       const err = e as GUIError;
       if (err.kind === "ipc_error" && err.ipc_code === "hotkey_conflict") {
-        // hotkey_conflict_entry フィールドで競合エントリ名を表示（message 使用禁止）
-        const entry = err.hotkey_conflict_entry ?? "別のエントリ";
-        setConflictMsg(`${combo} は別エントリ（${entry}）に割り当て済みです`);
+        // errors.ts 経由でメッセージ取得（独自メッセージ構築禁止）
+        setConflictMsg(resolveMessage(err) ?? "選択したホットキーは既に使用されています");
         setSelected(props.currentHotkey ?? "");
       }
     } finally {

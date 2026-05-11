@@ -11,8 +11,8 @@ import type { Component } from "solid-js";
 import { createSignal, Show } from "solid-js";
 import type { GUIError, RecordSummary } from "../lib/ipc";
 import { addEntry, updateEntry } from "../lib/ipc";
-import { handleCommandError, refreshEntries } from "../store/vault";
-import { resolveMessage } from "../lib/errors";
+import { handleVaultLocked, handleDisconnect, refreshEntries } from "../store/vault";
+import { resolveMessage, isVaultLocked, isDisconnectError } from "../lib/errors";
 import HotkeySelector from "./HotkeySelector";
 
 interface Props {
@@ -63,19 +63,27 @@ const EntryForm: Component<Props> = (props) => {
     setSubmitError(null);
     setLoading(true);
     const value = valueRef?.value ?? "";
-    const submitFn = async () => {
-      await addEntry(label(), value, kind(), null);
-    };
     try {
-      await submitFn();
+      await addEntry(label(), value, kind(), null);
       // 機密値を即破棄（R1-GUI-18）
       if (valueRef) valueRef.value = "";
       await refreshEntries();
       props.onSuccess();
     } catch (e) {
+      // 機密値を即破棄（R1-GUI-18） — エラーパスでも遅延なく実施
       if (valueRef) valueRef.value = "";
       const err = e as GUIError;
-      if (handleCommandError(err, submitFn)) return;
+      if (isVaultLocked(err)) {
+        // vault_locked: 機密値を含むクロージャを pendingOperation に格納しない（REQ-UI-14）
+        // 再試行は entries 更新のみに留め、フォーム再入力はユーザーに委ねる
+        handleVaultLocked(refreshEntries);
+        setSubmitError("アンロック後、エントリを再入力してください");
+        return;
+      }
+      if (isDisconnectError(err)) {
+        handleDisconnect(err.kind);
+        return;
+      }
       setSubmitError(resolveMessage(err) ?? "追加に失敗しました");
     } finally {
       setLoading(false);
@@ -101,19 +109,26 @@ const EntryForm: Component<Props> = (props) => {
     }
 
     const id = props.entry!.id;
-    const submitFn = async () => {
-      await updateEntry(id, newLabel, newValue);
-    };
 
     try {
-      await submitFn();
+      await updateEntry(id, newLabel, newValue);
       if (valueRef) valueRef.value = "";
       await refreshEntries();
       props.onSuccess();
     } catch (e) {
+      // 機密値を即破棄（R1-GUI-18）
       if (valueRef) valueRef.value = "";
       const err = e as GUIError;
-      if (handleCommandError(err, submitFn)) return;
+      if (isVaultLocked(err)) {
+        // vault_locked: newValue（機密値）を含むクロージャを pendingOperation に格納しない（REQ-UI-14）
+        handleVaultLocked(refreshEntries);
+        setSubmitError("アンロック後、エントリを再入力してください");
+        return;
+      }
+      if (isDisconnectError(err)) {
+        handleDisconnect(err.kind);
+        return;
+      }
       setSubmitError(resolveMessage(err) ?? "保存に失敗しました");
     } finally {
       setLoading(false);

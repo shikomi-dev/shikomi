@@ -38,11 +38,9 @@ const UnlockModal: Component<Props> = (props) => {
       if (passwordRef) passwordRef.value = "";
       const err = e as GUIError;
       if (err.kind === "ipc_error" && err.ipc_code === "backoff_active") {
-        // backoff_active は wait_secs フィールドを使用（message パース禁止）
+        // errors.ts 経由でメッセージ取得。wait_secs はタイマー用途のみ（message パース禁止）
         const secs = err.wait_secs ?? 0;
-        setErrorMsg(
-          `試行回数の上限に達しました。${secs}秒後に再試行してください`,
-        );
+        setErrorMsg(resolveMessage(err) ?? "試行回数の上限に達しました");
         setBackoffDisabled(true);
         setTimeout(() => setBackoffDisabled(false), secs * 1000);
       } else {

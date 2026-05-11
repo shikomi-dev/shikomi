@@ -14,7 +14,9 @@
 //! | `crypto_reason` | `ipc_code == "crypto"` のみ | 暗号エラー詳細識別子（kebab-case 固定文言: `wrong-password` / `weak-password` / `nonce-limit-exceeded` 等）。Sub-C はこの値で UI 分岐する |
 //! | `hotkey_conflict_entry` | `ipc_code == "hotkey_conflict"` のみ | 競合している既存エントリ名の文字列。Sub-C は競合エントリ名を UI 表示する（R1-GUI-08）。`message` パースへの依存禁止 |
 //!
-//! Sub-C は `kind` → `ipc_code` の順で分岐し、`message` は開発ツール専用。
+//! | `invalid_input_code` | `kind == "invalid_input"` のみ | バリデーション失敗種別の安定識別子。Sub-C はこの値で UI 分岐する（`message` パース禁止）|
+//!
+//! Sub-C は `kind` → `ipc_code` / `invalid_input_code` の順で分岐し、`message` は開発ツール専用。
 //!
 //! 設計根拠: docs/features/shikomi-gui/ipc-client/basic-design.md §2.2
 //! docs/features/shikomi-gui/ipc-client/detailed-design.md §2
@@ -113,6 +115,15 @@ impl Serialize for GUIError {
                 map.serialize_entry("message", &code.to_string())?;
                 map.end()
             }
+            // InvalidInput variant: kind + invalid_input_code + message の 3 フィールド。
+            // Sub-C は invalid_input_code で分岐し、message パースに依存しない（§2.2）。
+            Self::InvalidInput(msg) => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("kind", "invalid_input")?;
+                map.serialize_entry("invalid_input_code", invalid_input_code_key(msg))?;
+                map.serialize_entry("message", msg)?;
+                map.end()
+            }
             // 他の variant: kind + message の 2 フィールド。
             other => {
                 let mut map = serializer.serialize_map(Some(2))?;
@@ -128,9 +139,10 @@ impl Serialize for GUIError {
                     Self::Encode(msg) => ("encode_error", msg.clone()),
                     Self::Decode(msg) => ("decode_error", msg.clone()),
                     Self::UnexpectedResponse(msg) => ("unexpected_response", msg.clone()),
-                    Self::InvalidInput(msg) => ("invalid_input", msg.clone()),
                     Self::NotConnected => ("not_connected", "not connected to daemon".to_owned()),
-                    Self::Ipc(_) => unreachable!("handled in Ipc arm"),
+                    Self::Ipc(_) | Self::InvalidInput(_) => {
+                        unreachable!("handled in dedicated arms")
+                    }
                 };
                 map.serialize_entry("kind", kind)?;
                 map.serialize_entry("message", &message)?;
@@ -143,6 +155,22 @@ impl Serialize for GUIError {
 // ---------------------------------------------------------------------------
 // ipc_code_key: IpcErrorCode → snake_case 安定識別子
 // ---------------------------------------------------------------------------
+
+/// `InvalidInput` の message 文字列を Sub-C が `switch` する安定識別子へ写像する（§2.2）。
+///
+/// 各エントリポイントの `InvalidInput` 生成箇所（entries.rs, vault.rs, hotkey.rs）の
+/// 固定文言を網羅する。新たな `InvalidInput` を追加した場合はここに必ず追記すること。
+fn invalid_input_code_key(msg: &str) -> &'static str {
+    match msg {
+        "label must not be empty" => "label_empty",
+        "value must not be empty" => "value_empty",
+        "invalid record id format" => "id_invalid",
+        "master password must not be empty" => "password_empty",
+        "decrypt confirmation required" => "confirmation_required",
+        "invalid hotkey format" => "hotkey_invalid",
+        _ => "unknown",
+    }
+}
 
 /// `IpcErrorCode` variant を Sub-C が `switch` する安定 snake_case 識別子へ写像する（§2.3）。
 ///
@@ -353,13 +381,64 @@ mod tests {
         assert_eq!(v["crypto_reason"], "nonce-limit-exceeded");
     }
 
-    // TC-GUI-IPC-UT14
+    // TC-GUI-IPC-UT14 — GUIError::InvalidInput: kind / invalid_input_code / message 全フィールド検証
+    //
+    // ペテルギウス指摘対応（§2.2 invalid_input_code 追加）:
+    // invalid_input の message パースを廃止し、invalid_input_code 安定識別子で分岐する。
+    // Sub-C は invalid_input_code で UI テキストを決定し、message は表示しない。
     #[test]
-    fn ut14_invalid_input_kind_and_message() {
-        let e = GUIError::InvalidInput("test message".to_owned());
+    fn ut14_invalid_input_kind_invalid_input_code_and_message() {
+        // label_empty マッピング検証
+        let e = GUIError::InvalidInput("label must not be empty".to_owned());
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], "invalid_input");
-        assert_eq!(v["message"].as_str().unwrap(), "test message");
+        assert_eq!(
+            v["invalid_input_code"], "label_empty",
+            "invalid_input_code must be label_empty: {v}"
+        );
+        assert!(!v["message"].as_str().unwrap_or("").is_empty());
+
+        // value_empty マッピング検証（旧実装では "empty" で label_empty に誤マッチ）
+        let e2 = GUIError::InvalidInput("value must not be empty".to_owned());
+        let v2 = serde_json::to_value(&e2).unwrap();
+        assert_eq!(
+            v2["invalid_input_code"], "value_empty",
+            "invalid_input_code must be value_empty (not label_empty): {v2}"
+        );
+
+        // password_empty マッピング検証（旧実装では "empty" で label_empty に誤マッチ）
+        let e3 = GUIError::InvalidInput("master password must not be empty".to_owned());
+        let v3 = serde_json::to_value(&e3).unwrap();
+        assert_eq!(
+            v3["invalid_input_code"], "password_empty",
+            "invalid_input_code must be password_empty: {v3}"
+        );
+    }
+
+    // TC-GUI-IPC-UT14b — invalid_input_code 全 6 値の網羅テスト
+    #[test]
+    fn ut14b_invalid_input_code_exhaustive() {
+        let cases = [
+            ("label must not be empty", "label_empty"),
+            ("value must not be empty", "value_empty"),
+            ("invalid record id format", "id_invalid"),
+            ("master password must not be empty", "password_empty"),
+            ("decrypt confirmation required", "confirmation_required"),
+            ("invalid hotkey format", "hotkey_invalid"),
+            ("unknown message", "unknown"),
+        ];
+        for (msg, expected_code) in cases {
+            let e = GUIError::InvalidInput(msg.to_owned());
+            let v = serde_json::to_value(&e).unwrap();
+            assert_eq!(
+                v["kind"], "invalid_input",
+                "kind must be invalid_input for '{msg}': {v}"
+            );
+            assert_eq!(
+                v["invalid_input_code"], expected_code,
+                "invalid_input_code must be '{expected_code}' for msg='{msg}': {v}"
+            );
+        }
     }
 
     // TC-GUI-IPC-UT15 — §2.3 凍結 API 契約 全 13 variant 網羅テスト（将来 rename 防衛線）
