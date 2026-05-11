@@ -404,7 +404,10 @@ mod tests {
         let repo = SqliteVaultRepository::from_directory(&vault_dir).unwrap();
         repo.prepare_dir().expect("prepare_dir は成功すべき");
 
-        assert!(vault_dir.is_dir(), "prepare_dir 後: ディレクトリが作成されるべき");
+        assert!(
+            vault_dir.is_dir(),
+            "prepare_dir 後: ディレクトリが作成されるべき"
+        );
     }
 
     // --- TC-U-REPO-02: prepare_dir — 既存ディレクトリに冪等 ---
@@ -415,8 +418,10 @@ mod tests {
         let repo = SqliteVaultRepository::from_directory(dir.path()).unwrap();
 
         // 2 回呼び出しても失敗しない
-        repo.prepare_dir().expect("1 回目: prepare_dir は成功すべき");
-        repo.prepare_dir().expect("2 回目: prepare_dir は冪等であるべき");
+        repo.prepare_dir()
+            .expect("1 回目: prepare_dir は成功すべき");
+        repo.prepare_dir()
+            .expect("2 回目: prepare_dir は冪等であるべき");
     }
 
     // --- TC-U-REPO-03: load_or_create — vault.db 未存在時に空 plaintext vault を返す ---
