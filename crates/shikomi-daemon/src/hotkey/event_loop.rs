@@ -145,7 +145,25 @@ impl HotkeyEventLoop {
 
             // ペイロード値を clone して取り出す（Mutex 保持時間最小化）
             // SEC-001: `text_preview` は Secret kind で None を返すため `clipboard_value` を使用。
-            let payload_value = record.clipboard_value().unwrap_or_default();
+            // Encrypted variant（Phase 2 以降）では None を返す。その場合は空文字を書かず
+            // OS 通知してスキップする（Fail Fast: 空クリップボード書き込みを防ぐ）。
+            let Some(payload_value) = record.clipboard_value() else {
+                tracing::error!(
+                    target: "shikomi::audit",
+                    event = "hotkey_triggered",
+                    record_id = %record.id(),
+                    combo,
+                    result = "skipped:encrypted_payload",
+                    "clipboard_value unavailable (Encrypted variant?)"
+                );
+                drop(vault_guard);
+                self.send_notification(
+                    NotifyLevel::Normal,
+                    "shikomi",
+                    "クリップボードに投入できる値がありません",
+                );
+                return;
+            };
             let record_kind = record.kind();
             let record_id = record.id().to_string();
 
