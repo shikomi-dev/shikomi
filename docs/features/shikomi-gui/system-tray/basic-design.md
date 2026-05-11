@@ -13,7 +13,7 @@
 |---------|------|
 | REQ-TRAY-01 | Tauri v2 `TrayIconBuilder` でシステムトレイアイコンを常駐させる。アプリ起動時に自動配置し、プロセス終了まで除去しない（R1-GUI-14） |
 | REQ-TRAY-02 | `WebviewWindow::on_window_event` の `CloseRequested` イベントを `prevent_default()` で阻止し、ウィンドウを `.hide()` してトレイ常駐に切り替える。明示的な「終了」操作のみ `AppHandle::exit(0)` でプロセスを終了する（R1-GUI-14） |
-| REQ-TRAY-03 | トレイアイコン右クリックメニューに「ウィンドウを開く」「daemon 再起動」「終了」の 3 項目を表示する（UC-GUI-005）。各項目の動作は §2.3 を参照 |
+| REQ-TRAY-03 | トレイアイコン右クリックメニューに「ウィンドウを開く」「shikomi のサービスを再起動する」「終了」の 3 項目を表示する（UC-GUI-005）。各項目の動作は §2.3 を参照 |
 | REQ-TRAY-04 | `get_clipboard_countdown` Tauri Command が `ClipboardStatus { remaining_secs: Option<u64> }` を返す。daemon 側 `GetClipboardStatus` IPC 拡張との契約を §3 に定義する（R1-GUI-15） |
 | REQ-TRAY-05 | `countdown` バックグラウンドタスクが 1 秒ごとに `get_clipboard_countdown` を呼び出し、`remaining_secs > 0` の間はトレイアイコンのツールチップを「shikomi — クリップボードを自動消去まで {N} 秒」に更新する。カウントダウンが終了したら「shikomi」に戻す（R1-GUI-15） |
 
@@ -168,7 +168,7 @@ IPC ハンドラは `countdown_started_at` の値から `elapsed()` を計算し
 
 ### 5.2 daemon 再起動フロー
 
-「shikomi のサービスを再起動する」メニュー操作時の UX: 再起動中はトレイメニューの「daemon 再起動」項目を無効化し、接続が回復したら再有効化する。接続失敗は既存 `DaemonConnectionPanel` に委ねる。`AppState` の遷移は既存 `lib.rs` の初期接続ロジックを再利用する。
+「shikomi のサービスを再起動する」メニュー操作時の UX: 再起動中はトレイメニューの「shikomi のサービスを再起動する」項目を無効化し、接続が回復したら再有効化する。接続失敗は既存 `DaemonConnectionPanel` に委ねる。`AppState` の遷移は既存 `lib.rs` の初期接続ロジックを再利用する。
 
 ---
 
