@@ -117,7 +117,7 @@ AC-GUI-01「`shikomi gui` で GUI が起動し、daemon と IPC 接続が確立�
 | 検証対象 | 方法 | 合否基準 |
 |---------|------|---------|
 | `shikomi gui` バイナリ起動 | プロセス起動後 10 秒以内にウィンドウハンドルを確認 | 起動失敗または 10 秒タイムアウトで FAIL |
-| daemon IPC 接続 | `shikomi list` コマンドが 0 件以上を返すことを確認（daemon 接続証明） | exit code 非ゼロで FAIL |
+| daemon IPC 接続 | `shikomi list --ipc` コマンドが exit 0 を返すことを確認（IPC 経路での daemon 接続証明。`--ipc` フラグで SQLite 直結経路との混同を排除） | exit code 非ゼロで FAIL |
 | プロセス正常終了 | `SIGTERM` 後 5 秒以内に exit code 0 で終了 | タイムアウトまたは非ゼロ exit で FAIL |
 
 ### 4.2 headless 実行環境
@@ -128,7 +128,17 @@ AC-GUI-01「`shikomi gui` で GUI が起動し、daemon と IPC 接続が確立�
 | 仮想ディスプレイ | xvfb（`Xvfb :99 -screen 0 1280x720x24`） | CI にディスプレイがない環境で Tauri WebView の初期化を通過させる。GTK / WebKit の headless モードより確実 |
 | E2E フレームワーク | `tauri-driver` + `webdriverio` は **不採用**（YAGNI）。シェルスクリプトで `shikomi gui &` → `shikomi list` → kill のシンプルな smoke check を採用 | フルセレニウムテストは現時点で要件なし（YAGNI）。アクセシビリティ検証が必要になった時点で別 Issue で設計する |
 
-### 4.3 テスト対象外（headless 制約）
+### 4.3 daemon 起動前提条件（BUG-04 由来の業務ルール）
+
+build-ci の E2E スモークテスト（TC-GUI-E01）実行中に daemon が初回起動時にデータディレクトリ未作成でクラッシュすることが判明した（BUG-04）。本修正により以下の業務ルールが daemon 側で確立した。**設計の詳細は `docs/features/daemon-ipc/detailed-design/composition-root.md §処理順序 ステップ 5・6` を参照する**（本設計書はスコープ越境を避け参照のみとする）。
+
+| 業務ルール | 責務の所在 |
+|-----------|-----------|
+| daemon 起動時に vault dir（`~/.local/share/shikomi/` 等）が存在しない場合は自動作成する | `SqliteVaultRepository::from_directory`（リポジトリ層） |
+| vault ファイルが存在しない場合（初回インストール）は空の plaintext vault を生成して起動する | `SqliteVaultRepository::load_or_create_plaintext`（リポジトリ層） |
+| `shikomi_daemon::run()` に `create_dir_all` / NotFound 分岐を直接書かない | コンポジションルートは組み立て責務のみ（Clean Architecture） |
+
+### 4.4 テスト対象外（headless 制約）
 
 | 機能 | 理由 | 代替検証 |
 |------|------|---------|
@@ -162,7 +172,7 @@ Windows の SmartScreen 警告（MVP 許容）はユーザーが「詳細情報 
 | A05 | Security Misconfiguration | workflow `permissions: contents: read` に制限 |
 | A06 | Vulnerable Components | `cargo audit` を `shikomi-gui` 依存に拡張（REQ-CI-06）|
 | A07 | Auth Failures | 該当なし（CI 認証は GitHub Actions の OIDC / Secrets で管理）|
-| A08 | Software Integrity | macOS: Developer ID 署名 + 公証で検証。Linux: GPG 署名は非スコープ（MVP）|
+| A08 | Software Integrity | ① 成果物整合性: macOS Developer ID 署名 + Apple 公証（Gatekeeper 検証）で改ざんを防止。Linux GPG 署名は非スコープ（MVP）。② CI サプライチェーン保護: `.github/actions/tauri-build-setup/action.yml` 内の全外部アクション（`dtolnay/rust-toolchain`・`Swatinem/rust-cache`・`actions/setup-node` 等）は SHA ハッシュ固定参照（`uses: <owner>/<repo>@<40-char-commit-sha>`）を使用する。ブランチ参照・タグ参照は禁止。SHA の更新は Dependabot または手動 PR で差分レビューを経て行う（侵害されたアクションの任意コード実行を防止）。|
 | A09 | Logging Failures | CI ログは GitHub Actions に保存。Secrets はマスクされる |
 | A10 | SSRF | 該当なし（外部 HTTP 通信は `notarytool` のみ、Apple サーバへの固定通信）|
 
