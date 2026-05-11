@@ -262,4 +262,21 @@ mod tests {
             "Expected InvalidInput(invalid record id format), got: {result:?}"
         );
     }
+
+    // TC-GUI-IPC-UT09 — update_entry: 不正 UUID 文字列 → InvalidInput（IPC 未送信・Fail Fast）
+    //
+    // 設計根拠: test-design.md §TC-GUI-IPC-UT09 / detailed-design.md §4.2
+    // update_entry は id の UUID 検証を IPC 送信前に行う（Fail Fast）。
+    // AppState = None（IPC 未接続）でも、UUID バリデーションは IPC より先に実行されるため NotConnected ではなく
+    // InvalidInput が返ることを確認する。
+    #[tokio::test]
+    async fn ut09_update_entry_bad_uuid_returns_invalid_input() {
+        let app = build_none_app();
+        let state = app.state::<AppState>();
+        let result = update_entry(state, "not-a-uuid".to_owned(), None, None).await;
+        assert!(
+            matches!(&result, Err(GUIError::InvalidInput(m)) if m == "invalid record id format"),
+            "Expected InvalidInput(invalid record id format), got: {result:?}"
+        );
+    }
 }
