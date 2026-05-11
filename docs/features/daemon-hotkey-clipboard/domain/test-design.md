@@ -4,6 +4,17 @@
 <!-- 配置先: docs/features/daemon-hotkey-clipboard/domain/test-design.md -->
 <!-- システムテストは system-test-design.md に記述。本ファイルは IT + UT のみ -->
 
+## 0. 外部 I/O 依存マップ
+
+| テストレベル | 外部 I/O | 依存対象 | 対処 |
+|------------|---------|---------|------|
+| UT | なし | `Hotkey::parse` は純粋関数、I/O なし | そのまま実行可 |
+| UT (`Vault` メソッド) | なし | `Vault` は in-memory ドメインオブジェクト | そのまま実行可 |
+| IT (`IpcRequest` serde) | `rmp-serde` ライブラリ（ファイル/ネットワーク I/O なし）| ライブラリ呼び出しのみ | そのまま実行可 |
+| IT (V3 マイグレーション) | SQLite ファイル I/O | `tempfile::TempDir` で分離 | `tempfile` を使用 |
+
+`shikomi-core` は no-I/O 制約（`process-model.md §4.1.1` 上位設計ルール）を持つ。UT / IT ともにネットワーク・OS API・ファイルシステムへの依存を持たない。
+
 ## 1. テスト配置方針
 
 | テストレベル | 配置先 | 実行コマンド |
@@ -18,11 +29,11 @@
 
 | ID | 入力 | 期待結果 |
 |----|------|---------|
-| TC-HD-U01-a | `"ctrl+alt+1"` | `modifiers.ctrl=true, modifiers.alt=true, key=Char('1')` |
+| TC-HD-U01-a | `"ctrl+alt+1"` | `as_str() == "alt+ctrl+1"`（正規化済み文字列で検証） |
 | TC-HD-U01-b | `"Ctrl+Alt+1"` | TC-HD-U01-a と同一（大文字無視） |
 | TC-HD-U01-c | `"alt+ctrl+1"` | TC-HD-U01-a と同一（順序無視） |
-| TC-HD-U01-d | `"meta+shift+f12"` | `modifiers.meta=true, modifiers.shift=true, key=Function(12)` |
-| TC-HD-U01-e | `"ctrl+a"` | `modifiers.ctrl=true, key=Char('a')` |
+| TC-HD-U01-d | `"meta+shift+f12"` | `as_str() == "meta+shift+f12"`（正規化済み文字列で検証） |
+| TC-HD-U01-e | `"ctrl+a"` | `as_str() == "ctrl+a"` |
 
 ### TC-HD-U02: `Hotkey::parse` 異常系
 

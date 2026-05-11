@@ -29,7 +29,7 @@ shikomi のコア価値機能。ユーザが事前登録した文字列に **OS 
 | アクター | エンドユーザー（ホットキー押下） |
 | 事前条件 | daemon が起動済み・対象エントリにホットキーが登録済み |
 | 基本フロー | ① ユーザがホットキー（例: `Ctrl+Alt+1`）を押下 ② daemon が対象エントリの値を取得 ③ daemon が値を OS クリップボードに書き込む ④ ユーザが任意アプリで `Ctrl/Cmd+V` で貼り付ける |
-| 代替フロー A | vault が暗号化ロック中 → クリップボード書き込みをスキップ・通知なし（security: サイレント失敗） |
+| 代替フロー A | vault が暗号化ロック中 → クリップボード書き込みをスキップし、OS 通知でユーザーに「vault がロック中です。`shikomi vault unlock` を実行してください」と通知する（R1-HK-13） |
 | 代替フロー B | エントリが secret フラグ付き → 書き込み後 30 秒で自動クリア（UC-HK-003 へ） |
 | 事後条件 | OS クリップボードにエントリの値が書き込まれている |
 
@@ -63,11 +63,15 @@ shikomi のコア価値機能。ユーザが事前登録した文字列に **OS 
 | R1-HK-04 | クリップボード投入は `arboard` crate を使用し、Windows / macOS / Linux (X11・Wayland) の 3 OS で動作する |
 | R1-HK-05 | secret フラグ付きエントリのクリップボード自動クリアは投入後 30 秒（設定変更なし、MVP固定値） |
 | R1-HK-06 | Linux では起動時に `XDG_SESSION_TYPE` 環境変数と `ashpd` portal probe でセッション種別を判定し、ホットキー実装を実行時に選択する（feature flag を使わない） |
-| R1-HK-07 | vault が暗号化ロック中のホットキー押下は投入をスキップし、外部に状態を漏洩しない（サイレント失敗） |
+| R1-HK-07 | vault が暗号化ロック中のホットキー押下は投入をスキップする。ペイロード値等の機密情報は外部に漏洩しない（R1-HK-13 の OS 通知で「ロック中」の事実のみ通知） |
 | R1-HK-08 | `shikomi add` / `shikomi edit` コマンドに `--hotkey <COMBO>` オプションを追加する |
 | R1-HK-09 | `shikomi edit` コマンドに `--clear-hotkey` フラグを追加し、ホットキー解除を可能にする |
 | R1-HK-10 | `shikomi list` 出力にホットキー割り当て状況を表示する（例: `[ctrl+alt+1]`） |
 | R1-HK-11 | SQLite スキーマに `hotkey_combo TEXT` カラムを追加するマイグレーションを実施する（既存レコードは `NULL`） |
+| R1-HK-12 | ホットキー発火・クリップボード書き込みの成否を `tracing::info!` で監査ログに記録する（`target: "shikomi::audit"`）。記録内容: イベント種別 / RecordId / 結果（成功 / スキップ理由）。ペイロード値・マスターパスワードは記録しない |
+| R1-HK-13 | vault ロック中のホットキー発火時、OS 通知（バナー/トースト）でユーザーに「vault がロック中です。`shikomi vault unlock` を実行してください」と通知する |
+| R1-HK-14 | クリップボード書き込み失敗時、OS 通知で「クリップボードへの書き込みに失敗しました」と通知する |
+| R1-HK-15 | `shikomi list` 出力に OS 登録状況カラム（`[OS: ✓]` / `[OS: ✗]`）を追加する。daemon が未起動の場合は `[OS: -]` とする |
 
 ## 4. 非機能要件（本 feature スコープ）
 
@@ -95,3 +99,17 @@ shikomi のコア価値機能。ユーザが事前登録した文字列に **OS 
 - `--paste-mode=inject`（キー注入フォールバック）
 - Flatpak / Snap でのホットキー対応
 - ホットキーのカスタム修飾キー組み合わせ検証（F1〜F12 以外の特殊キー）
+- GUI フェーズでのホットキー競合フィードバック（トースト通知）は Issue #90 で対応。本 feature では CLI の stderr + exit code 非 0 のみ
+- OS 通知の実装は `tauri-plugin-notification`（Tauri v2 公式）を GUI フェーズで使用する方針。本 feature の daemon フェーズでは各 OS ネイティブ通知 API を直接呼ぶか `notify-rust` crate を使用する（詳細は `daemon/basic-design.md §OS通知設計` を参照）
+
+## 7. Phase 1 / Phase 2 切替戦略
+
+本 feature（Issue #89）は `docs/architecture/context/process-model.md §4.1.1` における **Phase 1 → Phase 2 の移行トリガー**となる。
+
+| 項目 | 内容 |
+|------|------|
+| Phase 1（現行）| `shikomi-cli` は `SqliteVaultRepository` を直接構築。daemon 不要 |
+| Phase 2（本 feature 完成後）| `shikomi-cli` / `shikomi-gui` は `IpcVaultRepository` 経由で daemon に委任。ホットキー・クリップボードは daemon が一元管理 |
+| 切替タイミング | 本 Issue #89 の実装完了をもって `shikomi-cli` のデフォルトを IPC 経由に変更する別 Issue を立てる |
+| 移行方法 | `shikomi-cli::main.rs` のコンポジションルート 1 行差し替え（UseCase / Presenter は無変更）。`process-model.md §4.1.1` の「Phase 2 移行は 1 行差し替えで完了」方針を踏襲 |
+| ホットキー要件との整合 | `R1-HK-01`（vault 全ホットキー一括登録）は daemon 起動時に実行される。daemon が vault の真実源となる Phase 2 でのみ正しく機能する |

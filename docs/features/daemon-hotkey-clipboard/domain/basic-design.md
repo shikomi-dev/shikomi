@@ -48,23 +48,12 @@ classDiagram
     }
     class Hotkey {
         <<Value Object>>
-        +modifiers: ModifierSet
-        +key: Key
+        -normalized: Box~str~
         +parse(s: &str) Result~Hotkey, HotkeyParseError~
         +as_str() &str
         +Display
-    }
-    class ModifierSet {
-        <<Value Object>>
-        +ctrl: bool
-        +alt: bool
-        +shift: bool
-        +meta: bool
-    }
-    class Key {
-        <<Value Object, enum>>
-        Char(char)
-        Function(u8)
+        +PartialEq
+        +Hash
     }
     class Vault {
         +records: Vec~Record~
@@ -75,16 +64,15 @@ classDiagram
     }
 
     Record "1" --> "0..1" Hotkey
-    Hotkey "1" --> "1" ModifierSet
-    Hotkey "1" --> "1" Key
     Vault "1" *-- "0..*" Record
 ```
 
 ### 2.1 `Hotkey` 値オブジェクト
 
-- **不変条件**: `modifiers` は `ctrl` / `alt` / `shift` / `meta` の少なくとも 1 つが `true`。`key` は ASCII 英数字 1 文字、または F1〜F12 のいずれか
-- **文字列表現**: `"ctrl+alt+1"` 形式（修飾キーはアルファベット順に正規化）。`Display` 実装が正規化文字列を返す
-- **等価性**: 正規化文字列で比較（`PartialEq` / `Eq`）
+- **唯一の内部状態**: `normalized: Box<str>`（正規化済み文字列のみ。`modifiers` / `key` の個別フィールドは廃止）
+- **不変条件**: 修飾キーを少なくとも 1 つ含み、主キーが ASCII 英数字 1 文字または F1〜F12 のいずれか（`parse` で検証済み）
+- **文字列表現**: `"alt+ctrl+1"` 形式（修飾キーはアルファベット順に正規化）。`Display` / `as_str()` が正規化文字列を返す
+- **等価性**: `normalized` 文字列で比較（`PartialEq` / `Eq` / `Hash`）
 - **ゼロ化**: `Hotkey` は機密情報を含まないため `zeroize` 不要
 
 ### 2.2 `Vault` ドメインメソッド追加
@@ -107,7 +95,8 @@ classDiagram
 | `AddRecord` | `hotkey` | `Option<String>` （正規化文字列、daemon 側で `Hotkey::parse` する） |
 | `EditRecord` | `hotkey` | `Option<String>` |
 | `EditRecord` | `clear_hotkey` | `bool` |
-| `TriggerHotkey`（新規） | `combo` | `String` （テスト専用 IPC、`cfg(test)` でのみ有効化） |
+
+**テスト用 `TriggerHotkey` variant の不採用**: E2E テストは `HotkeyEventLoop` に `MockBackend::send_event()` でイベントを直接注入する（`daemon/test-design.md §2`）。本番 enum に裏口 variant を混入しない（ブラックボックステスト原則）。
 
 **`hotkey` を `Option<String>` にする理由**: `Hotkey` 型は `shikomi-core` の内部型であり、IPC は文字列境界を経由する。デシリアライズ後に daemon / cli 各層でパースし Fail Fast させることで、core 型を IPC スキーマに漏らさない（依存方向の一方向を維持）。
 
@@ -137,6 +126,10 @@ classDiagram
 ## 5. 外部連携
 
 該当なし — 本 sub-feature は pure domain 型定義のみ。I/O・OS API 依存なし。
+
+### 5.5 `CLEAR_TIMEOUT` 定数の配置
+
+30 秒クリア時間は `shikomi-core::constants::CLEAR_TIMEOUT_SECS: u64 = 30` として `crates/shikomi-core/src/constants.rs` に定義する。`ClearTimer` / event_loop / テストコードが全てこの定数を参照することで DRY を保つ。定数を分散させてはならない。
 
 ## 6. セキュリティ設計
 

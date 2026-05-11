@@ -8,11 +8,19 @@
 
 ### 1.1 `Hotkey` struct
 
+`Hotkey` は**正規化文字列のみを内部状態として持つ**。`modifiers: ModifierSet` / `key: Key` の個別フィールド保持を廃止する。
+
 | 要素 | 型 | 可視性 | 説明 |
 |------|----|--------|------|
-| `modifiers` | `ModifierSet` | `pub(crate)` | Ctrl / Alt / Shift / Meta フラグ集合 |
-| `key` | `Key` | `pub(crate)` | 主キー（英数字または Fn キー） |
-| `normalized` | `Box<str>` | `private` | `Display` 用キャッシュ（一度計算して固定） |
+| `normalized` | `Box<str>` | `private` | `"alt+ctrl+1"` 形式の正規化文字列（唯一の内部状態）|
+
+**廃止判断根拠**: `modifiers` / `key` を個別保持すると `normalized` との同期バグが潜在する（DRY 違反 / Tell Don't Ask 崩壊）。`PartialEq` / `Hash` / `Display` は `normalized` のみで完結する。個別フィールドへの外部アクセスを `pub(crate)` で許容することは Tell Don't Ask 原則に違反する。**操作はすべて `Hotkey` のメソッドで閉じること**。
+
+公開メソッド:
+- `parse(s: &str) -> Result<Hotkey, HotkeyParseError>` — 文字列をパースし正規化して構築
+- `as_str(&self) -> &str` — 正規化文字列を返す
+- `Display` — `as_str()` と同一
+- `PartialEq` / `Eq` / `Hash` — `normalized` 文字列で比較
 
 ### 1.2 `Hotkey::parse(s: &str) -> Result<Hotkey, HotkeyParseError>`
 
@@ -24,29 +32,15 @@
 | 4 | 残り 1 パーツが主キー候補。英数字 1 文字 → `Key::Char(c)`、`f1`〜`f12` → `Key::Function(n)` |
 | 5 | 修飾キーが 0 個 → `HotkeyParseError::NoModifier` |
 | 6 | 主キーが 0 個または 2 個以上 → `HotkeyParseError::InvalidKey` |
-| 7 | 正規化文字列を `modifiers`（アルファベット順: alt → ctrl → meta → shift）+ `+` + `key` で構築し `normalized` フィールドに格納 |
+| 7 | 正規化文字列をアルファベット順修飾キー（alt → ctrl → meta → shift）+ `+` + 主キーで構築し、`Hotkey { normalized }` を返す（`normalized` が唯一のフィールド） |
 
 **正規化ルール**: `"Ctrl+Alt+1"` / `"alt+ctrl+1"` は同一 `Hotkey` になる。`PartialEq` / `Hash` は `normalized` で比較。
 
-### 1.3 `ModifierSet` struct
+### 1.3 パース内部アルゴリズム（中間表現）
 
-| フィールド | 型 | 説明 |
-|-----------|----|------|
-| `alt` | `bool` | Alt / Option キー |
-| `ctrl` | `bool` | Ctrl / Control キー |
-| `meta` | `bool` | Win / Command キー |
-| `shift` | `bool` | Shift キー |
+`parse` の内部でのみ使用する中間表現として `alt: bool, ctrl: bool, meta: bool, shift: bool, key_char: Option<char>, key_fn: Option<u8>` のローカル変数を用いる。パース完了後に正規化文字列を構築し `Hotkey { normalized }` を返す。**中間表現は struct フィールドに昇格させない**。
 
-不変条件: `alt || ctrl || meta || shift` が `true`（コンストラクタでアサーション）。
-
-### 1.4 `Key` enum
-
-| バリアント | 内容 |
-|-----------|------|
-| `Char(char)` | ASCII 英数字 (`a`〜`z`, `0`〜`9`)。小文字に正規化 |
-| `Function(u8)` | Fn キー番号 1〜12 |
-
-### 1.5 `HotkeyParseError` enum（`thiserror` 使用）
+### 1.4 `HotkeyParseError` enum（`thiserror` 使用）
 
 | バリアント | メッセージ例 |
 |-----------|------------|
@@ -126,13 +120,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_records_hotkey_combo
 
 （SQL は `schema.rs` 内定数として管理。`detailed-design.md` での記述は仕様確認用。実装は `shikomi-infra` 側に委ねる）
 
-## 5. `serde` 互換性
+## 5. V3 マイグレーション失敗時のロールバック戦略
+
+`V2 → V3` マイグレーション（`hotkey_combo` カラム追加）は `BEGIN TRANSACTION` / `COMMIT` / `ROLLBACK` で原子性を保証する。
+
+| ステップ | 処理 | 失敗時 |
+|---------|------|--------|
+| 1 | `BEGIN TRANSACTION` | — |
+| 2 | `ALTER TABLE records ADD COLUMN hotkey_combo TEXT DEFAULT NULL` | `ROLLBACK` → `VaultMigrationError::SchemaChange` で Fail Fast |
+| 3 | `CREATE UNIQUE INDEX ...` | `ROLLBACK` → `VaultMigrationError::SchemaChange` |
+| 4 | vault header の `VaultVersion` を `V3` に更新 | `ROLLBACK` → `VaultMigrationError::HeaderUpdate` |
+| 5 | `COMMIT` | 失敗なら SQLite が自動 rollback |
+
+**SQLite の `ALTER TABLE` はトランザクション内でも ROLLBACK 可能**（DDL implicit commit はない）。マイグレーション失敗後の vault.db は `V2` 状態のまま保持される。daemon は起動を中止し `tracing::error!` でユーザに通知する（Fail Fast）。
+
+既存データの `UNIQUE INDEX` 競合: `hotkey_combo` はデフォルト `NULL` で追加されるため、既存全レコードは `NULL` → 競合しない（`UNIQUE INDEX WHERE hotkey_combo IS NOT NULL` で NULL を除外）。
+
+## 6. `serde` 互換性
 
 - `Hotkey` は `serde::Serialize` / `Deserialize` を実装する
 - シリアライズ表現は **正規化文字列** (`"alt+ctrl+1"` 形式)
 - `Deserialize` 実装内で `Hotkey::parse` を呼び出し、パースエラーを `serde::de::Error::custom` に写像する
 
-## 6. 依存関係
+## 7. 依存関係
 
 本 sub-feature で `shikomi-core` に追加する外部依存: **なし**。
 

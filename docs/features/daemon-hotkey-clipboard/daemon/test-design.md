@@ -4,6 +4,18 @@
 <!-- 配置先: docs/features/daemon-hotkey-clipboard/daemon/test-design.md -->
 <!-- システムテストは system-test-design.md に記述。本ファイルは IT + UT のみ -->
 
+## 0. 外部 I/O 依存マップ
+
+| テスト | 外部 I/O | 依存対象 | 対処 |
+|-------|---------|---------|------|
+| `HotkeyManager` UT | OS ホットキー登録 API | `HotkeyBackend` trait | `MockBackend` で差し替え |
+| `HotkeyEventLoop` IT | OS ホットキー API + OS クリップボード | `HotkeyBackend` / `ClipboardWriter` trait | `MockBackend` + `MockClipboardWriter` で差し替え |
+| `ClearTimer` UT | `tokio::time::sleep` | `tokio::time::pause()` / `advance()` で制御 | `#[tokio::test]` + `tokio::time::pause` |
+| IPC ハンドラ IT | UDS / Named Pipe | `tempfile` + テスト用ソケットパス | 既存 daemon IT パターン準拠 |
+| CLI 出力 IT (list OS status) | daemon IPC | `MockDaemon` | `assert_cmd` + mock |
+
+**`MockBackend` と `MockClipboardWriter` の配置**: `crates/shikomi-daemon/tests/common/mock_backend.rs` / `mock_clipboard.rs`。テスト専用コードを本番コードに混入させない（`#[cfg(test)]` ガード不要、`tests/` 配下に物理分離）。
+
 ## 1. テスト配置方針
 
 | テストレベル | 配置先 | 実行コマンド |

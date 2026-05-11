@@ -136,17 +136,27 @@ sequenceDiagram
     end
 ```
 
-### 2.5 `ClipboardWriter`
+### 2.5 `ClipboardWriter` trait と実装
 
-`arboard::Clipboard` の薄いラッパ。
+**`ClipboardWriter` を trait として定義する**（テスト時の `MockClipboardWriter` 差し替えを可能にするため）。
 
-| メソッド | 説明 |
-|---------|------|
-| `new()` | `arboard::Clipboard::new()` でインスタンス化。失敗時は daemon 起動を継続し警告ログのみ（クリップボード未対応環境でも CLI は動く） |
-| `write(value: &[u8])` | `clipboard.set_text(...)` で OS クリップボードに書き込み |
-| `clear()` | `clipboard.set_text("")` で空文字書き込み |
+```
+trait ClipboardWriter: Send + 'static {
+    fn write(&mut self, value: &[u8]) -> Result<(), ClipboardError>;
+    fn clear(&mut self) -> Result<(), ClipboardError>;
+}
+```
 
-**Linux Wayland**: `arboard` v3.6+ の `wayland-data-control` feature を有効化することで Wayland プロトコルに対応。feature flag ではなく依存 feature での切り替え。
+（上記は Rust 関数シグネチャのプレーンテキスト表記）
+
+| 実装型 | 説明 |
+|-------|------|
+| `ArboardClipboardWriter` | `arboard::Clipboard` を内部で保持する本番実装 |
+| `MockClipboardWriter` (テスト用) | `Vec<String>` で操作履歴を保持。`daemon/test-design.md §2` 参照 |
+
+`ArboardClipboardWriter::new()` 失敗時（ヘッドレス環境 / クリップボード未対応）は `NullClipboardWriter`（全操作が noop / 警告ログのみ）にフォールバックする。daemon 起動は継続。
+
+**Wayland**: `arboard` v3.6+ の `wayland-data-control` feature を有効化することで Wayland プロトコルに対応。
 
 ### 2.6 `ClearTimer`
 
@@ -162,7 +172,21 @@ secret エントリの自動クリアタスク管理。
 2. タスク内: `tokio::time::sleep(duration)` → `writer.clear()`
 3. shutdown シグナル受信時: タイマータスクを `abort()`
 
-### 2.7 Linux バックエンド選択（セッション検出）
+### 2.7 OS 通知設計（R1-HK-13 / R1-HK-14）
+
+`notify-rust` crate を使用してユーザーへのフィードバックを提供する。
+
+| 状況 | 通知内容 | 通知タイプ |
+|------|---------|-----------|
+| vault ロック中のホットキー押下（R1-HK-13）| 「vault がロック中です。`shikomi vault unlock` を実行してください」| Low urgency（Linux）/ Info（Windows/macOS）|
+| クリップボード書き込み失敗（R1-HK-14）| 「クリップボードへの書き込みに失敗しました」| Normal urgency |
+| OS ホットキー登録失敗（起動時）| 「ホットキー `{combo}` の登録に失敗しました。他のアプリと競合している可能性があります」| Normal urgency |
+
+**通知の非ブロック性**: `notify-rust` の送信は非同期で行い、通知送信失敗は `tracing::warn!` でログのみ（通知システムの不在がアプリ動作を止めない）。
+
+**サイレント失敗ポリシーの修正**: 旧設計では vault ロック中をサイレント失敗としていたが、**R1-HK-13 で OS 通知に変更**する。セキュリティリスクがない情報（「ロック中である」という事実）の通知は許容する。
+
+### 2.8 Linux バックエンド選択（セッション検出）
 
 ```mermaid
 flowchart LR
@@ -179,6 +203,21 @@ flowchart LR
 - `XDG_SESSION_TYPE=wayland` かつ `ashpd::desktop::global_shortcuts::GlobalShortcuts::new()` が成功した場合のみ Wayland バックエンドを選択
 - portal 応答がない（GNOME 43 以前 / KDE Plasma 5 以前）場合は X11 バックエンドにフォールバック
 - フォールバック時は `tracing::warn!` でセッション種別と理由を記録
+
+### 2.9 監査ログ設計（R1-HK-12）
+
+ホットキー発火イベントは `tracing::info!(target: "shikomi::audit")` で記録する。
+
+| フィールド | 内容 | 例 |
+|-----------|------|-----|
+| `event` | イベント種別 | `"hotkey_triggered"` |
+| `record_id` | 発火したエントリの RecordId | `"uuid-xxxx"` |
+| `combo` | ホットキー組み合わせ | `"alt+ctrl+1"` |
+| `result` | 結果 | `"injected"` / `"skipped:vault_locked"` / `"skipped:not_found"` / `"error:clipboard"` |
+| `secret` | secret フラグ | `true` / `false` |
+
+**記録しない情報**: ペイロード値（平文・暗号文問わず）、マスターパスワード、VEK。
+**ログレベル**: `info`（デフォルトで記録）。`SHIKOMI_DAEMON_LOG` 環境変数で制御可能。
 
 ## 3. CLI 変更（`shikomi-cli`）
 
@@ -204,13 +243,18 @@ flowchart LR
 1  メールアドレス  [ctrl+alt+1]  plaintext
 ```
 
+> **Phase 切替注意**: `shikomi-cli` の `add.rs` / `edit.rs` は現在 Phase 1（SQLite 直結）で動作している。本 feature 実装時に IPC 経由（Phase 2）へ切り替える。切替は `shikomi-cli::main.rs` のコンポジションルートのみ変更し、UseCase 層は変更しない。詳細は `feature-spec.md §7` 参照。
+
 ## 4. 外部連携（新規依存 crate）
 
-| crate | バージョン方針 | 追加先 | 根拠 |
-|-------|-------------|--------|------|
-| `arboard` | `^3.6` (minor ピン) | `shikomi-daemon` | Wayland `wayland-data-control` feature が 3.6+ で安定。`1Password` メンテ、MIT ライセンス |
-| `tauri-plugin-global-shortcut` | `^2.2` (minor ピン) | `shikomi-daemon` | Tauri v2 公式プラグイン。macOS / Windows / Linux X11 対応 |
-| `ashpd` | `^0.13` (minor ピン) | `shikomi-daemon` | Wayland XDG Portal の Rust バインディング。`global_shortcuts` feature が 0.13 で安定 |
+| crate | バージョン方針 | 追加先 | 根拠 | セキュリティ審査 |
+|-------|-------------|--------|------|----------------|
+| `arboard` | `^3.6` (minor ピン) | `shikomi-daemon` | Wayland `wayland-data-control` feature が 3.6+ で安定。`1Password` メンテ、MIT ライセンス | **RustSec: advisory なし（2026-05 確認）**。1Password 社がメンテし、OSS セキュリティ審査が定期実施されている。`cargo-deny` で継続監視 |
+| `tauri-plugin-global-shortcut` | `^2.2` (minor ピン) | `shikomi-daemon` | Tauri v2 公式プラグイン。macOS / Windows / Linux X11 対応 | **RustSec: advisory なし（2026-05 確認）**。tauri-apps org 公式、Apache-2.0/MIT。tauri-apps/plugins-workspace リポジトリで一元管理 |
+| `ashpd` | `^0.13` (minor ピン) | `shikomi-daemon` (Linux only) | Wayland XDG Portal の Rust バインディング。`global_shortcuts` feature が 0.13 で安定 | **RustSec: advisory なし（2026-05 確認）**。LGPL-2.1+。zbus を基盤とし、GNOME / KDE 公式 portal 仕様に準拠。OSS で監査可能 |
+| `notify-rust` | `^4.11` (minor ピン) | `shikomi-daemon` | OS ネイティブ通知（R1-HK-13 / R1-HK-14）。Linux: libnotify / macOS: NSUserNotification / Windows: Windows Toast | **RustSec: advisory なし（2026-05 確認）**。MIT ライセンス。純粋 OS API ラッパで攻撃面が小さい |
+
+**`cargo-deny` 監視方針**: 上記 4 crate を `deny.toml` の `skip` 対象に追加せず、advisory 検出 → CI 失敗を二重防御として機能させる。
 
 **Linux-only feature**: `ashpd` は `#[cfg(target_os = "linux")]` ガードで Linux ビルドにのみ依存させる。macOS / Windows ビルドへ混入しない。
 
@@ -218,11 +262,13 @@ flowchart LR
 
 | 脅威 | 対策 |
 |------|------|
-| 暗号化 vault ロック中のクリップボード投入 | `VekCache::is_locked()` チェックでサイレントスキップ（`R1-HK-07`） |
-| クリップボード内 secret の残留 | `ClearTimer` が 30 秒後に `clear()` を実行（`R1-HK-05`） |
-| HotkeyEvent の偽装 | UDS / Named Pipe のピア UID 検証は IPC 層で担保済み。ホットキーイベントは OS カーネル経由のため偽装不可 |
+| 暗号化 vault ロック中のクリップボード投入 | OS 通知で「ロック中」をユーザーに伝え、クリップボード書き込みをスキップ（R1-HK-13）|
+| クリップボード内 secret の残留 | `ClearTimer` が 30 秒後に `clear()` を実行（R1-HK-05）|
+| ホットキー発火の監査証跡 | `tracing::info!(target: "shikomi::audit", ...)` で RecordId・結果を記録。ペイロード値は記録しない（R1-HK-12）|
+| IPC 接続の認証 | `crates/shikomi-daemon/src/permission/peer_credential/` 実装済み（Issue #26）。Unix: `SO_PEERCRED` UID 検証 / Windows: `GetNamedPipeClientProcessId` SID 検証（`process-model.md §4.2`）。本 feature は既存機構を継承 |
+| HotkeyEvent の偽装 | UDS / Named Pipe のピア UID/SID 検証は上記実装済みの IPC 層で担保。ホットキーイベント自体は OS カーネル経由のため偽装不可 |
 | ホットキー組み合わせ列挙攻撃 | 同一プロセス（daemon）内のみがイベントを受信。他プロセスへの露出なし |
-| `arboard` による機密値のメモリ残留 | クリップボード API は OS が管理するヒープを使用。`zeroize` の適用範囲外。`ClearTimer` が上書きするまでの 30 秒は acceptable リスクとして文書化 |
+| `arboard` による機密値のメモリ残留 | クリップボード API は OS が管理するヒープを使用。`zeroize` 適用範囲外。`ClearTimer` が 30 秒以内に上書きするまでは acceptable リスクとして `docs/architecture/context/threat-model.md` に明記 |
 
 ## 6. エラーハンドリング方針
 

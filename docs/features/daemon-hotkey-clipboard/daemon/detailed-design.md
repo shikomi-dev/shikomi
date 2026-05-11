@@ -27,23 +27,29 @@
 
 **理由**: `dyn HotkeyBackend` は `async_trait` と組み合わせると `Box<dyn Future + Send>` が連鎖してヒープ確保が増える。`BackendEnum` は enum の match で静的ディスパッチし、ホットキーイベントループの hot path でのアロケーションを避ける。
 
-## 2. `HotkeyManager` 詳細
+## 2. `CLEAR_TIMEOUT` 定数
 
-### 2.1 フィールド
+`shikomi-core::constants::CLEAR_TIMEOUT_SECS: u64 = 30` に定義する（`crates/shikomi-core/src/constants.rs`）。
+
+`ClearTimer::schedule` は `Duration::from_secs(shikomi_core::constants::CLEAR_TIMEOUT_SECS)` を使用する。テストコードも同定数を参照し、マジックナンバー 30 をソースに散在させない。
+
+## 3. `HotkeyManager` 詳細
+
+### 3.1 フィールド
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `backend` | `Arc<BackendEnum>` | ホットキー OS バックエンド |
 | `registered` | `HashSet<String>` | 登録済みコンボ文字列の集合（Drop 時解除に使用） |
 
-### 2.2 `register_all` 処理順序
+### 3.2 `register_all` 処理順序
 
 1. `vault.hotkey_entries()` をイテレート
 2. 各エントリの `hotkey.as_str()` を `backend.register(combo)` に渡す
 3. 成功した場合のみ `registered.insert(combo)` する
 4. 失敗時は `tracing::error!` でログ出力し継続（他ホットキーは登録する）
 
-### 2.3 `register_one` / `unregister_one` の使用コンテキスト
+### 3.3 `register_one` / `unregister_one` の使用コンテキスト
 
 IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`assign_hotkey` が成功した場合のみ OS 登録を試みる（ドメイン層が一次防衛、OS 登録は二次）。
 
@@ -54,23 +60,35 @@ IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`ass
 
 順序を変えると不整合が生じるため、上記順序を必ず守る。
 
-### 2.4 Drop 実装
+### 3.4 Drop 実装
 
 `drop()` で `registered` の全コンボを `backend.unregister` でループ解除。失敗は無視（`tracing::warn!` のみ）。
 
-## 3. `HotkeyEventLoop` 詳細
+## 4. `HotkeyEventLoop` 詳細
 
-### 3.1 フィールド
+### 4.1 フィールド
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `backend` | `Arc<BackendEnum>` | イベントストリーム取得元 |
 | `vault` | `Arc<Mutex<Vault>>` | ホットキー → レコード解決 |
 | `vek_cache` | `VekCache` | ロック状態判定 |
-| `clipboard` | `ClipboardWriter` | クリップボード書き込み |
+| `clipboard` | `Arc<Mutex<dyn ClipboardWriter>>` | クリップボード書き込み（trait オブジェクト、テスト時に `MockClipboardWriter` に差し替え可能） |
 | `clear_timer` | `ClearTimer` | 自動クリアタイマー |
 
-### 3.2 イベントループ処理
+### 4.1.5 ペイロード取得とMutex保持時間
+
+`Vault::find_by_hotkey` は `Option<&Record>` を返す（借用）。Mutex Guard 存命中にペイロード値を **`clone()` して `Vec<u8>` に取り出してから** Mutex Guard を drop する。クリップボード書き込み（OS API）は Mutex 外で実行する。
+
+処理順序（Mutex 保持の明示）:
+1. `vault.lock().await` で MutexGuard 取得
+2. `guard.find_by_hotkey(combo)` → `Option<&Record>`
+3. `record.payload.clone_value()` でペイロードを `Vec<u8>` にコピー（clone）
+4. `record.kind` を `RecordKind` としてコピー
+5. **MutexGuard を drop**（`drop(guard)`）
+6. `clipboard.write(&cloned_value)` で OS クリップボードに書き込み（Mutex 外）
+
+### 4.2 イベントループ処理
 
 `tokio::select!` で `backend.event_stream()` と `shutdown_rx` を多重化。
 
@@ -85,25 +103,25 @@ IPC `add` / `edit` ハンドラが `Vault::assign_hotkey` の後に呼ぶ。`ass
 
 **Mutex 保持時間の最小化**: vault の Mutex は「レコード検索 + ペイロード取得」のみに限定し、クリップボード書き込み（OS API 呼び出し）は Mutex 外で行う。
 
-## 4. `ClipboardWriter` 詳細
+## 5. `ClipboardWriter` 詳細
 
-### 4.1 構成
+### 5.1 構成
 
-`arboard::Clipboard` は `Send` だが `Sync` ではないため、`Mutex<arboard::Clipboard>` で包む。
+`ArboardClipboardWriter` は `Arc<Mutex<dyn ClipboardWriter>>` として `HotkeyEventLoop` に注入される。`arboard::Clipboard` は `Send` だが `Sync` ではないため、`ArboardClipboardWriter` 内部で `Mutex` で包む。
 
-### 4.2 ヘッドレス CI 対応
+### 5.2 ヘッドレス CI 対応
 
 `arboard::Clipboard::new()` は X11 / Wayland display 接続を要求する。CI ヘッドレス環境では:
 - Linux: `Xvfb` を起動して `DISPLAY=:99` を設定（`test-daemon.yml` ジョブで制御）
 - または: `SHIKOMI_DISABLE_CLIPBOARD=1` 環境変数でクリップボード機能を無効化し daemon を起動できる（テスト用エスケープハッチ）
 
-### 4.3 Wayland `arboard` 設定
+### 5.3 Wayland `arboard` 設定
 
 `arboard` v3.6+ の依存 feature: `wayland-data-control`。`shikomi-daemon/Cargo.toml` で `arboard = { version = "^3.6", features = ["wayland-data-control"] }` と宣言。Linux 以外のビルドでは `target_os` 条件で feature が不要になるが、cargo は feature の有無を binary に影響させない。
 
-## 5. `ClearTimer` 詳細
+## 6. `ClearTimer` 詳細
 
-### 5.1 状態遷移
+### 6.1 状態遷移
 
 ```mermaid
 stateDiagram-v2
@@ -114,21 +132,21 @@ stateDiagram-v2
     Running --> Idle: shutdown abort
 ```
 
-### 5.2 フィールド
+### 6.2 フィールド
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
 | `handle` | `Option<JoinHandle<()>>` | 実行中タイマータスクのハンドル |
 
-### 5.3 `schedule` 処理
+### 6.3 `schedule` 処理
 
 1. `self.handle.take().map(|h| h.abort())` で既存タイマーをキャンセル
 2. `tokio::spawn(async move { tokio::time::sleep(duration).await; writer.clear().await; })` で新タスクを spawn
 3. `self.handle = Some(handle)` でハンドルを保存
 
-## 6. Linux セッション検出詳細
+## 7. Linux セッション検出詳細
 
-### 6.1 検出アルゴリズム
+### 7.1 検出アルゴリズム
 
 | ステップ | 処理 |
 |---------|------|
@@ -140,14 +158,14 @@ stateDiagram-v2
 
 タイムアウト: ステップ 3 の ashpd probe は `tokio::time::timeout(Duration::from_secs(3), ...)` でガードする。3 秒以内に応答がなければ X11 バックエンドにフォールバック。
 
-### 6.2 `cfg` 分岐方針
+### 7.2 `cfg` 分岐方針
 
 - `WaylandBackend` と `ashpd` 依存は `#[cfg(target_os = "linux")]` で囲む
 - macOS / Windows ビルドに ashpd が混入しないことを `cargo check --target x86_64-pc-windows-msvc` で CI 検証する
 
-## 7. IPC ハンドラ変更詳細
+## 8. IPC ハンドラ変更詳細
 
-### 7.1 `add.rs` 拡張
+### 8.1 `add.rs` 拡張
 
 `IpcRequest::AddRecord` の `hotkey: Option<String>` フィールドを処理する追加ステップ:
 
@@ -156,7 +174,7 @@ stateDiagram-v2
 3. `HotkeyConflict` → `IpcErrorCode::HotkeyConflict` に写像
 4. vault 更新後に `manager.register_one(combo)` で OS 登録
 
-### 7.2 `edit.rs` 拡張
+### 8.2 `edit.rs` 拡張
 
 | 条件 | 処理 |
 |------|------|
@@ -165,7 +183,7 @@ stateDiagram-v2
 | `hotkey.is_some()` | `Hotkey::parse` → `manager.unregister_one(旧combo)` → `Vault::assign_hotkey` → `manager.register_one(新combo)` |
 | どちらでもない | ホットキー変更なし（従来動作） |
 
-## 8. `run()` コンポジションルート変更
+## 9. `run()` コンポジションルート変更
 
 既存の `run()` に以下を追加注入:
 
@@ -176,7 +194,7 @@ stateDiagram-v2
 
 **既存コンポーネントへの影響**: `IpcServer::new` のシグネチャに `Arc<HotkeyManager>` を追加し、ハンドラ層に注入する。
 
-## 9. 依存 crate バージョンピン方針
+## 10. 依存 crate バージョンピン方針
 
 | crate | バージョン制約 | ピン根拠 |
 |-------|-------------|---------|
