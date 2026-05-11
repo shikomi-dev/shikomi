@@ -1,7 +1,7 @@
 //! IpcServer — listener / accept ループ / 接続ごとのタスク管理。
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -45,6 +45,8 @@ pub struct IpcServer {
     backoff: Arc<Mutex<UnlockBackoff>>,
     /// Issue #89: OS ホットキー登録管理（IPC add/edit ハンドラが使用）。
     hotkey_manager: Arc<HotkeyManager>,
+    /// Sub-D (#97): クリップボード自動消去カウントダウン基点時刻（HotkeyEventLoop と共有）。
+    countdown_started_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl IpcServer {
@@ -57,6 +59,7 @@ impl IpcServer {
         cache: VekCache,
         backoff: Arc<Mutex<UnlockBackoff>>,
         hotkey_manager: Arc<HotkeyManager>,
+        countdown_started_at: Arc<Mutex<Option<Instant>>>,
     ) -> Self {
         Self {
             listener: Some(listener),
@@ -65,6 +68,7 @@ impl IpcServer {
             cache,
             backoff,
             hotkey_manager,
+            countdown_started_at,
         }
     }
 
@@ -181,9 +185,10 @@ impl IpcServer {
                     let cache = self.cache.clone();
                     let backoff = Arc::clone(&self.backoff);
                     let hotkey_manager = Arc::clone(&self.hotkey_manager);
+                    let countdown_started_at = Arc::clone(&self.countdown_started_at);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
+                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, countdown_started_at, shutdown_for_task)
                             .await;
                     });
                 }
@@ -250,9 +255,10 @@ impl IpcServer {
                     let cache = self.cache.clone();
                     let backoff = Arc::clone(&self.backoff);
                     let hotkey_manager = Arc::clone(&self.hotkey_manager);
+                    let countdown_started_at = Arc::clone(&self.countdown_started_at);
                     let shutdown_for_task = shutdown.clone();
                     connections.spawn(async move {
-                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, shutdown_for_task)
+                        handle_connection(stream, repo, vault, cache, backoff, hotkey_manager, countdown_started_at, shutdown_for_task)
                             .await;
                     });
                 }
@@ -280,6 +286,7 @@ async fn handle_connection<S>(
     cache: VekCache,
     backoff: Arc<Mutex<UnlockBackoff>>,
     hotkey_manager: Arc<HotkeyManager>,
+    countdown_started_at: Arc<Mutex<Option<Instant>>>,
     mut shutdown: watch::Receiver<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -366,6 +373,7 @@ async fn handle_connection<S>(
                             backoff: &backoff,
                             migration: &migration,
                             hotkey_manager: &hotkey_manager,
+                            countdown_started_at: &countdown_started_at,
                         };
 
                         let response = dispatch_v2(&ctx, client_state, request).await;

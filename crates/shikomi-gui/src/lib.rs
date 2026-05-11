@@ -4,6 +4,7 @@
 //!
 //! - `ipc_client`: Tauri Commands ハンドラ群（Sub-B: IPC ブリッジ実装）
 //! - `ipc_client::error`: `GUIError` enum（SolidJS への統一エラー型）
+//! - `system_tray`: システムトレイ初期化 + カウントダウンタスク（Sub-D: #97）
 //!
 //! ## 起動経路
 //!
@@ -14,11 +15,13 @@
 //! `docs/architecture/tech-stack.md §2.6`
 
 pub mod ipc_client;
+pub(crate) mod system_tray;
 
 use ipc_client::{
     commands::{
-        add_entry, assign_hotkey, decrypt_vault, delete_entry, encrypt_vault, get_vault_status,
-        list_entries, remove_hotkey, unlock_vault, update_entry,
+        add_entry, assign_hotkey, decrypt_vault, delete_entry, encrypt_vault,
+        get_clipboard_countdown, get_vault_status, list_entries, remove_hotkey, unlock_vault,
+        update_entry,
     },
     AppState, GuiIpcClient,
 };
@@ -34,6 +37,7 @@ use tauri::Manager as _;
 /// Tauri ランタイムの初期化または起動に失敗した場合に `tauri::Error` を返す。
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // AppState を初期化（None = daemon 未接続）
             app.manage::<AppState>(tokio::sync::Mutex::new(None));
@@ -63,6 +67,10 @@ pub fn run() -> tauri::Result<()> {
                 }
             });
 
+            // システムトレイ初期化（Sub-D #97: REQ-TRAY-01〜05）
+            // daemon 接続の前後どちらでも可（countdown タスクは daemon 未接続を None で扱う）
+            system_tray::setup(app)?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -76,6 +84,7 @@ pub fn run() -> tauri::Result<()> {
             encrypt_vault,
             decrypt_vault,
             unlock_vault,
+            get_clipboard_countdown,
         ])
         .run(tauri::generate_context!())
 }

@@ -120,6 +120,16 @@ pub enum IpcResponse {
     /// **V2 (Sub-F)**: `vault decrypt` 成功 (Sub-F §F-F2)。
     /// 暗号化 vault → 平文 vault 戻し完了。VEK / 24 語は IPC に乗らない。
     Decrypted,
+
+    // ---------------- Sub-D (#97) システムトレイ ----------------
+    /// **V2 (Sub-D)**: `GetClipboardStatus` への応答。
+    ///
+    /// - `Some(n)`: 残 n 秒でカウントダウン中
+    /// - `None`: カウントダウン非アクティブ（投入なし or タイマー発火済み）
+    ClipboardStatus {
+        /// クリップボード自動消去までの残秒。`None` は非アクティブ。
+        remaining_secs: Option<u64>,
+    },
 }
 
 impl IpcResponse {
@@ -141,6 +151,7 @@ impl IpcResponse {
             Self::Rekeyed { .. } => "rekeyed",
             Self::Encrypted { .. } => "encrypted",
             Self::Decrypted => "decrypted",
+            Self::ClipboardStatus { .. } => "clipboard_status",
         }
     }
 }

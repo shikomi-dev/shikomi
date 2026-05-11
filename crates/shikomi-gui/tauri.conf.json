@@ -22,6 +22,17 @@
       }
     ]
   },
+  "plugins": {
+    "shell": {
+      "scope": [
+        {
+          "name": "shikomi",
+          "cmd": "shikomi",
+          "args": [{ "validator": "^start$" }]
+        }
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["deb", "rpm", "appimage", "nsis", "msi", "dmg"],

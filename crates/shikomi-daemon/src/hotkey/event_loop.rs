@@ -10,7 +10,7 @@
 //! 詳細: `docs/features/daemon-hotkey-clipboard/daemon/detailed-design.md §4.1.5`
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use shikomi_core::{Hotkey, RecordKind, CLEAR_TIMEOUT_SECS};
@@ -37,18 +37,25 @@ pub struct HotkeyEventLoop {
     clipboard: Arc<Mutex<dyn ClipboardWriter + Send>>,
     notifier: Arc<dyn Notifier>,
     clear_timer: ClearTimer,
+    /// クリップボード投入開始時刻。GUI カウントダウン表示用（Sub-D #97）。
+    ///
+    /// `Some(t)`: 残秒計算の基点。`None`: カウントダウン非アクティブ。
+    /// `Arc<Mutex<...>>` で `IpcServer` の `V2Context` と共有する。
+    countdown_started_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl HotkeyEventLoop {
     /// `HotkeyEventLoop` を構築する。
     ///
     /// `clipboard`: `SHIKOMI_DISABLE_CLIPBOARD=1` の場合 `NullClipboardWriter` を渡す。
+    /// `countdown_started_at`: GUI カウントダウン表示用の共有状態（`IpcServer` と共有）。
     pub fn new(
         backend: Arc<BackendEnum>,
         vault: Arc<Mutex<Vault>>,
         vek_cache: VekCache,
         clipboard: Arc<Mutex<dyn ClipboardWriter + Send>>,
         notifier: Arc<dyn Notifier>,
+        countdown_started_at: Arc<Mutex<Option<Instant>>>,
     ) -> Self {
         Self {
             backend,
@@ -57,6 +64,7 @@ impl HotkeyEventLoop {
             clipboard,
             notifier,
             clear_timer: ClearTimer::new(),
+            countdown_started_at,
         }
     }
 
@@ -73,6 +81,7 @@ impl HotkeyEventLoop {
                     let _ = changed;
                     tracing::debug!("HotkeyEventLoop: shutdown received");
                     self.clear_timer.abort();
+                    *self.countdown_started_at.lock().await = None;
                     return;
                 }
                 event = stream.next() => {
@@ -196,6 +205,8 @@ impl HotkeyEventLoop {
 
                 // --- Step 7: Secret レコードは ClearTimer をスケジュール ---
                 if matches!(record_kind, RecordKind::Secret) {
+                    // GUI カウントダウン用の投入時刻を記録（Sub-D #97）。
+                    *self.countdown_started_at.lock().await = Some(Instant::now());
                     self.clear_timer.schedule(
                         Duration::from_secs(CLEAR_TIMEOUT_SECS),
                         Arc::clone(&self.clipboard),
