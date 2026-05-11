@@ -26,6 +26,43 @@ Issue #65（Windows AtomicWrite rename 失敗）の修正対象が触る外部 I
 
 ---
 
+## 0.1 Issue #86: Windows `TempDir` DACL 正規化要件（`normalize_tempdir_dacl` ヘルパ設計）
+
+> **問題軸**: Issue #65（VM レベル rename 遅延 = Bug-G-002〜G-008 articulate 済）とは**独立した別問題**。Issue #86 の問題軸は「fixture 生成時の DACL 継承状態」であり、Issue #65 の「AtomicWriter rename retry タイミング」とは直交する。
+
+### 問題の根拠
+
+`tempfile::TempDir::new()` が `windows-latest` CI ランナー上で作成するディレクトリは、**親ディレクトリ（`%TEMP%`）から DACL を継承した状態**（`SE_DACL_PROTECTED` ビット未設定）を持つ。
+
+`SqliteVaultRepository::from_directory` は内部で `PermissionGuard::verify_dir` を呼ぶ。この 4 不変条件チェックは
+
+① `SE_DACL_PROTECTED` セット確認 → **継承 DACL = 不変条件① 違反**
+
+であるため、TC-I24〜I29 系（Windows DACL 検証 TC）の vault fixture 生成時に `verify_dir` が `PersistenceError::InvalidPermission { actual: "inherited DACL (SE_DACL_PROTECTED not set)" }` を返し、**テストが意図したアサーション（例: `EncryptionUnsupported`）に到達する前に失敗する**。
+
+### `normalize_tempdir_dacl` ヘルパ設計
+
+**配置先（infra 側）**: `crates/shikomi-infra/tests/helpers/mod.rs`（`#[cfg(windows)]` ガード）
+
+**配置先（cli 側）**: `crates/shikomi-cli/tests/common/windows_dacl.rs`（`#[cfg(windows)]` ガード、infra 側と同実装）
+
+**呼出タイミング**: `TempDir::new()` 直後、`SqliteVaultRepository::from_directory` / `SqliteVaultRepository::with_dir` を呼ぶ前
+
+**アルゴリズム**（Windows API 3 ステップ）:
+
+1. `GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION, ...)` で現在の所有者 SID を取得
+2. `SetEntriesInAclW` で所有者 SID のみの `ACCESS_ALLOWED_ACE`（`AccessMask = GENERIC_ALL`）から新規 DACL を構築
+3. `SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ...)` で `SE_DACL_PROTECTED` ビットを立てた状態で新規 DACL を適用（継承 ACE を破棄）
+
+**副作用**: `PermissionGuard::verify_dir` の 4 不変条件（①`SE_DACL_PROTECTED` / ②`AceCount==1` / ③トラスティ SID = 所有者 SID / ④`AccessMask` 一致）を全て満たす状態に正規化する。
+
+### reviewer 却下基準
+
+- Windows vault fixture テスト（`#[cfg(windows)]` 付き TC で `TempDir` を使用するもの）で `normalize_tempdir_dacl` 呼出が欠落している PR → **[却下]**（`verify_dir` が DACL 継承により先行失敗し、TC の意図したアサーションが検証されない）
+- `normalize_tempdir_dacl` の代わりに `SqliteVaultRepository::from_directory` を `verify_dir` スキップ付きのテスト用オーバーロードで回避する実装 → **[却下]**（本番 API の意味論を変えずに fixture を正規化するのが正しい設計。`PermissionGuard::verify_dir` のスキップは Fail Fast 原則違反）
+
+---
+
 ## TC-I01: 公開 API ドキュメント確認
 
 | 項目 | 内容 |

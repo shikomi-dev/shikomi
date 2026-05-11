@@ -140,3 +140,17 @@
 *- **`#![cfg(windows)]` テストは Linux で skip されるため、tracing wire format 変更を含むリファクタは CI 経由で必ず確認する**チェックリスト項目を追加（坂田が implementing checklist 化）。ローカル `cargo test` だけで「等価」と断言してはならない*
 *- **`Display` vs `Debug` の wire format 差**は tracing の仕様。`%expr` (Display) はクォート無し `key=value`、`?expr` (Debug) や値直接（`outcome = some_str`）はクォート付き `key="value"` になる。設計書 SSoT は **`%` 経路でのクォート無し**を契約として固定し、subscriber 側は `outcome=exhausted` 文字列（クォート無し）でマッチさせる前提で実装する*
 *- **設計書側 SSoT 整合の徹底**: コード側で wire format を変更する PR は、設計書側の SSoT 記述（`outcome="..."` 等の wire format 例示）も同 PR で更新する責務を負う。今回は v8.5 反映時点で `%outcome` 契約は明記したが wire format クォート無しの実例を見落としており、subscriber 開発者が古い記述で grep を書く罠を残しかけた（ペガサス指摘 + ペテルギウス指摘で発見）。今後は **wire format 変更 = 設計書全 grep + 同期更新**を articulate チェックリスト化*
+
+---
+
+*改訂 v9.0: セル（設計担当）/ 2026-05-11 — Issue #86（fix(ci): Windows CI DACL テスト失敗）反映。Issue #65（VM レベル rename 遅延 = Bug-G-002〜G-008 articulate 済）とは**独立した別問題軸**として新規 articulate。*
+
+*問題の核心: `tempfile::TempDir::new()` が `windows-latest` CI ランナー上で作成するディレクトリは、親ディレクトリ（`%TEMP%`）から DACL を継承した状態（`SE_DACL_PROTECTED` ビット未設定）を持つ。`PermissionGuard::verify_dir` の不変条件①（`SE_DACL_PROTECTED` チェック）が TempDir の DACL 継承により先行失敗し、TC-I24〜I29 系の Windows DACL 検証 TC が意図したアサーションに到達できない。*
+
+*本対応:*
+
+*- **§0.1「Issue #86: Windows `TempDir` DACL 正規化要件」を新規追加** — `normalize_tempdir_dacl` ヘルパの設計（`crates/shikomi-infra/tests/helpers/mod.rs` + `crates/shikomi-cli/tests/common/windows_dacl.rs`、`#[cfg(windows)]` ガード）、呼出タイミング（`TempDir::new()` 直後・`SqliteVaultRepository::from_directory` 前）、Windows API 3 ステップアルゴリズム（`GetNamedSecurityInfoW` → `SetEntriesInAclW` → `SetNamedSecurityInfoW` with `PROTECTED_DACL_SECURITY_INFORMATION`）、reviewer 却下基準（`normalize_tempdir_dacl` 欠落 → [却下]）を明記*
+
+*- **Issue #65 との問題軸分離**: Issue #65 = AtomicWriter rename タイミング（Bug-G-002〜G-008、VM レベルロック介入）/ Issue #86 = `TempDir` fixture DACL 継承（DACL 正規化漏れ）。両者は現象が異なり、#86 は #65 の派生ではなく独立した設計上の取りこぼし*
+
+*対応 Issue: #86 / 参照: `./index.md §0.1`*
