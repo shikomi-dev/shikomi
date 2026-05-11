@@ -99,6 +99,72 @@ skip = [
     { name = "windows-link", version = "0.1" },
     { name = "windows-result", version = "0.3" },
     { name = "windows-strings", version = "0.4" },
+    # Tauri v2 (Sub-A #94) 依存チェーンによる複数バージョン共存。
+    # gtk-rs が bitflags 1.x を要求、tauri/selectors が 2.x を使用
+    { name = "bitflags", version = "1" },
+    # Tauri が getrandom 0.3.x を要求、uuid の cfb 経由で 0.4.x も共存
+    { name = "getrandom", version = "0.3" },
+    # schemars 0.8 が hashbrown 0.12 / indexmap 1.x を引く（0.14/0.15 スキップ既存）
+    { name = "hashbrown", version = "0.12" },
+    { name = "indexmap", version = "1" },
+    # glib-macros が heck 0.4.1 を要求、tauri/system-deps が 0.5.x を使用
+    { name = "heck", version = "0.4" },
+    # tauri-codegen → ico が png 0.17.x を要求、tray-icon が png 0.18.x を使用
+    { name = "png", version = "0.17" },
+    # gtk3-macros が proc-macro-crate 1.x を、glib-macros が 2.x を要求
+    { name = "proc-macro-crate", version = "1" },
+    # toml/toml_edit/serde_spanned の複数バージョン（tauri-build/tauri-utils 依存チェーン）
+    { name = "serde_spanned", version = "0.6" },
+    # proc-macro-error が syn 1.x を要求（ワークスペースは syn 2.x 採用）
+    { name = "syn", version = "1" },
+    { name = "toml", version = "0.8" },
+    # toml 0.9.12 / 1.1.2 の spec バージョン付き表記（cargo-deny は full version で照合）
+    { name = "toml", version = "0.9.12" },
+    { name = "toml_datetime", version = "0.6" },
+    { name = "toml_datetime", version = "0.7.5" },
+    { name = "toml_edit", version = "0.19" },
+    { name = "winnow", version = "0.5" },
+    { name = "winnow", version = "0.7" },
+    # Tauri v2 依存チェーンによる追加の複数バージョン共存（Sub-A #94）。
+    # swift-rs が base64 0.21 を要求、reqwest/plist/wry が 0.22 を使用
+    { name = "base64", version = "0.21" },
+    # zxcvbn → derive_builder が darling 0.20 を要求、serde_with が 0.23 を使用
+    { name = "darling", version = "0.20" },
+    { name = "darling_core", version = "0.20" },
+    { name = "darling_macro", version = "0.20" },
+    # Tauri の dirs 6.x と既存の dirs 5.x が共存（dirs-sys 0.4/0.5 も連動）
+    { name = "dirs", version = "5" },
+    { name = "dirs-sys", version = "0.4" },
+    # glib-macros が proc-macro-crate 2.x を要求（0.19 スキップ既存、3.x が新系）
+    { name = "proc-macro-crate", version = "2" },
+    # tauri-utils が quick-xml 0.37/0.39 の複数バージョンを引く
+    { name = "quick-xml", version = "0.37" },
+    # wasi-sdk / r-efi の複数バージョン（Tauri の wasm32 サポートチェーン）
+    { name = "r-efi", version = "5" },
+    # redox_users 0.4 は dirs 5.x 経由、0.5 は dirs 6.x 経由
+    { name = "redox_users", version = "0.4" },
+    # toml_edit 0.20 は glib-sys 等の build-dep 経由、0.25 は tauri-utils が使用
+    { name = "toml_edit", version = "0.20" },
+    # windows-sys 0.45 は Tauri の一部 crate が要求（0.48/0.52/0.59 は既存スキップ済）
+    { name = "windows-sys", version = "0.45" },
+    { name = "windows-sys", version = "0.61" },
+    # windows-targets / windows_* の 0.42 系が Tauri 依存チェーンで新たに追加される
+    { name = "windows-targets", version = "0.42" },
+    { name = "windows-targets", version = "0.52" },
+    { name = "windows_aarch64_gnullvm", version = "0.42" },
+    { name = "windows_aarch64_gnullvm", version = "0.52" },
+    { name = "windows_aarch64_msvc", version = "0.42" },
+    { name = "windows_aarch64_msvc", version = "0.52" },
+    { name = "windows_i686_gnu", version = "0.42" },
+    { name = "windows_i686_gnu", version = "0.52" },
+    { name = "windows_i686_msvc", version = "0.42" },
+    { name = "windows_i686_msvc", version = "0.52" },
+    { name = "windows_x86_64_gnu", version = "0.42" },
+    { name = "windows_x86_64_gnu", version = "0.52" },
+    { name = "windows_x86_64_gnullvm", version = "0.42" },
+    { name = "windows_x86_64_gnullvm", version = "0.52" },
+    { name = "windows_x86_64_msvc", version = "0.42" },
+    { name = "windows_x86_64_msvc", version = "0.52" },
 ]
 skip-tree = []
 

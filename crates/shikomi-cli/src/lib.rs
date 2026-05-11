@@ -182,6 +182,11 @@ pub fn run() -> ExitCode {
 
     let quiet = args.quiet;
 
+    // GUI サブコマンドは vault/IPC 初期化不要のため最優先で処理する（R1-GUI-01）
+    if let Subcommand::Gui = &args.subcommand {
+        return run_gui(locale);
+    }
+
     // Sub-F (#44) Phase 2: vault サブコマンドは daemon IPC 経路に**強制**する。
     // V1 の `RepositoryHandle::Sqlite` 経路は vault に直接触らない契約 (Phase 2 規定、
     // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
@@ -209,6 +214,8 @@ pub fn run() -> ExitCode {
         Subcommand::Remove(a) => record_runners::run_remove(&handle, a, locale, quiet),
         // 上の `if let Subcommand::Vault(_)` early return で処理済（網羅性のため `_` で吸収）。
         Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
+        // 上の `if let Subcommand::Gui` early return で処理済（網羅性のため unreachable）。
+        Subcommand::Gui => unreachable!("gui subcommand handled above"),
     };
 
     match result {
@@ -356,4 +363,21 @@ pub fn print_stdout(s: &str) {
 pub fn eprint_stderr(s: &str) {
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(s.as_bytes());
+}
+
+/// `shikomi-gui` バイナリをサブプロセスとして起動する（R1-GUI-01）。
+///
+/// `shikomi-gui` が PATH 上に存在しない場合はエラーメッセージを表示して
+/// `SystemError` を返す。
+fn run_gui(locale: Locale) -> ExitCode {
+    match std::process::Command::new("shikomi-gui").status() {
+        Ok(status) => {
+            if status.success() {
+                ExitCode::Success
+            } else {
+                ExitCode::SystemError
+            }
+        }
+        Err(e) => emit_error_and_exit(&CliError::GuiLaunchFailed(e.to_string()), locale),
+    }
 }
