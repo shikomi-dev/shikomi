@@ -79,13 +79,18 @@ where
 mod tests {
     use super::*;
 
+    // umask はプロセス全体の global state のため、umask を読み書きするテストは
+    // 直列化して実行する。並列実行すると互いの umask 変更が干渉しレース発生。
+    // `serial_test::serial` で同一プロセス内の実行順を直列化する。
     #[test]
+    #[cfg_attr(unix, serial_test::serial)]
     fn test_with_secure_umask_runs_body_and_returns_value() {
         let result = with_secure_umask(|| Ok::<u32, CliError>(42));
         assert!(matches!(result, Ok(42)));
     }
 
     #[test]
+    #[cfg_attr(unix, serial_test::serial)]
     fn test_with_secure_umask_propagates_inner_error() {
         let result = with_secure_umask(|| Err::<u32, _>(CliError::NonInteractivePassword));
         assert!(matches!(result, Err(CliError::NonInteractivePassword)));
@@ -95,6 +100,7 @@ mod tests {
     /// Windows では no-op で副作用なし。
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_unix_umask_restored_after_body_completion() {
         use nix::sys::stat::{umask, Mode};
         // 既存 umask を取得 (umask 関数は新値設定 + 旧値返却なので 2 回呼んで初期値復元)。

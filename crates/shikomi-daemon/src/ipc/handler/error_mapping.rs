@@ -23,6 +23,12 @@ pub(super) fn map_domain_error(err: &DomainError) -> IpcErrorCode {
                 reason: "duplicate record id".to_owned(),
             }
         }
+        // Issue #89: ホットキー競合（同一コンボを別エントリが既に保持）。
+        DomainError::VaultConsistencyError(VaultConsistencyReason::HotkeyConflict) => {
+            IpcErrorCode::HotkeyConflict {
+                reason: "hotkey conflict".to_owned(),
+            }
+        }
         // `DomainError` は `#[non_exhaustive]`（cross-crate）。wildcard fallback は
         // 必須の OS 制約ではないが、既知の variant を網羅した上で「不明」を `Domain`
         // に押し込めることで reason 漏洩 negative assertion を満たす。

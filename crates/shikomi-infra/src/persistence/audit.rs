@@ -21,7 +21,7 @@ use super::paths::VaultPaths;
 /// 当初は `outcome: &'static str` で `"pending" / "succeeded" / "exhausted"` を渡す API
 /// だったが、文字列 switch のタイポ即バグの罠を構造的に塞ぐため列挙化した
 /// （ペテルギウス再レビュー指摘 §Tell-Don't-Ask）。さらにペテルギウス工程5 再レビュー指摘で
-/// 「設計書 `data.md` §RetryOutcome / `security.md` §retry監査ログ が `Display` 契約を約束
+/// 「設計書 `data.md` §`RetryOutcome` / `security.md` §retry監査ログ が `Display` 契約を約束
 /// しているのに実装は `as_str()` メソッドだった」整合違反を解消するため、`Display` を実装し
 /// `as_str()` を撤去した（Tell, Don't Ask: 値自身がフォーマットを知る）。
 ///
@@ -40,7 +40,7 @@ pub(crate) enum RetryOutcome {
     /// retry の rename 成功直後。`warn` レベルで emit。
     Succeeded,
     /// `MAX_RETRIES` 回全敗で `AtomicWriteFailed` 返却直前。`error` レベルで emit。
-    /// daemon 側 subscriber が DoS 兆候として OWASP A09 連携で上位通報する起点。
+    /// daemon 側 subscriber が `DoS` 兆候として OWASP A09 連携で上位通報する起点。
     Exhausted,
 }
 
@@ -50,7 +50,7 @@ impl std::fmt::Display for RetryOutcome {
     /// 設計書 `detailed-design/data.md` §`RetryOutcome` で約束した `Display` 契約。
     /// `logs_contain` テスト (`integration_windows_retry.rs`) の文字列マッチ互換のため
     /// `"pending" / "succeeded" / "exhausted"` 完全固定（変更時は subscriber / テスト両方を破壊する
-    /// SSoT 違反として却下対象）。
+    /// `SSoT` 違反として却下対象）。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Pending => "pending",
@@ -134,15 +134,15 @@ impl Audit {
     ///
     /// シグネチャは `&'static str` / `u32` / `i32` / `u64` / `RetryOutcome` のみで秘密値を含まない
     /// （§秘密値マスクの型保証 §防衛線 と整合、`RetryOutcome` も unit variant のみで値非保持）。
-    /// daemon 側 subscriber は本イベント頻度から DoS 兆候を検知し OWASP A09 連携で上位通報する
+    /// daemon 側 subscriber は本イベント頻度から `DoS` 兆候を検知し OWASP A09 連携で上位通報する
     /// （別 Issue 範疇、本 crate は emit 側責務のみ）。
     ///
     /// tracing 出力の `outcome="..."` 文字列は `RetryOutcome` の `Display` 実装経由で
     /// `"pending" / "succeeded" / "exhausted"` を維持（`integration_windows_retry.rs` の
-    /// `logs_contain` アサーション互換、`detailed-design/data.md` §RetryOutcome SSoT）。
+    /// `logs_contain` アサーション互換、`detailed-design/data.md` §`RetryOutcome` `SSoT`）。
     ///
     /// 本関数の実呼出は `cfg(windows)` rename retry 経由のみだが、API としては全プラットフォームで
-    /// 公開する（テスト・将来の他経路再利用を想定）。非 Windows ビルドの dead_code 警告を抑制する。
+    /// 公開する（テスト・将来の他経路再利用を想定）。非 Windows ビルドの `dead_code` 警告を抑制する。
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn retry_event(
         stage: &'static str,

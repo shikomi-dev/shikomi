@@ -2,8 +2,7 @@
 
 use shikomi_core::ipc::{IpcErrorCode, IpcResponse, SerializableSecretBytes};
 use shikomi_core::{
-    DomainError, Hotkey, HotkeyParseError, RecordId, RecordLabel, RecordPayload, Vault,
-    VaultConsistencyReason,
+    DomainError, Hotkey, RecordId, RecordLabel, RecordPayload, Vault, VaultConsistencyReason,
 };
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;

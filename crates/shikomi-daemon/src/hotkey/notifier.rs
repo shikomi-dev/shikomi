@@ -2,8 +2,6 @@
 //!
 //! `Notifier` trait によりテスト時に `MockNotifier` に差し替え可能。
 
-use std::sync::Mutex;
-
 // -------------------------------------------------------------------
 // NotifyLevel
 // -------------------------------------------------------------------
@@ -116,7 +114,7 @@ impl Notifier for NullNotifier {
 #[cfg(test)]
 #[derive(Default)]
 pub struct MockNotifier {
-    pub records: Mutex<Vec<(NotifyLevel, String, String)>>,
+    pub records: std::sync::Mutex<Vec<(NotifyLevel, String, String)>>,
 }
 
 #[cfg(test)]

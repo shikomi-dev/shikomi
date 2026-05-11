@@ -195,14 +195,14 @@ fn test_add_two_records_with_same_label_both_succeed_with_distinct_ids() {
         now: fixed_time(),
         hotkey: None,
     };
-    let res1 = handle_request(&repo, &mut vault, req1);
-    let res2 = handle_request(&repo, &mut vault, req2);
+    let response_first = handle_request(&repo, &mut vault, req1);
+    let response_second = handle_request(&repo, &mut vault, req2);
 
-    let id1 = match res1 {
+    let id1 = match response_first {
         IpcResponse::Added { id } => id,
         other => panic!("expected Added on first add, got {other:?}"),
     };
-    let id2 = match res2 {
+    let id2 = match response_second {
         IpcResponse::Added { id } => id,
         other => panic!("expected Added on second add, got {other:?}"),
     };

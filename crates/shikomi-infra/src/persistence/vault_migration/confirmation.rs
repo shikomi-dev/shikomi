@@ -54,7 +54,7 @@ mod tests {
     use super::*;
 
     /// TC-D-U08 simplified: `confirm()` で `DecryptConfirmation` を構築できる。
-    /// 二段確認の具体ロジック (yes_keyword / password_reentry) は Sub-F CLI 層実装、
+    /// 二段確認の具体ロジック (`yes_keyword` / `password_reentry`) は Sub-F CLI 層実装、
     /// shikomi-infra 側は通過証跡型のみ提供する責務分離。
     #[test]
     fn confirm_constructs_decrypt_confirmation() {

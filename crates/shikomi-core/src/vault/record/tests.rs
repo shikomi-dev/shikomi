@@ -44,7 +44,7 @@ fn test_record_label_try_new_256_graphemes_returns_too_long() {
 
 #[test]
 fn test_record_label_try_new_empty_returns_empty_error() {
-    let err = RecordLabel::try_new("".to_string()).unwrap_err();
+    let err = RecordLabel::try_new(String::new()).unwrap_err();
     assert!(matches!(
         err,
         DomainError::InvalidRecordLabel(InvalidRecordLabelReason::Empty)

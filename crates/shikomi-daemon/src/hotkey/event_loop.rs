@@ -19,7 +19,7 @@ use tokio::sync::{watch, Mutex};
 use crate::cache::VekCache;
 use crate::hotkey::backend::{BackendEnum, HotkeyBackend};
 use crate::hotkey::clear_timer::ClearTimer;
-use crate::hotkey::clipboard::{ClipboardError, ClipboardWriter};
+use crate::hotkey::clipboard::ClipboardWriter;
 use crate::hotkey::notifier::{Notifier, NotifyLevel};
 use shikomi_core::Vault;
 
@@ -117,8 +117,14 @@ impl HotkeyEventLoop {
             };
 
             // vault がロック中の場合は OS 通知してスキップ（R1-HK-07 / R1-HK-13）
-            // plaintext vault は is_unlocked() が常に true を返すので自然にパスする
-            if !self.vek_cache.is_unlocked().await {
+            // plaintext vault は保護なしのため、常にロック解除済み扱いとする。
+            // VekCache は常に Locked 状態で起動するため plaintext vault で
+            // is_unlocked() は false を返す点に注意（IPC handler の同パターンと統一）。
+            let is_plaintext = matches!(
+                vault_guard.protection_mode(),
+                shikomi_core::ProtectionMode::Plaintext
+            );
+            if !is_plaintext && !self.vek_cache.is_unlocked().await {
                 tracing::info!(
                     target: "shikomi::audit",
                     event = "hotkey_triggered",

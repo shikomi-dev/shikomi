@@ -9,7 +9,7 @@ use shikomi_core::ipc::{IpcProtocolVersion, IpcRequest};
 use shikomi_core::Vault;
 use shikomi_infra::crypto::{AesGcmAeadAdapter, Argon2idAdapter, Bip39Pbkdf2Hkdf, Rng, ZxcvbnGate};
 use shikomi_infra::persistence::vault_migration::VaultMigration;
-use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
+use shikomi_infra::persistence::SqliteVaultRepository;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinSet;

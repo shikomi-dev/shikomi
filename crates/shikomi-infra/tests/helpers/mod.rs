@@ -107,7 +107,7 @@ const TEST_RETRY_BACKOFF_UNIT_MS: u64 = 500;
 ///
 /// 引数:
 /// - `label`: 失敗時 panic / `eprintln!` 文言に挿入する操作識別子
-/// - `op`: 試行する操作。`Ok(T)` で即返却、`Err(E)` で is_retryable に委譲
+/// - `op`: 試行する操作。`Ok(T)` で即返却、`Err(E)` で `is_retryable` に委譲
 /// - `is_retryable`: `Err(E)` が rename retry exhausted 経路（再試行価値あり）か判定する述語
 ///
 /// retry 戦略:
@@ -173,7 +173,7 @@ pub fn save_with_test_rename_retry(repo: &SqliteVaultRepository, vault: &Vault) 
 ///
 /// `MigrationError::AtomicWriteFailed { stage: Rename, .. }` および
 /// `MigrationError::Persistence(PersistenceError::AtomicWriteFailed { stage: Rename, .. })`
-/// の双方を retry 対象とする (vault_migration 内で `?` 経由か直接構築かの違いを
+/// の双方を retry 対象とする (`vault_migration` 内で `?` 経由か直接構築かの違いを
 /// 吸収するため)。他のエラーは即 panic で test fail させる (Bug-G-005 Option K)。
 ///
 /// # Panics

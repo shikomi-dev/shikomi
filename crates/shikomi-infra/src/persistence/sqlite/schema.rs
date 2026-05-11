@@ -1,4 +1,4 @@
-//! SQLite スキーマ定数。
+//! `SQLite` スキーマ定数。
 //!
 //! テーブル定義・PRAGMA・DML クエリを一元管理する。
 
@@ -6,13 +6,13 @@
 // SchemaSql
 // -------------------------------------------------------------------
 
-/// SQLite スキーマに関連する全 SQL 定数を提供するゼロサイズ型。
+/// `SQLite` スキーマに関連する全 SQL 定数を提供するゼロサイズ型。
 pub(crate) struct SchemaSql;
 
 impl SchemaSql {
     /// shikomi vault DB の `application_id`。
     ///
-    /// ASCII: "shkm" = 0x73_68_6B_6D = 1936223085
+    /// ASCII: "shkm" = `0x73_68_6B_6D` = 1936223085
     pub(crate) const APPLICATION_ID: u32 = 0x73_68_6B_6D;
 
     /// 読み込みに対応する最小 `user_version`。
@@ -33,7 +33,7 @@ impl SchemaSql {
 
     /// `application_id` を shikomi の値に設定する PRAGMA クエリ。
     ///
-    /// 0x73_68_6B_6D = 1936223085
+    /// `0x73_68_6B_6D` = 1936223085
     pub(crate) const PRAGMA_APPLICATION_ID_SET: &'static str =
         "PRAGMA application_id = 1936223085;";
 
@@ -110,7 +110,7 @@ impl SchemaSql {
          wrapped_vek_by_recovery FROM vault_header WHERE id = 1";
 
     /// `records` の SELECT クエリ（V2 スキーマ用、`hotkey_combo` カラム含む）。
-    /// created_at ASC, id ASC でソート。
+    /// `created_at` ASC, id ASC でソート。
     pub(crate) const SELECT_RECORDS_ORDERED: &'static str =
         "SELECT id, kind, label, payload_variant, plaintext_value, nonce, ciphertext, aad, \
          created_at, updated_at, hotkey_combo FROM records ORDER BY created_at ASC, id ASC";

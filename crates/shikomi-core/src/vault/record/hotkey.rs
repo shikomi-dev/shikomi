@@ -249,4 +249,113 @@ mod tests {
         let h = Hotkey::parse("ctrl+alt+a").unwrap();
         assert_eq!(h.to_string(), "alt+ctrl+a");
     }
+
+    // ── TC-HD-U01: Hotkey::parse 正常系 追加ケース ──────────────────────
+
+    /// TC-HD-U01-c: 順序無視 — alt+ctrl+1 は ctrl+alt+1 と同一正規化文字列
+    #[test]
+    fn tc_hd_u01_c_order_independent_normalization() {
+        let h = Hotkey::parse("alt+ctrl+1").unwrap();
+        assert_eq!(h.as_str(), "alt+ctrl+1");
+    }
+
+    /// TC-HD-U01-d: meta+shift+f12 は正規化済み文字列 "meta+shift+f12" を返す
+    #[test]
+    fn tc_hd_u01_d_meta_shift_f12_normalizes() {
+        let h = Hotkey::parse("meta+shift+f12").unwrap();
+        assert_eq!(h.as_str(), "meta+shift+f12");
+    }
+
+    /// TC-HD-U01-e: ctrl+a は "ctrl+a"
+    #[test]
+    fn tc_hd_u01_e_ctrl_a() {
+        let h = Hotkey::parse("ctrl+a").unwrap();
+        assert_eq!(h.as_str(), "ctrl+a");
+    }
+
+    // ── TC-HD-U02: Hotkey::parse 異常系 追加ケース ──────────────────────
+
+    /// TC-HD-U02-c: ctrl+alt+1+2 — 主キーが 2 個 → `InvalidKey`
+    #[test]
+    fn tc_hd_u02_c_two_main_keys_returns_invalid_key() {
+        let err = Hotkey::parse("ctrl+alt+1+2").unwrap_err();
+        assert!(
+            matches!(err, HotkeyParseError::InvalidKey { .. }),
+            "expected InvalidKey, got {err:?}"
+        );
+    }
+
+    /// TC-HD-U02-d: ctrl+alt+f0 — f0 は無効
+    #[test]
+    fn tc_hd_u02_d_f0_is_invalid() {
+        let err = Hotkey::parse("ctrl+alt+f0").unwrap_err();
+        assert!(matches!(err, HotkeyParseError::InvalidKey { .. }));
+    }
+
+    /// TC-HD-U02-e: ctrl+alt+f13 — f13 は無効（f1〜f12 のみ許可）
+    #[test]
+    fn tc_hd_u02_e_f13_is_invalid() {
+        let err = Hotkey::parse("ctrl+alt+f13").unwrap_err();
+        assert!(matches!(err, HotkeyParseError::InvalidKey { .. }));
+    }
+
+    /// TC-HD-U02-f: ctrl+alt+! — 特殊文字は無効
+    #[test]
+    fn tc_hd_u02_f_special_char_is_invalid() {
+        let err = Hotkey::parse("ctrl+alt+!").unwrap_err();
+        assert!(matches!(err, HotkeyParseError::InvalidKey { .. }));
+    }
+
+    /// TC-HD-U02-g: 6 パーツ超 → `TooManyParts`
+    #[test]
+    fn tc_hd_u02_g_too_many_parts() {
+        let err = Hotkey::parse("ctrl+alt+shift+meta+a+b").unwrap_err();
+        assert!(matches!(err, HotkeyParseError::TooManyParts));
+    }
+
+    // ── TC-HD-U03: Hotkey 正規化と等価性 ──────────────────────────────
+
+    /// TC-HD-U03-a: parse("ctrl+alt+1") == parse("alt+ctrl+1") が true
+    #[test]
+    fn tc_hd_u03_a_different_order_is_equal() {
+        let h1 = Hotkey::parse("ctrl+alt+1").unwrap();
+        let h2 = Hotkey::parse("alt+ctrl+1").unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    /// TC-HD-U03-b: `to_string()` がアルファベット順正規化文字列を返す
+    #[test]
+    fn tc_hd_u03_b_to_string_is_alphabetical() {
+        let h = Hotkey::parse("ctrl+alt+1").unwrap();
+        assert_eq!(h.to_string(), "alt+ctrl+1");
+    }
+
+    /// TC-HD-U03-c: parse("ctrl+alt+1") != parse("ctrl+alt+2")
+    #[test]
+    fn tc_hd_u03_c_different_key_is_not_equal() {
+        let h1 = Hotkey::parse("ctrl+alt+1").unwrap();
+        let h2 = Hotkey::parse("ctrl+alt+2").unwrap();
+        assert_ne!(h1, h2);
+    }
+
+    // ── TC-HD-U07: Hotkey の serde ラウンドトリップ ────────────────────
+
+    /// TC-HD-U07-a: `serde_json` シリアライズ → デシリアライズが元の値と一致
+    #[test]
+    fn tc_hd_u07_a_serde_json_roundtrip() {
+        let h = Hotkey::parse("alt+ctrl+1").unwrap();
+        let json = serde_json::to_string(&h).expect("serialize");
+        let restored: Hotkey = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(h, restored);
+    }
+
+    /// TC-HD-U07-b: 不正文字列の `from_str` が serde エラーを返す
+    #[test]
+    fn tc_hd_u07_b_invalid_string_deserialize_error() {
+        let result: Result<Hotkey, _> = serde_json::from_str("\"no_modifier\"");
+        assert!(
+            result.is_err(),
+            "expected deserialize error for invalid hotkey"
+        );
+    }
 }

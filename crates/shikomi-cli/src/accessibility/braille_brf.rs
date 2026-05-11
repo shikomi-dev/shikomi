@@ -158,7 +158,7 @@ mod tests {
 
     fn word(s: &str) -> SerializableSecretBytes {
         use shikomi_core::SecretString;
-        SerializableSecretBytes::from_secret_string(SecretString::from_string(s.to_owned()))
+        SerializableSecretBytes::from_secret_string(&SecretString::from_string(s.to_owned()))
     }
 
     fn brf_as_str(brf: &[u8]) -> &str {

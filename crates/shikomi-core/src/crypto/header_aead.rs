@@ -1,4 +1,4 @@
-//! `HeaderAeadKey` — vault ヘッダ独立 AEAD タグ検証用鍵 (KEK_pw 流用)。
+//! `HeaderAeadKey` — vault ヘッダ独立 AEAD タグ検証用鍵 (`KEK_pw` 流用)。
 //!
 //! Sub-0 凍結: ヘッダ AEAD タグの鍵は `KekPw` 流用。`kdf_params` 改竄は
 //! KDF 出力変化として AEAD タグ不一致で間接検出される。

@@ -17,7 +17,7 @@
 //! 変換不能なキーは `HotkeyError::ParseFailed` で返す。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::BoxStream;

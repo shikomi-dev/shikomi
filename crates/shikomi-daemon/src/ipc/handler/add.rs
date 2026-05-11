@@ -1,9 +1,7 @@
 //! `IpcRequest::AddRecord` の処理。
 
 use shikomi_core::ipc::{IpcErrorCode, IpcResponse, SerializableSecretBytes};
-use shikomi_core::{
-    Hotkey, HotkeyParseError, Record, RecordId, RecordKind, RecordLabel, RecordPayload, Vault,
-};
+use shikomi_core::{Hotkey, Record, RecordId, RecordKind, RecordLabel, RecordPayload, Vault};
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;
 use uuid::Uuid;

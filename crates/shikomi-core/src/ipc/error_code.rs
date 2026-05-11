@@ -75,7 +75,7 @@ pub enum IpcErrorCode {
     /// 内部詳細秘匿のため `MigrationError → IpcError` マッピング表 (`vek-cache-and-ipc.md`)
     /// で 1:1 集約、CLI 側は `reason` で `MSG-S08`〜`MSG-S12` に振り分け。
     Crypto {
-        /// 固定文言（kebab-case、許容セットは設計書 SSoT）。
+        /// 固定文言（kebab-case、許容セットは設計書 `SSoT`）。
         reason: String,
     },
 

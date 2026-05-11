@@ -27,7 +27,6 @@ pub use error::DaemonExit;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use shikomi_core::ProtectionMode;
 use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;

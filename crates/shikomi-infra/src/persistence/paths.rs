@@ -262,7 +262,7 @@ mod tests {
 
     // --- TC-U14: VaultPaths::new — `..` 含むパス → PathTraversal ---
 
-    /// TC-U14 (Unix) — Unix 絶対パスに `..` が含まれる → PathTraversal
+    /// TC-U14 (Unix) — Unix 絶対パスに `..` が含まれる → `PathTraversal`
     #[cfg(unix)]
     #[test]
     fn tc_u14_path_traversal_rejected() {

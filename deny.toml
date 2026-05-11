@@ -29,6 +29,11 @@ allow = [
     #   セットで凍結済。CC0-1.0 は public domain dedication で OSS 互換。
     "BSD-3-Clause",
     "CC0-1.0",
+    # Issue #89 で導入した `arboard` → `clipboard-win` / `error-code` が BSL-1.0 採用。
+    # Business Source License 1.1: 4 年後に MIT/Apache-2.0 相当に移行する条項あり。
+    # clipboard-win 5.4.1 / error-code 3.3.2 の 2 crate のみ対象。
+    # arboard のバージョン更新時に再評価すること。
+    "BSL-1.0",
 ]
 
 [bans]
@@ -79,6 +84,21 @@ skip = [
     # Issue #33（Phase 1.5-ε pty 観測 TC-E2E-017）で導入。expectrl が nix 0.29+ に
     # 追従次第、本エントリを削除して重複解消する。
     { name = "nix", version = "0.26.4" },
+    # hashbrown 0.14.x は hashlink 0.9（rusqlite 0.31 の依存）が要求する旧系。
+    # hashbrown 0.15.x は wasmparser → wit-bindgen 経由の中間バージョン。
+    # 最新系は indexmap 2.x が要求する 0.17.x。Issue #89 で顕在化。
+    # rusqlite / wit-bindgen のバージョン更新時に再評価すること。
+    { name = "hashbrown", version = "0.14" },
+    { name = "hashbrown", version = "0.15" },
+    # windows-core / windows-link / windows-result / windows-strings は
+    # Issue #89 で導入した `notify-rust` → `windows v0.61` 系と、
+    # 既存依存 (`zxcvbn` → `chrono` → `iana-time-zone`) の `windows v0.62` 系が共存する。
+    # windows 0.61 系バージョン（旧系）のみスキップ登録。
+    # notify-rust が windows 0.62 系に追従次第、各エントリを削除して重複解消する。
+    { name = "windows-core", version = "0.61" },
+    { name = "windows-link", version = "0.1" },
+    { name = "windows-result", version = "0.3" },
+    { name = "windows-strings", version = "0.4" },
 ]
 skip-tree = []
 

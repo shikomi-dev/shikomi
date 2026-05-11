@@ -18,6 +18,8 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 
+pub mod mock_clipboard;
+pub mod mock_notifier;
 pub mod peer_mock;
 
 /// 決定的テスト用の固定時刻（UNIX_EPOCH + 1 時間）。

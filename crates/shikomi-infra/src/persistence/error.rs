@@ -285,14 +285,14 @@ pub enum PersistenceError {
         client: shikomi_core::ipc::IpcProtocolVersion,
     },
 
-    /// IPC: MessagePack デコード失敗（CLI 受信側）。
+    /// IPC: `MessagePack` デコード失敗（CLI 受信側）。
     #[error("ipc decode error: {reason}")]
     IpcDecode {
         /// 失敗の人間可読理由（固定文言、絶対パス等を含めない）。
         reason: String,
     },
 
-    /// IPC: MessagePack エンコード失敗（CLI 送信側）。
+    /// IPC: `MessagePack` エンコード失敗（CLI 送信側）。
     #[error("ipc encode error: {reason}")]
     IpcEncode {
         /// 失敗の人間可読理由（固定文言）。

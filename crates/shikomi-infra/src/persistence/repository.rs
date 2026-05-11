@@ -1,4 +1,4 @@
-//! `SqliteVaultRepository` — `VaultRepository` の SQLite 実装。
+//! `SqliteVaultRepository` — `VaultRepository` の `SQLite` 実装。
 
 use std::path::Path;
 use std::time::Instant;
@@ -20,7 +20,7 @@ use super::{
 // SqliteVaultRepository
 // -------------------------------------------------------------------
 
-/// SQLite バックエンドの `VaultRepository` 実装。
+/// `SQLite` バックエンドの `VaultRepository` 実装。
 pub struct SqliteVaultRepository {
     paths: VaultPaths,
 }
@@ -223,7 +223,7 @@ impl SqliteVaultRepository {
         Ok((vault, record_count))
     }
 
-    /// vault_header テーブルから1行を読み込む。
+    /// `vault_header` テーブルから1行を読み込む。
     fn select_vault_header(
         conn: &Connection,
     ) -> Result<shikomi_core::VaultHeader, PersistenceError> {

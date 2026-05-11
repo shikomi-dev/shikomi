@@ -5,7 +5,7 @@
 //! を明示化し、core 内のみで完結する safe API を呼び出すシリアライズ実装を提供する。
 //!
 //! 設計根拠: docs/features/daemon-ipc/basic-design/security.md
-//! §SecretBytes のシリアライズ契約
+//! §`SecretBytes` のシリアライズ契約
 
 use std::fmt;
 
@@ -54,8 +54,8 @@ impl SerializableSecretBytes {
     /// 設計根拠: docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md
     /// §`add_record` / §`edit_record`
     #[must_use]
-    pub fn from_secret_string(secret: SecretString) -> Self {
-        let bytes = clone_secret_string_bytes(&secret);
+    pub fn from_secret_string(secret: &SecretString) -> Self {
+        let bytes = clone_secret_string_bytes(secret);
         Self(SecretBytes::from_vec(bytes))
     }
 
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_from_secret_string_preserves_byte_length_and_redacts_debug() {
         let secret = SecretString::from_string("hunter2".to_string());
-        let wrapped = SerializableSecretBytes::from_secret_string(secret);
+        let wrapped = SerializableSecretBytes::from_secret_string(&secret);
         assert_eq!(wrapped.inner().as_serialize_slice().len(), "hunter2".len());
 
         let debug_output = format!("{wrapped:?}");
@@ -198,7 +198,7 @@ mod tests {
         //  API を呼ばない方針）。
         let phrase = "こんにちは🌸";
         let original = SecretString::from_string(phrase.to_string());
-        let wrapped = SerializableSecretBytes::from_secret_string(original);
+        let wrapped = SerializableSecretBytes::from_secret_string(&original);
         let inner_slice = wrapped.inner().as_serialize_slice();
         assert_eq!(inner_slice.len(), phrase.len());
         assert_eq!(inner_slice.first(), phrase.as_bytes().first());

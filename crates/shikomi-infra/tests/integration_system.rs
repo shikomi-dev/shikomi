@@ -82,8 +82,10 @@ fn tc_i11_clippy_fmt_deny() {
         std::path::PathBuf::from(&manifest)
             .parent()
             .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/shikomi"))
+            .map_or_else(
+                || std::path::PathBuf::from("/tmp/shikomi"),
+                Path::to_path_buf,
+            )
     };
 
     // clippy（-D warnings なし: pedantic=warn は意図的設計）
@@ -136,7 +138,7 @@ fn tc_i12_file_permission_after_save() {
 // TC-I20: CHECK 制約の防衛線確認
 // ---------------------------------------------------------------------------
 
-/// TC-I20 — plaintext モードで kdf_salt IS NOT NULL な INSERT が CHECK 制約で拒否される。
+/// TC-I20 — plaintext モードで `kdf_salt` IS NOT NULL な INSERT が CHECK 制約で拒否される。
 #[test]
 fn tc_i20_check_constraint_blocks_invalid_row() {
     let dir = TempDir::new().unwrap();
@@ -205,8 +207,7 @@ fn tc_i21_vault_lock_contention() {
     let flock_available = std::process::Command::new("flock")
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|o| o.status.success());
 
     if !flock_available {
         eprintln!("TC-I21: SKIP — flock ユーティリティが見つかりません（util-linux 必須）");

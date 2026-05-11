@@ -5,7 +5,7 @@
 //!
 //! - **`argon2id_derive_kek_pw_frozen_owasp_2024_05`**: 採用経路
 //!   `Argon2idAdapter::default().derive_kek_pw(&MasterPassword, &KdfSalt)` の
-//!   単一呼出時間 (m=19_456 / t=2 / p=1 / output_len=32)。
+//!   単一呼出時間 (`m=19_456` / t=2 / p=1 / `output_len=32`)。
 //! - **`bip39_derive_kek_recovery_24_words`**: 採用経路
 //!   `Bip39Pbkdf2Hkdf::default().derive_kek_recovery(&RecoveryMnemonic)` の
 //!   単一呼出時間 (PBKDF2-HMAC-SHA512 2048 iter + HKDF-SHA256)。

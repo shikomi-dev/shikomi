@@ -13,7 +13,7 @@
 //! - `#[non_exhaustive]` で将来拡張耐性 (Sub-D Rev3 凍結方針継承)
 //! - cross-crate `match` では fail-secure な `_` arm 必須 (Sub-E TC-E-S01 同型)、
 //!   `_` は `Unknown` 同等経路 (REQ-S16 Fail-Secure、終了コード 3)
-//! - 文字列ラベルは **shikomi-core で凍結** (CLI/GUI 側で再定義禁止、設計書 SSoT)
+//! - 文字列ラベルは **shikomi-core で凍結** (CLI/GUI 側で再定義禁止、設計書 `SSoT`)
 
 use serde::{Deserialize, Serialize};
 
@@ -59,11 +59,10 @@ impl ProtectionModeBanner {
             Self::Plaintext => "[plaintext]",
             Self::EncryptedLocked => "[encrypted, locked]",
             Self::EncryptedUnlocked => "[encrypted, unlocked]",
-            Self::Unknown => "[unknown]",
             // `#[non_exhaustive]` cross-crate 防御的 wildcard (Sub-D Rev3 凍結継承):
             // 将来 variant 追加時は fail-secure (`[unknown]` 同等) に倒す。
             #[allow(unreachable_patterns)]
-            _ => "[unknown]",
+            Self::Unknown | _ => "[unknown]",
         }
     }
 }

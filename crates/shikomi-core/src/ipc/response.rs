@@ -45,11 +45,11 @@ pub enum IpcResponse {
     ///
     /// 1 往復で `list` 実行可能な Tell-Don't-Ask 設計 (Sub-F §設計判断: 保護モード
     /// バナー実装 案 B 採用)。`#[non_exhaustive]` で V1 互換は serde の Default +
-    /// skip_serializing_if で吸収。
+    /// `skip_serializing_if` で吸収。
     Records {
         /// レコード summary 列 (機密非含有、name / id / kind / 時刻のみ)。
         records: Vec<RecordSummary>,
-        /// 保護モード (Plaintext / EncryptedLocked / EncryptedUnlocked / Unknown)。
+        /// 保護モード (Plaintext / `EncryptedLocked` / `EncryptedUnlocked` / Unknown)。
         /// daemon が `Vault::protection_mode` + `VekCache::is_unlocked` から判定。
         protection_mode: ProtectionModeBanner,
     },
@@ -167,7 +167,7 @@ mod tests {
     }
 
     /// Sub-F (#44): `Records` 構造体化後、`protection_mode` フィールドを 4 variant 全てで
-    /// 構築できることを保証 (REQ-S16 / C-37 設計書 SSoT との整合)。
+    /// 構築できることを保証 (REQ-S16 / C-37 設計書 `SSoT` との整合)。
     #[test]
     fn test_records_struct_with_each_protection_mode() {
         for mode in [
@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    /// Sub-F (#44): `Encrypted` / `Decrypted` variant_name 凍結文字列確認。
+    /// Sub-F (#44): `Encrypted` / `Decrypted` `variant_name` 凍結文字列確認。
     #[test]
     fn test_variant_name_v2_sub_f_encrypted() {
         let resp = IpcResponse::Encrypted { disclosure: vec![] };

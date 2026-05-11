@@ -108,3 +108,4 @@ notify-rust      = { version = "4.11", default-features = false, features = ["z"
 # Bug-C-001 顛末: 銀ちゃん impl は単発 fixture 検証のみで proptest 不在、
 # テスト工程でマユリが Boy Scout 補強として 1000 ケース proptest を追加。
 proptest        = { version = "1", default-features = false, features = ["std"] }
+serde_json      = "1"

@@ -81,6 +81,9 @@ pub enum BackendEnum {
     GlobalHotkey(global_hotkey::GlobalHotkeyBackend),
     /// バックエンド未対応環境向け noop 実装（tracing::warn のみ）。
     Null(NullBackend),
+    /// **テスト専用**。イベント注入チャンネルを持つモックバックエンド。
+    #[doc(hidden)]
+    Mock(MockBackend),
 }
 
 impl BackendEnum {
@@ -109,6 +112,7 @@ impl HotkeyBackend for BackendEnum {
         match self {
             Self::GlobalHotkey(b) => b.register(combo),
             Self::Null(b) => b.register(combo),
+            Self::Mock(b) => b.register(combo),
         }
     }
 
@@ -116,6 +120,7 @@ impl HotkeyBackend for BackendEnum {
         match self {
             Self::GlobalHotkey(b) => b.unregister(combo),
             Self::Null(b) => b.unregister(combo),
+            Self::Mock(b) => b.unregister(combo),
         }
     }
 
@@ -123,6 +128,7 @@ impl HotkeyBackend for BackendEnum {
         match self {
             Self::GlobalHotkey(b) => b.event_stream(),
             Self::Null(b) => b.event_stream(),
+            Self::Mock(b) => b.event_stream(),
         }
     }
 }
@@ -135,6 +141,89 @@ impl HotkeyBackend for BackendEnum {
 ///
 /// 全操作が noop（`tracing::warn!` のみ）。イベントストリームは空（never yields）。
 pub struct NullBackend;
+
+// -------------------------------------------------------------------
+// MockBackend（テスト専用）
+// -------------------------------------------------------------------
+
+/// テスト用モックバックエンド。
+///
+/// イベント注入チャンネルを持ち、`event_stream` がそのチャンネルを stream として返す。
+/// `BackendEnum::Mock` 経由で `HotkeyManager` / `HotkeyEventLoop` に注入して使う。
+///
+/// **本番コードでは使用しない**。
+#[doc(hidden)]
+pub struct MockBackend {
+    registered: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    fail_register: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    event_sender: tokio::sync::mpsc::Sender<HotkeyEvent>,
+    event_receiver:
+        std::sync::Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<HotkeyEvent>>>>,
+}
+
+#[doc(hidden)]
+impl MockBackend {
+    /// 新しい `MockBackend` と、イベント注入用 `Sender` を返す。
+    ///
+    /// テストからは `sender.send(HotkeyEvent { combo: ... })` でイベントを注入する。
+    #[must_use]
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_with_sender() -> (Self, tokio::sync::mpsc::Sender<HotkeyEvent>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let backend = Self {
+            registered: std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashSet::new()),
+            ),
+            fail_register: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
+            event_sender: tx.clone(),
+            event_receiver: std::sync::Arc::new(std::sync::Mutex::new(Some(rx))),
+        };
+        (backend, tx)
+    }
+
+    /// 現在登録済みのコンボ一覧を返す。
+    #[must_use]
+    pub fn registered(&self) -> std::collections::HashSet<String> {
+        self.registered.lock().unwrap().clone()
+    }
+
+    /// 指定コンボの `register` 呼び出しを失敗させるよう設定する。
+    pub fn set_fail_on_register(&self, combo: &str) {
+        self.fail_register.lock().unwrap().insert(combo.to_owned());
+    }
+}
+
+impl HotkeyBackend for MockBackend {
+    fn register(&self, combo: &str) -> Result<(), HotkeyError> {
+        if self.fail_register.lock().unwrap().contains(combo) {
+            return Err(HotkeyError::RegisterFailed {
+                combo: combo.to_owned(),
+                reason: "mock-forced failure".to_owned(),
+            });
+        }
+        self.registered.lock().unwrap().insert(combo.to_owned());
+        Ok(())
+    }
+
+    fn unregister(&self, combo: &str) -> Result<(), HotkeyError> {
+        self.registered.lock().unwrap().remove(combo);
+        Ok(())
+    }
+
+    fn event_stream(&self) -> BoxStream<'static, HotkeyEvent> {
+        let rx = self
+            .event_receiver
+            .lock()
+            .unwrap()
+            .take()
+            .expect("MockBackend::event_stream called more than once");
+        Box::pin(futures_util::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|ev| (ev, rx))
+        }))
+    }
+}
 
 impl HotkeyBackend for NullBackend {
     fn register(&self, combo: &str) -> Result<(), HotkeyError> {

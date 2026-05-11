@@ -41,6 +41,20 @@ pub use vault_migration::{
 pub(crate) const TRACKING_ISSUE_ENCRYPTED_VAULT: Option<u32> = None;
 
 // -------------------------------------------------------------------
+// テストヘルパ
+// -------------------------------------------------------------------
+
+/// テスト専用: vault ディレクトリに OS 要件の権限（Unix: 0700 / Windows: DACL protected）を
+/// 設定する。`create_encrypted_vault` フィクスチャが TempDir に権限を付与するために使用する。
+///
+/// # Errors
+/// ディレクトリ作成失敗・権限設定失敗時に `PersistenceError` を返す。
+#[doc(hidden)]
+pub fn ensure_vault_dir(path: &std::path::Path) -> Result<(), PersistenceError> {
+    permission::PermissionGuard::ensure_dir(path)
+}
+
+// -------------------------------------------------------------------
 // VaultRepository trait
 // -------------------------------------------------------------------
 

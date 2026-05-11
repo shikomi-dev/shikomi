@@ -1,8 +1,8 @@
 //! `AeadKey` trait — 鍵バイトをクロージャインジェクション経由で AEAD adapter に貸す。
 //!
 //! Sub-B Rev2 で凍結した「鍵バイト型は `pub(crate)` 維持」契約を破壊せず、
-//! shikomi-infra::crypto::aead から鍵バイトに借用越境する正規経路を提供する
-//! (verify_aead_decrypt の caller-asserted マーカーと完全同型思想)。
+//! `shikomi-infra::crypto::aead` から鍵バイトに借用越境する正規経路を提供する
+//! (`verify_aead_decrypt` の caller-asserted マーカーと完全同型思想)。
 //!
 //! 設計書: `docs/features/vault-encryption/detailed-design/nonce-and-aead.md` §`AeadKey` trait
 

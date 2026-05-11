@@ -127,7 +127,7 @@ impl SecretBytes {
     /// 永続化（`shikomi-infra::persistence`）から呼ばれないことを公開範囲で保証する。
     ///
     /// 設計根拠: docs/features/daemon-ipc/basic-design/security.md
-    /// §SecretBytes のシリアライズ契約
+    /// §`SecretBytes` のシリアライズ契約
     #[must_use]
     pub(crate) fn as_serialize_slice(&self) -> &[u8] {
         self.expose_secret()
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_secret_string_debug_does_not_expose_value() {
         let s = SecretString::from_string("password".to_string());
-        let debug_output = format!("{:?}", s);
+        let debug_output = format!("{s:?}");
         assert!(
             !debug_output.contains("password"),
             "Debug must not expose the secret"
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_secret_bytes_debug_does_not_expose_value() {
         let b = SecretBytes::from_boxed_slice(vec![1u8, 2, 3].into_boxed_slice());
-        let debug_output = format!("{:?}", b);
+        let debug_output = format!("{b:?}");
         assert!(
             !debug_output.contains("1, 2, 3"),
             "Debug must not expose bytes"

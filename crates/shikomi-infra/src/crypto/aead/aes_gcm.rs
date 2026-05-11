@@ -1,4 +1,4 @@
-//! `AesGcmAeadAdapter` — AES-256-GCM AEAD アダプタ (RustCrypto `aes-gcm`)。
+//! `AesGcmAeadAdapter` — AES-256-GCM AEAD アダプタ (`RustCrypto` `aes-gcm`)。
 //!
 //! 設計書: `docs/features/vault-encryption/detailed-design/nonce-and-aead.md`
 //!         §`AesGcmAeadAdapter`
@@ -43,11 +43,11 @@ pub struct AesGcmAeadAdapter;
 impl AesGcmAeadAdapter {
     /// per-record 暗号化。`(ciphertext: Vec<u8>, tag: AuthTag)` を返す。
     ///
-    /// AAD は `Aad::to_canonical_bytes()` の **26B 固定** (record_id 16B + version 2B BE
-    /// + created_at_micros 8B BE)。
+    /// AAD は `Aad::to_canonical_bytes()` の **26B 固定** (`record_id` 16B + version 2B BE
+    /// + `created_at_micros` 8B BE)。
     ///
     /// **`NonceCounter::increment` は本関数で呼ばない** (Sub-D vault repository 層責務、
-    /// `nonce-and-aead.md` §nonce_counter 統合契約)。
+    /// `nonce-and-aead.md` §`nonce_counter` 統合契約)。
     ///
     /// # Errors
     ///

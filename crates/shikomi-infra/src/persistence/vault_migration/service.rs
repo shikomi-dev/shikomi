@@ -27,13 +27,12 @@
 //!   (Sub-B/C アダプタ経由のみ、TC-D-S04 sub-d-static-checks.sh で grep 検証)。
 
 use shikomi_core::crypto::{
-    AeadKey, HeaderAeadKey, Kek, KekKindPw, MasterPassword, Plaintext, RecoveryMnemonic, Vek,
-    Verified,
+    AeadKey, Kek, KekKindPw, MasterPassword, Plaintext, RecoveryMnemonic, Vek, Verified,
 };
 use shikomi_core::error::CryptoError;
 use shikomi_core::{
-    Aad, AuthTag, CipherText, KdfSalt, NonceBytes, NonceCounter, ProtectionMode, Record,
-    RecordPayload, RecordPayloadEncrypted, SecretString, Vault, VaultHeader, VaultVersion,
+    Aad, AuthTag, CipherText, KdfSalt, NonceCounter, ProtectionMode, Record, RecordPayload,
+    RecordPayloadEncrypted, SecretString, Vault, VaultHeader, VaultVersion,
 };
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
@@ -119,7 +118,7 @@ impl<'a> VaultMigration<'a> {
         // 3. KdfSalt / VEK / Mnemonic 生成
         let kdf_salt = self.rng.generate_kdf_salt();
         let vek = self.rng.generate_vek();
-        let mnemonic = build_recovery_mnemonic(self.rng)?;
+        let mnemonic = build_recovery_mnemonic(*self.rng)?;
 
         // 4. KEK_pw / KEK_recovery 派生
         let kek_pw = self.kdf_pw.derive_kek_pw(&master_password, &kdf_salt)?;
@@ -140,7 +139,7 @@ impl<'a> VaultMigration<'a> {
             Vec::with_capacity(plaintext_vault.records().len());
         for record in plaintext_vault.records() {
             let encrypted_record =
-                encrypt_one_record(self.aead, self.rng, &vek, target_version, record)?;
+                encrypt_one_record(*self.aead, *self.rng, &vek, target_version, record)?;
             encrypted_records.push(encrypted_record);
         }
 
@@ -148,8 +147,8 @@ impl<'a> VaultMigration<'a> {
         let nonce_counter = NonceCounter::new();
         let kdf_params = KdfParams::FROZEN;
         let header_envelope = build_header_envelope(
-            self.aead,
-            self.rng,
+            *self.aead,
+            *self.rng,
             &kek_pw,
             target_version,
             target_created_at,
@@ -210,7 +209,7 @@ impl<'a> VaultMigration<'a> {
         let mut plaintext_records: Vec<Record> =
             Vec::with_capacity(encrypted_vault.records().len());
         for record in encrypted_vault.records() {
-            let plaintext_record = decrypt_one_record(self.aead, &vek, record)?;
+            let plaintext_record = decrypt_one_record(*self.aead, &vek, record)?;
             plaintext_records.push(plaintext_record);
         }
 
@@ -279,7 +278,7 @@ impl<'a> VaultMigration<'a> {
         //   `decrypt_vault` 等の他経路の `AeadTagMismatch` には影響しない
         // - 真の vault.db 改竄経路と区別不能だが、L2 改竄通知は `tracing::warn` で
         //   別経路に残し運用診断は維持 (REQ-S11 brute force 防衛 ≫ 改竄通知粒度)
-        verify_header_aead(self.aead, &encrypted_header, &kek_pw)
+        verify_header_aead(*self.aead, &encrypted_header, &kek_pw)
             .map_err(map_aead_failure_in_unlock_to_wrong_password)?;
 
         // wrapped_vek_by_pw を unwrap → 32B 検証
@@ -329,11 +328,11 @@ impl<'a> VaultMigration<'a> {
     // F-D4: rekey_vault
     // ---------------------------------------------------------------
 
-    /// VEK 入替 + 全レコード再暗号化 (NonceCounter LIMIT 到達時の必須経路、F-D4)。
+    /// VEK 入替 + 全レコード再暗号化 (`NonceCounter` LIMIT 到達時の必須経路、F-D4)。
     ///
-    /// 設計書 §F-D4 step 4-5 通り、新 VEK を **旧 KEK_pw で再 wrap** して
-    /// 新 wrapped_vek_by_pw を構築する (records だけ新 VEK で再暗号化して
-    /// wrapped_vek を旧のまま維持すると post-rekey unlock で旧 VEK が復元され
+    /// 設計書 §F-D4 step 4-5 通り、新 VEK を **旧 `KEK_pw` で再 wrap** して
+    /// 新 `wrapped_vek_by_pw` を構築する (records だけ新 VEK で再暗号化して
+    /// `wrapped_vek` を旧のまま維持すると post-rekey unlock で旧 VEK が復元され
     /// records 復号が全件 `AeadTagMismatch` になる、Bug-D-002 対応)。
     ///
     /// **recovery 経路 (`wrapped_vek_by_recovery`) は本 Sub-D 範囲では更新しない**:
@@ -341,7 +340,7 @@ impl<'a> VaultMigration<'a> {
     /// (新 mnemonic を呼出側に開示するフローが追加で必要なため、本メソッドの
     /// `current_password: String` 1 引数 API では責務が混ざる)。
     /// rekey 後の **recovery 経路 unlock は本実装範囲外** (旧 mnemonic の
-    /// wrapped_vek_by_recovery は旧 VEK を unwrap するため、records 復号で失敗する)。
+    /// `wrapped_vek_by_recovery` は旧 VEK を unwrap するため、records 復号で失敗する)。
     ///
     /// # Errors
     ///
@@ -362,11 +361,11 @@ impl<'a> VaultMigration<'a> {
         let mut new_records: Vec<Record> = Vec::with_capacity(loaded_vault.records().len());
         for record in loaded_vault.records() {
             // 旧 VEK で復号
-            let plaintext_record_intermediate = decrypt_one_record(self.aead, &old_vek, record)?;
+            let plaintext_record_intermediate = decrypt_one_record(*self.aead, &old_vek, record)?;
             // 新 VEK で再暗号化
             let new_encrypted = encrypt_one_record(
-                self.aead,
-                self.rng,
+                *self.aead,
+                *self.rng,
                 &new_vek,
                 target_version,
                 &plaintext_record_intermediate,
@@ -392,8 +391,8 @@ impl<'a> VaultMigration<'a> {
         // 7. ヘッダ AEAD envelope を新 wrapped_pw + 新 nonce_counter + 旧 kdf_salt +
         //    旧 wrapped_recovery で再構築 (AAD は新フィールドで再計算、改竄検出に必要)。
         let header_envelope = build_header_envelope(
-            self.aead,
-            self.rng,
+            *self.aead,
+            *self.rng,
             &kek_pw_rewrap,
             old_header.version(),
             old_header.created_at(),
@@ -436,7 +435,7 @@ impl<'a> VaultMigration<'a> {
     // F-D5: change_password
     // ---------------------------------------------------------------
 
-    /// マスターパスワード変更 (O(1)、VEK 不変、wrapped_vek_by_pw のみ更新、新 salt)。
+    /// マスターパスワード変更 (O(1)、VEK 不変、`wrapped_vek_by_pw` のみ更新、新 salt)。
     ///
     /// REQ-S10 / 設計書 §F-D5。
     ///
@@ -471,8 +470,8 @@ impl<'a> VaultMigration<'a> {
         // 6. ヘッダ AEAD envelope を新 kdf_salt + 新 wrapped_vek_by_pw で再構築
         let nonce_counter = NonceCounter::resume(old_header.nonce_counter().current());
         let header_envelope = build_header_envelope(
-            self.aead,
-            self.rng,
+            *self.aead,
+            *self.rng,
             &new_kek_pw,
             old_header.version(),
             old_header.created_at(),
@@ -513,7 +512,7 @@ impl<'a> VaultMigration<'a> {
     // Sub-D Rev6 (Sub-E (#43) 工程3 Boy Scout 要求 4 件)
     // ===============================================================
 
-    /// **Sub-D Rev6**: パスワード経路 KEK_pw を派生のみ実施 (KISS / DRY 違反回避)。
+    /// **Sub-D Rev6**: パスワード経路 `KEK_pw` を派生のみ実施 (KISS / DRY 違反回避)。
     ///
     /// 設計書 `vek-cache-and-ipc.md` §F-E4 step 2 ペテルギウス指摘契約: 旧設計の
     /// `unlock_with_password` 流用は **Argon2id 再計算 → 結果破棄** の DRY/KISS
@@ -537,13 +536,13 @@ impl<'a> VaultMigration<'a> {
     /// **Sub-D Rev6**: マスターパスワード認証検証 (cached VEK との bit-exact 比較)。
     ///
     /// 設計書 `vek-cache-and-ipc.md` §F-E4 step 2 で確定した `verify_password` 契約:
-    /// (a) `derive_kek_pw_only` で KEK_pw を派生、(b) ヘッダ AEAD verify で改竄検出、
+    /// (a) `derive_kek_pw_only` で `KEK_pw` を派生、(b) ヘッダ AEAD verify で改竄検出、
     /// (c) `wrapped_vek_by_pw` を unwrap → 候補 VEK を取得、(d) `cached_vek` と
     /// `subtle::ConstantTimeEq` で **bit-exact 比較** (side-channel 排除)。
     ///
     /// パスワード不一致は `MigrationError::Crypto(CryptoError::WrongPassword)` で返す
     /// (Sub-E `UnlockBackoff::record_failure` の唯一のトリガ、§F-E1 step 4)。
-    /// ヘッダ改竄は `AeadTagMismatch` のまま (backoff 対象外、L2 DoS 経路封鎖)。
+    /// ヘッダ改竄は `AeadTagMismatch` のまま (backoff 対象外、L2 `DoS` 経路封鎖)。
     ///
     /// # Errors
     ///
@@ -565,7 +564,7 @@ impl<'a> VaultMigration<'a> {
         let kek_pw = self.derive_kek_pw_only(master_password, encrypted_header.kdf_salt())?;
 
         // (b) ヘッダ AEAD verify (改竄検出は AeadTagMismatch のまま透過、backoff 対象外)
-        verify_header_aead(self.aead, &encrypted_header, &kek_pw)?;
+        verify_header_aead(*self.aead, &encrypted_header, &kek_pw)?;
 
         // (c) wrapped_vek_by_pw を unwrap → 候補 VEK を取得
         //     unwrap 失敗 = KEK_pw 不一致 = WrongPassword
@@ -604,11 +603,11 @@ impl<'a> VaultMigration<'a> {
     /// 2. 新 VEK 生成
     /// 3. 全レコードを旧 VEK → 新 VEK で再暗号化
     /// 4. `nonce_counter` リセット (`NonceCounter::resume(0)`)
-    /// 5. 旧 KEK_pw を再導出 (kdf_salt 流用、password 同一なので KEK は同じ値)
-    /// 6. 新 VEK を旧 KEK_pw で wrap → 新 `wrapped_vek_by_pw`
-    /// 7. **新 mnemonic 生成** + 新 KEK_recovery 派生
-    /// 8. 新 VEK を新 KEK_recovery で wrap → 新 `wrapped_vek_by_recovery`
-    /// 9. ヘッダ AEAD envelope 再構築 (新 wrap 値 + 新 nonce_counter で AAD 再計算)
+    /// 5. 旧 `KEK_pw` を再導出 (`kdf_salt` 流用、password 同一なので KEK は同じ値)
+    /// 6. 新 VEK を旧 `KEK_pw` で wrap → 新 `wrapped_vek_by_pw`
+    /// 7. **新 mnemonic 生成** + 新 `KEK_recovery` 派生
+    /// 8. 新 VEK を新 `KEK_recovery` で wrap → 新 `wrapped_vek_by_recovery`
+    /// 9. ヘッダ AEAD envelope 再構築 (新 wrap 値 + 新 `nonce_counter` で AAD 再計算)
     /// 10. `repository.save` で **1 atomic write**
     /// 11. 新 `RecoveryDisclosure` を返却 (呼出側で `disclose` → 24 語開示)
     ///
@@ -639,10 +638,10 @@ impl<'a> VaultMigration<'a> {
         let target_version = old_header.version();
         let mut new_records: Vec<Record> = Vec::with_capacity(loaded_vault.records().len());
         for record in loaded_vault.records() {
-            let plaintext_record_intermediate = decrypt_one_record(self.aead, &old_vek, record)?;
+            let plaintext_record_intermediate = decrypt_one_record(*self.aead, &old_vek, record)?;
             let new_encrypted = encrypt_one_record(
-                self.aead,
-                self.rng,
+                *self.aead,
+                *self.rng,
                 &new_vek,
                 target_version,
                 &plaintext_record_intermediate,
@@ -666,7 +665,7 @@ impl<'a> VaultMigration<'a> {
                 .wrap_vek(&kek_pw_rewrap, &self.rng.generate_nonce_bytes(), &new_vek)?;
 
         // 7. 新 mnemonic 生成 → 新 KEK_recovery 派生
-        let new_mnemonic = build_recovery_mnemonic(self.rng)?;
+        let new_mnemonic = build_recovery_mnemonic(*self.rng)?;
         let new_kek_recovery = self.kdf_recovery.derive_kek_recovery(&new_mnemonic)?;
 
         // 8. 新 VEK を新 KEK_recovery で wrap (新 wrapped_vek_by_recovery)
@@ -678,8 +677,8 @@ impl<'a> VaultMigration<'a> {
 
         // 9. ヘッダ AEAD envelope 再構築 (新 wrap 値 + 新 nonce_counter で AAD 再計算)
         let header_envelope = build_header_envelope(
-            self.aead,
-            self.rng,
+            *self.aead,
+            *self.rng,
             &kek_pw_rewrap,
             old_header.version(),
             old_header.created_at(),
@@ -739,10 +738,10 @@ fn map_persistence_error(e: PersistenceError) -> MigrationError {
 /// **Sub-D Rev6**: `unwrap_vek` の `AeadTagMismatch` を `WrongPassword` に意味論変換する。
 ///
 /// 設計書 `vek-cache-and-ipc.md` §F-E1 step 4 服部指摘契約: `verify_header_aead`
-/// 通過後の `unwrap_vek(&kek_pw, wrapped_vek_by_pw)` の tag fail は **KEK_pw 不一致
+/// 通過後の `unwrap_vek(&kek_pw, wrapped_vek_by_pw)` の tag fail は **`KEK_pw` 不一致
 /// (パスワード違い)** に起因することが意味論的に確定する。Sub-E `UnlockBackoff::record_failure`
 /// は本 `WrongPassword` のみカウントし、ヘッダ改竄経路の `AeadTagMismatch` (vault.db
-/// 改竄) はカウント対象外とすることで L2 攻撃者の DoS 経路を封鎖する。
+/// 改竄) はカウント対象外とすることで L2 攻撃者の `DoS` 経路を封鎖する。
 ///
 /// 他の `CryptoError` variant (`KdfFailed` / `WeakPassword` / `NonceLimitExceeded` /
 /// `InvalidMnemonic` / `VerifyRequired`) はそのまま透過。
@@ -759,11 +758,11 @@ fn map_unwrap_vek_to_wrong_password(e: CryptoError) -> MigrationError {
 /// 設計書 §F-E1 step 4 凍結契約 + 工程4 マユリ Bug-E-001 報告:
 ///
 /// 通常ユーザの誤入力は `verify_header_aead` 段階で先に tag fail する経路が現実
-/// (KEK_pw 不一致 → AAD 不一致 → header tag verify fail)。本変換なしでは
+/// (`KEK_pw` 不一致 → AAD 不一致 → header tag verify fail)。本変換なしでは
 /// REQ-S11 / C-26 の連続失敗 backoff が発動せず、brute force レート制限が
 /// 機能しない (HIGH 重大度)。本ヘルパで `unlock_with_password` の文脈に閉じた
 /// 形で `AeadTagMismatch → WrongPassword` 変換を行い、backoff トリガを
-/// 「KEK_pw 検証経路の失敗」に統一する。
+/// 「`KEK_pw` 検証経路の失敗」に統一する。
 ///
 /// 真の vault.db 改竄経路と区別不能だが:
 /// - REQ-S11 brute force 防衛 ≫ 改竄通知粒度 (リーダー判断)
@@ -800,7 +799,7 @@ fn unwrap_vek_to_32b(verified: Verified<Plaintext>) -> Result<Vek, MigrationErro
 }
 
 /// `RecoveryMnemonic` を CSPRNG エントロピーから構築する。
-fn build_recovery_mnemonic(rng: &Rng) -> Result<RecoveryMnemonic, MigrationError> {
+fn build_recovery_mnemonic(rng: Rng) -> Result<RecoveryMnemonic, MigrationError> {
     let entropy = rng.generate_mnemonic_entropy();
     let bip39_mnemonic = bip39::Mnemonic::from_entropy(&entropy[..])
         .map_err(|_| MigrationError::Crypto(CryptoError::InvalidMnemonic))?;
@@ -816,8 +815,8 @@ fn build_recovery_mnemonic(rng: &Rng) -> Result<RecoveryMnemonic, MigrationError
 
 /// 1 record を VEK で AEAD 暗号化し、ciphertext+tag を連結した形式で `Record` を返す。
 fn encrypt_one_record(
-    aead: &AesGcmAeadAdapter,
-    rng: &Rng,
+    aead: AesGcmAeadAdapter,
+    rng: Rng,
     vek: &Vek,
     target_version: VaultVersion,
     record: &Record,
@@ -827,14 +826,14 @@ fn encrypt_one_record(
         RecordPayload::Encrypted(_) => return Err(MigrationError::AlreadyEncrypted),
     };
     let nonce = rng.generate_nonce_bytes();
-    let aad = Aad::new(record.id().clone(), target_version, record.created_at())
+    let record_aad = Aad::new(record.id().clone(), target_version, record.created_at())
         .map_err(MigrationError::Domain)?;
-    let (ciphertext, tag) = aead.encrypt_record(vek, &nonce, &aad, &plaintext_bytes)?;
+    let (ciphertext, tag) = aead.encrypt_record(vek, &nonce, &record_aad, &plaintext_bytes)?;
     let merged = concat_ciphertext_and_tag(ciphertext, &tag);
     let encrypted_payload = RecordPayloadEncrypted::new(
         nonce,
         CipherText::try_new(merged.into_boxed_slice()).map_err(MigrationError::Domain)?,
-        aad,
+        record_aad,
     )
     .map_err(MigrationError::Domain)?;
     Record::rehydrate(
@@ -851,17 +850,17 @@ fn encrypt_one_record(
 
 /// 1 record を VEK で AEAD 復号し、`RecordPayload::Plaintext` の `Record` を返す。
 fn decrypt_one_record(
-    aead: &AesGcmAeadAdapter,
+    aead: AesGcmAeadAdapter,
     vek: &Vek,
     record: &Record,
 ) -> Result<Record, MigrationError> {
     match record.payload() {
         RecordPayload::Encrypted(enc) => {
             let nonce = enc.nonce().clone();
-            let aad = enc.aad().clone();
+            let enc_aad = enc.aad().clone();
             let (ct_only, tag) = split_ciphertext_and_tag(enc.ciphertext().as_bytes())?;
             let verified: Verified<Plaintext> =
-                aead.decrypt_record(vek, &nonce, &aad, ct_only, &tag)?;
+                aead.decrypt_record(vek, &nonce, &enc_aad, ct_only, &tag)?;
             let plaintext_bytes = verified.into_inner().expose_secret().to_vec();
             let s =
                 String::from_utf8(plaintext_bytes).map_err(|_| MigrationError::PlaintextNotUtf8)?;
@@ -928,8 +927,8 @@ fn build_encrypted_vault(
 /// AEAD 内部エラー時 `MigrationError::Crypto(AeadTagMismatch)`。
 #[allow(clippy::too_many_arguments)]
 fn build_header_envelope(
-    aead: &AesGcmAeadAdapter,
-    rng: &Rng,
+    aead: AesGcmAeadAdapter,
+    rng: Rng,
     kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
     version: VaultVersion,
     created_at: OffsetDateTime,
@@ -939,7 +938,7 @@ fn build_header_envelope(
     nonce_counter: &NonceCounter,
     kdf_params: KdfParams,
 ) -> Result<HeaderAeadEnvelope, MigrationError> {
-    let aad = canonical_aad_bytes(
+    let aad_bytes = canonical_aad_bytes(
         version,
         created_at,
         kdf_salt,
@@ -952,7 +951,7 @@ fn build_header_envelope(
     // 空 plaintext + raw AAD で MAC として動作させる (AES-256-GCM の認証付き、
     // ciphertext は 0 byte、tag のみが意味を持つ)。
     let (ciphertext, tag) = aead
-        .encrypt_with_raw_aad(kek_pw, &nonce, &aad, &[])
+        .encrypt_with_raw_aad(kek_pw, &nonce, &aad_bytes, &[])
         .map_err(MigrationError::Crypto)?;
     Ok(HeaderAeadEnvelope::new(ciphertext, nonce, tag))
 }
@@ -961,23 +960,23 @@ fn build_header_envelope(
 ///
 /// `header.canonical_bytes_for_aad()` を AAD に取り、`decrypt_with_raw_aad` で
 /// AEAD タグ検証を実施する。検証成功時のみ `Ok(())` を返す。
-/// L1 nonce_counter 巻戻し / kdf_params 改竄 / wrapped_vek 入替などは AAD ハッシュ
+/// L1 `nonce_counter` 巻戻し / `kdf_params` 改竄 / `wrapped_vek` 入替などは AAD ハッシュ
 /// が一致しなくなるため `AeadTagMismatch` で検出される。
 ///
 /// # Errors
 ///
 /// AEAD 検証失敗時 `MigrationError::Crypto(AeadTagMismatch)` (内部詳細秘匿)。
 fn verify_header_aead(
-    aead: &AesGcmAeadAdapter,
+    aead: AesGcmAeadAdapter,
     header: &VaultEncryptedHeader,
     kek_pw: &shikomi_core::Kek<shikomi_core::crypto::KekKindPw>,
 ) -> Result<(), MigrationError> {
-    let aad = header.canonical_bytes_for_aad();
+    let header_aad = header.canonical_bytes_for_aad();
     let envelope = header.header_aead_envelope();
     aead.decrypt_with_raw_aad(
         kek_pw,
         &envelope.nonce,
-        &aad,
+        &header_aad,
         &envelope.ciphertext,
         &envelope.tag,
     )

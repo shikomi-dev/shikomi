@@ -1,4 +1,4 @@
-//! SQLite 永続化形式 ↔ `VaultEncryptedHeader` のエンコード / デコード (Sub-D 新規)。
+//! `SQLite` 永続化形式 ↔ `VaultEncryptedHeader` のエンコード / デコード (Sub-D 新規)。
 //!
 //! ## 設計判断: 既存スキーマ流用 + composite BLOB 化
 //!
@@ -37,7 +37,7 @@
 //!  既存スキーマで完結する妥協を採用)。
 
 use shikomi_core::{
-    AuthTag, KdfSalt, NonceBytes, NonceCounter, ProtectionMode, Vault, VaultHeader, WrappedVek,
+    AuthTag, NonceBytes, NonceCounter, ProtectionMode, Vault, VaultHeader, WrappedVek,
 };
 
 use super::error::MigrationError;
@@ -136,7 +136,7 @@ fn write_u16_len_prefixed(buf: &mut Vec<u8>, body: &[u8]) {
 ///
 /// `vault.header()` が `VaultHeader::Encrypted` であることを前提とする。
 /// `wrapped_vek_by_pw` 列に詰まった composite container を分解して
-/// `nonce_counter` / `kdf_params` / `header_aead_envelope` / 真の wrapped_vek_by_pw を取り出す。
+/// `nonce_counter` / `kdf_params` / `header_aead_envelope` / 真の `wrapped_vek_by_pw` を取り出す。
 pub(super) fn decode_vault_to_encrypted_header(
     vault: &Vault,
 ) -> Result<VaultEncryptedHeader, MigrationError> {
@@ -190,7 +190,7 @@ pub(super) fn decode_vault_to_encrypted_header(
     ))
 }
 
-/// 仮 wrapped_vek_by_pw の構成要素を保持する内部構造体 (composite parse 中継用)。
+/// 仮 `wrapped_vek_by_pw` の構成要素を保持する内部構造体 (composite parse 中継用)。
 ///
 /// `Debug` 派生は `#[cfg(test)]` モジュール内の `assert_eq!` / `unwrap` 等が
 /// `Result<ParsedWrappedSection, MigrationError>` の `Err` 経路で要求するため。
@@ -450,7 +450,7 @@ mod tests {
         assert!(matches!(err, MigrationError::Persistence(_)));
     }
 
-    /// 平文 vault に対する decode は NotEncrypted エラー。
+    /// 平文 vault に対する decode は `NotEncrypted` エラー。
     #[test]
     fn decode_plaintext_vault_returns_not_encrypted() {
         let header =

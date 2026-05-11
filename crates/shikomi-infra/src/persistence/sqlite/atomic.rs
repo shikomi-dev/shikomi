@@ -15,7 +15,7 @@
 //! Bug-G-001 反映（2026-04-27）: 当初 `50ms × 5 = 最悪 ~375ms` の線形 retry だったが、
 //! Win CI ランナー (windows-latest) で Defender / Search Indexer が `vault.db` ハンドルを
 //! `drop` 後も `~250ms+` 保持し続け、`AtomicWriteFailed { code: 5 }` が継続発生したため、
-//! retry budget を指数バックオフへ拡張した（`security.md §jitter` SSoT も連動更新）。
+//! retry budget を指数バックオフへ拡張した（`security.md §jitter` `SSoT` も連動更新）。
 
 use std::path::Path;
 
@@ -37,7 +37,7 @@ use super::schema::SchemaSql;
 // 内部定数（Issue #65）
 // -------------------------------------------------------------------
 
-/// SQLite サイドカーファイル名のサフィックス（rusqlite が `<db>` の隣接に作成する）。
+/// `SQLite` サイドカーファイル名のサフィックス（rusqlite が `<db>` の隣接に作成する）。
 ///
 /// `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` + `Connection::close()`
 /// により原則消去される（`docs/features/vault-persistence/basic-design/security.md`
@@ -123,7 +123,7 @@ impl AtomicWriter {
     /// # Errors
     ///
     /// - ファイル作成失敗: `PersistenceError::AtomicWriteFailed { stage: PrepareNew }`
-    /// - SQLite エラー（PRAGMA / DDL / トランザクション / close）: `PersistenceError::Sqlite`
+    /// - `SQLite` エラー（PRAGMA / DDL / トランザクション / close）: `PersistenceError::Sqlite`
     pub(crate) fn write_new(paths: &VaultPaths, vault: &Vault) -> Result<(), PersistenceError> {
         let new_path = paths.vault_db_new();
 
@@ -225,11 +225,11 @@ impl AtomicWriter {
         Ok(())
     }
 
-    /// `Connection::execute_batch` の薄いラッパ（write_new の close-flow 用）。
+    /// `Connection::execute_batch` の薄いラッパ（`write_new` の close-flow 用）。
     ///
     /// 失敗時は `.new` を best-effort 削除して `PersistenceError::Sqlite` を返す。
-    /// commit 後の close-flow（wal_checkpoint / journal_mode）で失敗した場合、
-    /// `.new` は中途半端な状態になるため Fail Secure で破棄する（次回 save の OrphanNewFile を回避）。
+    /// commit 後の close-flow（`wal_checkpoint` / `journal_mode`）で失敗した場合、
+    /// `.new` は中途半端な状態になるため Fail Secure で破棄する（次回 save の `OrphanNewFile` を回避）。
     fn sqlite_pragma(
         conn: &rusqlite::Connection,
         new_path: &Path,
@@ -241,7 +241,7 @@ impl AtomicWriter {
         })
     }
 
-    /// SQLite サイドカー（`-journal` / `-wal` / `-shm`）が残存していれば owner-only
+    /// `SQLite` サイドカー（`-journal` / `-wal` / `-shm`）が残存していれば owner-only
     /// パーミッションを強制適用する（best-effort、失敗は warn のみ）。
     ///
     /// 通常は `PRAGMA journal_mode = DELETE` + `Connection::close()` で消去されるが、
@@ -635,9 +635,9 @@ mod tests {
         vault
     }
 
-    /// TC-I06 — write_new_only フックで .new のみ書き込み→load が OrphanNewFile を返す。
+    /// TC-I06 — `write_new_only` フックで .new のみ書き込み→load が `OrphanNewFile` を返す。
     ///
-    /// AC-06 対応。write_new_only は fsync_and_rename を呼ばないため .new が残り、
+    /// AC-06 対応。`write_new_only` は `fsync_and_rename` を呼ばないため .new が残り、
     /// vault.db の内容は初期 vault のままになる。
     #[test]
     fn tc_i06_write_new_only_hook_orphan() {
