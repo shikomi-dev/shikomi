@@ -1,11 +1,18 @@
 //! GUI 統一エラー型。
 //!
 //! `GUIError` は全 Tauri Commands の統一エラー型。`serde::Serialize` を実装し、
-//! SolidJS 側で `{ "kind": "...", "message": "..." }` JSON として受け取れる。
+//! SolidJS 側で JSON として受け取れる。
 //!
-//! `kind` フィールドは Sub-C（UI 層）が switch して日本語メッセージを表示するための
-//! 機械的判別子。`message` フィールドはデバッグ・ログ用の英語技術情報であり、
-//! ユーザーに直接表示してはならない。
+//! ## JSON フィールド仕様
+//!
+//! | フィールド | 全 variant | 説明 |
+//! |---|---|---|
+//! | `kind` | 常に存在 | Sub-C が `switch` する最上位判別子 |
+//! | `message` | 常に存在 | デバッグ・ログ用英語技術情報。**ユーザーに直接表示禁止** |
+//! | `ipc_code` | `kind == "ipc_error"` のみ | daemon エラー種別の安定識別子（§2.3）|
+//! | `wait_secs` | `ipc_code == "backoff_active"` のみ | 次回試行可能までの待機秒数 |
+//!
+//! Sub-C は `kind` → `ipc_code` の順で分岐し、`message` は開発ツール専用。
 //!
 //! 設計根拠: docs/features/shikomi-gui/ipc-client/basic-design.md §2.2
 //! docs/features/shikomi-gui/ipc-client/detailed-design.md §2
@@ -21,8 +28,8 @@ use thiserror::Error;
 
 /// Tauri Commands の統一エラー型。
 ///
-/// `Serialize` 実装で `{ "kind": "...", "message": "..." }` 形式に写像する。
-/// SolidJS 側は `kind` で分岐し、`message` はログ・開発ツール専用。
+/// `Serialize` 実装でモジュール doc の JSON フィールド仕様に従い写像する。
+/// `Ipc` variant のみ `ipc_code`（+ `BackoffActive` は `wait_secs`）を追加フィールドとして持つ。
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GUIError {
@@ -72,7 +79,7 @@ pub enum GUIError {
 }
 
 // ---------------------------------------------------------------------------
-// Serialize 実装: { "kind": "...", "message": "..." }
+// Serialize 実装
 // ---------------------------------------------------------------------------
 
 impl Serialize for GUIError {
@@ -80,24 +87,70 @@ impl Serialize for GUIError {
     where
         S: Serializer,
     {
-        let mut map = serializer.serialize_map(Some(2))?;
-        let (kind, message): (&str, String) = match self {
-            Self::DaemonNotRunning => ("daemon_not_running", "daemon is not running".to_owned()),
-            Self::ConnectionFailed(msg) => ("connection_failed", msg.clone()),
-            Self::ProtocolVersionMismatch { server, client } => (
-                "protocol_version_mismatch",
-                format!("server={server}, client={client}"),
-            ),
-            Self::Ipc(code) => ("ipc_error", code.to_string()),
-            Self::Encode(msg) => ("encode_error", msg.clone()),
-            Self::Decode(msg) => ("decode_error", msg.clone()),
-            Self::UnexpectedResponse(msg) => ("unexpected_response", msg.clone()),
-            Self::InvalidInput(msg) => ("invalid_input", msg.clone()),
-            Self::NotConnected => ("not_connected", "not connected to daemon".to_owned()),
-        };
-        map.serialize_entry("kind", kind)?;
-        map.serialize_entry("message", &message)?;
-        map.end()
+        match self {
+            // Ipc variant: kind + ipc_code + message（BackoffActive は wait_secs 追加）。
+            // Sub-C は ipc_code で daemon エラー種別を switch する（detailed-design.md §2.3）。
+            Self::Ipc(code) => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("kind", "ipc_error")?;
+                map.serialize_entry("ipc_code", ipc_code_key(code))?;
+                if let IpcErrorCode::BackoffActive { wait_secs } = code {
+                    map.serialize_entry("wait_secs", wait_secs)?;
+                }
+                map.serialize_entry("message", &code.to_string())?;
+                map.end()
+            }
+            // 他の variant: kind + message の 2 フィールド。
+            other => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                let (kind, message): (&str, String) = match other {
+                    Self::DaemonNotRunning => {
+                        ("daemon_not_running", "daemon is not running".to_owned())
+                    }
+                    Self::ConnectionFailed(msg) => ("connection_failed", msg.clone()),
+                    Self::ProtocolVersionMismatch { server, client } => (
+                        "protocol_version_mismatch",
+                        format!("server={server}, client={client}"),
+                    ),
+                    Self::Encode(msg) => ("encode_error", msg.clone()),
+                    Self::Decode(msg) => ("decode_error", msg.clone()),
+                    Self::UnexpectedResponse(msg) => ("unexpected_response", msg.clone()),
+                    Self::InvalidInput(msg) => ("invalid_input", msg.clone()),
+                    Self::NotConnected => ("not_connected", "not connected to daemon".to_owned()),
+                    Self::Ipc(_) => unreachable!("handled in Ipc arm"),
+                };
+                map.serialize_entry("kind", kind)?;
+                map.serialize_entry("message", &message)?;
+                map.end()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ipc_code_key: IpcErrorCode → snake_case 安定識別子
+// ---------------------------------------------------------------------------
+
+/// `IpcErrorCode` variant を Sub-C が `switch` する安定 snake_case 識別子へ写像する（§2.3）。
+///
+/// `IpcErrorCode` は `#[non_exhaustive]` のため将来バリアント追加時の
+/// フォールバック `"unknown"` を保持する。Sub-C 側は `"unknown"` を汎用エラーとして処理せよ。
+fn ipc_code_key(code: &IpcErrorCode) -> &'static str {
+    match code {
+        IpcErrorCode::EncryptionUnsupported => "encryption_unsupported",
+        IpcErrorCode::NotFound { .. } => "not_found",
+        IpcErrorCode::InvalidLabel { .. } => "invalid_label",
+        IpcErrorCode::Persistence { .. } => "persistence",
+        IpcErrorCode::Domain { .. } => "domain",
+        IpcErrorCode::Internal { .. } => "internal",
+        IpcErrorCode::VaultLocked => "vault_locked",
+        IpcErrorCode::BackoffActive { .. } => "backoff_active",
+        IpcErrorCode::RecoveryRequired => "recovery_required",
+        IpcErrorCode::ProtocolDowngrade => "protocol_downgrade",
+        IpcErrorCode::Crypto { .. } => "crypto",
+        IpcErrorCode::HotkeyConflict { .. } => "hotkey_conflict",
+        IpcErrorCode::HotkeyParseError { .. } => "hotkey_parse_error",
+        _ => "unknown",
     }
 }
 
