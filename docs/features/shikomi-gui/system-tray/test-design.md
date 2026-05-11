@@ -76,10 +76,10 @@ Sub-B と同様。Tauri Command ハンドラは `tauri::State<AppState>` を受�
 
 | テスト ID | REQ-TRAY | 設計根拠 | テスト内容 | 種別 |
 |---------|---------|--------|----------|------|
-| TC-GUI-TRAY-UT01 | REQ-TRAY-05 | `detailed-design.md §9` 文言一覧 | `remaining_secs=Some(15)` → `"shikomi — クリップボードを自動消去まで 15 秒"` | 正常系 |
-| TC-GUI-TRAY-UT02 | REQ-TRAY-05 | `detailed-design.md §9` 文言一覧 | `remaining_secs=Some(1)` → `"shikomi — クリップボードを自動消去まで 1 秒"`（最小正値） | 正常系（境界値） |
+| TC-GUI-TRAY-UT01 | REQ-TRAY-05 | `detailed-design.md §10` 文言一覧 | `remaining_secs=Some(15)` → `"shikomi — クリップボードを自動消去まで 15 秒"` | 正常系 |
+| TC-GUI-TRAY-UT02 | REQ-TRAY-05 | `detailed-design.md §10` 文言一覧 | `remaining_secs=Some(1)` → `"shikomi — クリップボードを自動消去まで 1 秒"`（最小正値） | 正常系（境界値） |
 | TC-GUI-TRAY-UT03 | REQ-TRAY-05 | `detailed-design.md §4.1`（`n > 0` 条件） | `remaining_secs=Some(0)` → `"shikomi"`（0秒は非アクティブ扱い） | 正常系（境界値） |
-| TC-GUI-TRAY-UT04 | REQ-TRAY-05 | `detailed-design.md §9` 文言一覧 | `remaining_secs=None` → `"shikomi"` | 正常系 |
+| TC-GUI-TRAY-UT04 | REQ-TRAY-05 | `detailed-design.md §10` 文言一覧 | `remaining_secs=None` → `"shikomi"` | 正常系 |
 | TC-GUI-TRAY-UT05 | REQ-TRAY-04 | `detailed-design.md §6.2` | `countdown_started_at=None` → `calc_remaining(None, now)` → `None` | 正常系 |
 | TC-GUI-TRAY-UT06 | REQ-TRAY-04 | `detailed-design.md §6.2` | `elapsed=10s`（`CLEAR_TIMEOUT_SECS=30`）→ `calc_remaining(...)` → `Some(20)` | 正常系 |
 | TC-GUI-TRAY-UT07 | REQ-TRAY-04 | `detailed-design.md §6.2` | `elapsed=30s`（境界: 丁度タイムアウト）→ `calc_remaining(...)` → `None` | 正常系（境界値） |
@@ -106,7 +106,7 @@ Sub-B と同様。Tauri Command ハンドラは `tauri::State<AppState>` を受�
 | 項目 | 内容 |
 |------|------|
 | 対応する要件ID | REQ-TRAY-05（R1-GUI-15） |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §9` 文言一覧） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §10` 文言一覧） |
 | 種別 | 正常系・境界値 |
 | テスト対象関数 | `tooltip_text(remaining_secs: Option<u64>) -> &'static str / String` |
 | 前提条件 | 純粋関数呼び出し。外部依存なし |
@@ -119,7 +119,7 @@ Sub-B と同様。Tauri Command ハンドラは `tauri::State<AppState>` を受�
 | TC-GUI-TRAY-UT03 | `Some(0)` | `"shikomi"` | 境界値（0秒 = 非アクティブ扱い）|
 | TC-GUI-TRAY-UT04 | `None` | `"shikomi"` | 正常系（非アクティブ）|
 
-**設計根拠**: `detailed-design.md §4.1` の分岐条件「`remaining_secs == Some(n), n > 0`」と `§9` 凍結文言テーブルの完全一致を検証する。ツールチップ文字列はこの関数が単一責務を持ち、`countdown::run()` と `tray.set_tooltip()` 呼び出し側で生成しない（DRY）。
+**設計根拠**: `detailed-design.md §4.1` の分岐条件「`remaining_secs == Some(n), n > 0`」と `§10` 文言テーブルの完全一致を検証する。ツールチップ文字列はこの関数が単一責務を持ち、`countdown::run()` と `tray.set_tooltip()` 呼び出し側で生成しない（DRY）。
 
 ---
 
