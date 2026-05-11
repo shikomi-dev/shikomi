@@ -68,6 +68,40 @@ shikomi は「ホットキーで投入 → ユーザが即貼付」が主ユー�
 - 通知メッセージにレコード名やプレビュー文字を含める（画面共有・肩越し閲覧で情報漏洩）
 - サウンド通知（デフォルト off、オプトイン）
 
+### 7.3 GUI 層（Tauri v2 WebView）固有の脅威（Issue #90 追加）
+
+`shikomi-gui` は Tauri v2 の WebView（WebView2 / WKWebView / WebKitGTK）を介して SolidJS フロントエンドを実行する。WebView の追加はローカルデスクトップアプリに**Web 層の攻撃面**をもたらす。
+
+#### 7.3.1 WebView 固有 STRIDE 補足
+
+| 脅威カテゴリ | GUI 固有リスク | 対策 |
+|------------|-------------|------|
+| **S**poofing | ローカル HTML / JS のなりすまし。攻撃者がローカルファイルシステムの別 HTML を WebView に読み込ませ、Tauri Commands を実行する | `tauri.conf.json` の `security.devTools` を `false`（production）にし、ローカルファイル読み込みは `asset://` プロトコルのみ許可。Tauri v2 は自動で `window.__TAURI__` の検証を行う |
+| **T**ampering | XSS により DOM が書き換えられ、Tauri Commands がバックグラウンドで呼び出される | CSP `script-src 'self'`（`R1-GUI-17`）で外部スクリプト・インラインスクリプト・`eval` を全面禁止。SolidJS は CSP 準拠コンパイルモードを使用 |
+| **I**nformation Disclosure | マスターパスワード等の機密変数が SolidJS ストア / シグナルに残留し、DevTools Memory タブから読み出される | `R1-GUI-18`: JS 側機密変数を `null` で即上書き。機密値を `createStore` / `createSignal` の state に保存しない |
+| **I**nformation Disclosure | Tauri Commands の引数ログ / エラー表示に機密値が混入 | Tauri Commands の `#[tauri::command]` は引数名のみログ記録。値は `SecretInput` 型で `Debug` を実装せず自動秘匿 |
+| **E**levation of Privilege | `window.__TAURI__.invoke` を DevTools / フィッシング経由で直接呼び出し、JS バリデーションをバイパスして不正な IPC リクエストを送信 | `R1-GUI-19`: Rust 側 Tauri Commands ハンドラで独立した input validation を実施（JS 側バリデーション必須化なし） |
+
+#### 7.3.2 CSP 設定方針
+
+`tauri.conf.json` の `security.csp` に以下を必須とする（`R1-GUI-17`）:
+
+- `script-src 'self'` — 外部オリジン・インラインスクリプト・`eval` を全面禁止
+- `connect-src ipc: http://ipc.localhost` — Tauri IPC 経路のみ許可
+- `default-src 'self'` — その他リソースも同一オリジン限定
+
+**禁止設定**: `unsafe-eval`・`unsafe-inline` の許可。Vite / SolidJS の CSP 準拠ビルド設定で対応する（追加コストなし）。出典: https://v2.tauri.app/security/csp/
+
+#### 7.3.3 WebView 起動オプション制限
+
+| 設定項目 | 要件 |
+|---------|------|
+| `devTools` | production ビルドでは `false` 必須 |
+| `dangerousDisableAssetCspModification` | `false`（CSP 改変禁止） |
+| `dangerousRemoteDomainIpcAccess` | 設定禁止（ローカルオリジン限定） |
+
+出典: https://v2.tauri.app/security/
+
 ## 8. OWASP Top 10 対応表（2021 版・デスクトップアプリ適用）
 
 OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たないデスクトップアプリでも**多くが該当する**（認可・ログ・暗号失敗・依存コンポーネント等）。設計上の取扱を以下に明示する。
@@ -78,7 +112,7 @@ OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たな�
 | **A02: Cryptographic Failures** | **暗号化モード（オプトイン）で該当** | 暗号化モード有効時のみ AEAD（AES-256-GCM）＋ Argon2id（OWASP 推奨 `m=19456, t=2, p=1`）を適用。nonce は CSPRNG から毎回 96bit 生成、vault 内に per-record 記録（`../tech-stack.md` §2.4 参照）。VEK は `secrecy` + `zeroize`。MAC（GMAC タグ）で改竄検知。**平文モードは暗号保護を行わないことを明示**（§7.0 のユーザ自己責任リスク表を参照）。デフォルト平文を選ぶ場合、A02 は「暗号を使わない設計判断」として該当外だが、代わりに §7.0 の脅威表を受容する |
 | **A03: Injection** | 該当（SQL / コマンド引数） | SQLite 操作は `rusqlite` の parameter binding のみ使用し生 SQL 連結禁止。CLI → daemon IPC は MessagePack 型付きスキーマ、文字列として shell に渡す経路なし |
 | **A04: Insecure Design** | 該当 | 本ドキュメント全体で扱う（プロセスモデル・Threat Model・Fail Secure 方針）。**デフォルト平文を Insecure Design と誤解されないよう**、§7.0 でリスク提示と UI 可視化（`[plaintext]` 表示）を強制する設計とした。「知らされず平文だった」事故を防ぐ |
-| **A05: Security Misconfiguration** | 該当 | 既定値を安全側に（自動クリア 30 秒、アイドルタイムアウト 15 分、テレメトリ off、キーチェーン連携 off）。**vault 保護モードはデフォルト平文**だが、それを**必ず可視化する**ことで「設定ミスでオフのまま」を回避。デバッグビルドは別バイナリでリリースチャネルに混入しない |
+| **A05: Security Misconfiguration** | 該当 | 既定値を安全側に（自動クリア 30 秒、アイドルタイムアウト 15 分、テレメトリ off、キーチェーン連携 off）。**vault 保護モードはデフォルト平文**だが、それを**必ず可視化する**ことで「設定ミスでオフのまま」を回避。デバッグビルドは別バイナリでリリースチャネルに混入しない。**GUI 追加対策（Issue #90）**: Tauri v2 WebView の `security.csp = "script-src 'self'"` を `tauri.conf.json` で強制し `unsafe-eval` / `unsafe-inline` を禁止する（§7.3.2 参照）。production ビルドで `devTools: false` 必須 |
 | **A06: Vulnerable and Outdated Components** | 該当 | `cargo-deny` + `cargo-audit` + Dependabot（`../dev.md` §5）。`Cargo.lock` をコミットし lock 書換え監査。SBOM（CycloneDX）をリリースに添付 |
 | **A07: Identification and Authentication Failures** | **暗号化モードで該当** | 暗号化モード時のみマスターパスワード認証を行うため、該当は暗号化モードに限定。Argon2id で総当たり耐性、連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフを該当 IPC リクエストにのみ適用**（プロセス全体を blocking sleep させない＝ホットキー購読を継続、`../tech-stack.md` §2.4 参照）。IPC 認証（UID 検証は Issue #26 で実装、**セッショントークンは後続 Issue で追加予定**）は両モード共通。リカバリコード：BIP-39 24 語、1 度だけ表示、再発行不可（暗号化モード時のみ） |
 | **A08: Software and Data Integrity Failures** | 該当 | コード署名（Win: Authenticode、Mac: Developer ID + Notarization、Linux: GPG + minisign）。更新時は `tauri-plugin-updater` の minisign 署名検証、検証失敗で更新中断 |
