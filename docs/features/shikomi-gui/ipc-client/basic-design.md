@@ -12,7 +12,7 @@
 |---------|------|
 | REQ-IPC-01 | `list_entries` Tauri Command が `IpcRequest::ListRecords` を送信し、`IpcResponse::Records { records, protection_mode }` を SolidJS に返す（R1-GUI-04） |
 | REQ-IPC-02 | `add_entry` Tauri Command が `IpcRequest::AddRecord` を送信し、`IpcResponse::Added { id }` を返す。ラベル空文字・値空文字は Rust ハンドラ側で Fail Fast する（R1-GUI-05, R1-GUI-19） |
-| REQ-IPC-03 | `update_entry` Tauri Command が `IpcRequest::EditRecord` を送信し、`IpcResponse::Edited { id }` を返す。変更フィールドが全て `None` の場合は IPC 送信を省略し即時成功を返す（R1-GUI-06） |
+| REQ-IPC-03 | `update_entry` Tauri Command が `IpcRequest::EditRecord` を送信し、`IpcResponse::Edited { id }` を返す。ハンドラに到達した場合は**必ず** IPC 送信する（Silent Failure 禁止）。Sub-C（UI 層）が「変更なし時に `invoke` 自体を呼ばない」契約を持つ（Tell, Don't Ask）（R1-GUI-06） |
 | REQ-IPC-04 | `delete_entry` Tauri Command が `IpcRequest::RemoveRecord` を送信し、`IpcResponse::Removed { id }` を返す（R1-GUI-07） |
 | REQ-IPC-05 | `assign_hotkey` Tauri Command が `IpcRequest::EditRecord { hotkey: Some(combo), clear_hotkey: false }` を送信し、`IpcResponse::Edited { id }` を返す。combo は `Ctrl+Alt+[1-9]` 形式のみ許可、Rust ハンドラ側で検証する（R1-GUI-08, R1-GUI-09, R1-GUI-19） |
 | REQ-IPC-06 | `remove_hotkey` Tauri Command が `IpcRequest::EditRecord { clear_hotkey: true }` を送信し、`IpcResponse::Edited { id }` を返す（R1-GUI-08） |
@@ -21,7 +21,8 @@
 | REQ-IPC-09 | `decrypt_vault` Tauri Command が `IpcRequest::Decrypt { master_password, confirmed }` を送信し、`IpcResponse::Decrypted` を返す。`confirmed` は JS 側チェックボックス状態をそのまま受け取り、Rust ハンドラが `confirmed == false` を Fail Fast する（R1-GUI-12, R1-GUI-19） |
 | REQ-IPC-10 | `unlock_vault` Tauri Command が `IpcRequest::Unlock { master_password, recovery: None }` を送信し、`IpcResponse::Unlocked` を返す。vault がロック状態での書き込み操作前にアンロックモーダルから呼ばれる（R1-GUI-13） |
 | REQ-IPC-11 | `GuiIpcClient::connect()` が UDS（Unix）/ Named Pipe（Windows）経由で daemon に接続し、`IpcProtocolVersion::V2` Handshake を確立する。接続失敗・プロトコル不一致は `GUIError` に変換して Fail Fast する（R1-GUI-02, R1-GUI-03） |
-| REQ-IPC-12 | daemon 未接続状態での全 Tauri Command 呼び出しは即 `GUIError::DaemonNotRunning` を返す。サイレント失敗・リトライは行わない（tech-stack.md §2.6.2 Fail Fast 契約） |
+| REQ-IPC-12 | daemon 未接続状態での全 Tauri Command 呼び出しは即 `GUIError::NotConnected` を返す。サイレント失敗・リトライは行わない（tech-stack.md §2.6.2 Fail Fast 契約） |
+| REQ-IPC-13 | ソケットパス解決は `shikomi-infra::ipc::IpcEndpoint::default_for_current_user()` に一元化する。GUI の `lib.rs::setup()` も CLI の `IpcVaultRepository::default_socket_path()` も同メソッドを呼び出す。パス解決ロジックを複数箇所に重複させない（DRY）。`IpcEndpoint` は `shikomi-infra` crate 内に新設する |
 
 ## 1. モジュール構成
 
@@ -120,7 +121,33 @@ Tauri アプリ起動時に `lib.rs::setup()` フックが `GuiIpcClient::connec
 
 `AppState` は `tauri::Manager::manage()` で登録し、各 Command ハンドラが `tauri::State<AppState>` で受け取る。
 
-## 3. feature-spec との対応（R1-GUI → REQ-IPC トレーサビリティ）
+## 3. UX 設計上の考慮
+
+### 3.1 本 sub-feature の UI 保持有無
+
+本 sub-feature（ipc-client）は **UI を持たない**。Tauri Commands は Rust 層の IPC ブリッジのみを担い、画面表示・ユーザー操作の制御は Sub-C（ui sub-feature）の責務である。
+
+### 3.2 エラー構造と Sub-C の表示責務
+
+`GUIError` は `{ "kind": "...", "message": "..." }` 形式で SolidJS に届く（`detailed-design.md §2.2` 参照）。表示責務の分担は以下の通り：
+
+| フィールド | 用途 | 責務 |
+|-----------|------|------|
+| `kind` | エラー種別の機械的判別 | **Sub-C が `kind` を switch して日本語メッセージを表示する**（例: `"daemon_not_running"` → 「daemon が起動していません」）|
+| `message` | デバッグ・ログ記録用の英語技術情報 | **ユーザーに直接表示してはならない**（開発者ツール・ログファイル用途） |
+
+**この分担を破ると田中俊介さん・佐々木健二さんには意味不明な英語技術文字列が表示される**（ペルソナ A/C への配慮要件）。
+
+### 3.3 Sub-C への契約（`update_entry` の呼び出し規約）
+
+`update_entry` ハンドラはフィールド変更有無にかかわらずハンドラ到達時に必ず IPC 送信を行う（REQ-IPC-03、Tell, Don't Ask）。Sub-C は以下の契約を守ること：
+
+- **変更なし（ラベル・値ともに変更されていない）場合は `invoke('update_entry', ...)` を呼ばない**
+- 変更がある場合のみ invoke する
+
+これにより daemon への不要な往復を回避しつつ、ハンドラ側の Silent Failure（実在しない id で成功を返す）を構造的に排除する。
+
+## 4. feature-spec との対応（R1-GUI → REQ-IPC トレーサビリティ）
 
 | R1-GUI | REQ-IPC | 実装 Command |
 |--------|---------|-------------|
@@ -136,6 +163,9 @@ Tauri アプリ起動時に `lib.rs::setup()` フックが `GuiIpcClient::connec
 | R1-GUI-11 | REQ-IPC-08 | `encrypt_vault`（`disclosure` 返却） |
 | R1-GUI-12 | REQ-IPC-09 | `decrypt_vault`（`confirmed` Fail Fast） |
 | R1-GUI-13 | REQ-IPC-10, REQ-IPC-07 | `unlock_vault`, `get_vault_status` |
+| R1-GUI-14 | 該当なし — Sub-D（system-tray）スコープ | — |
+| R1-GUI-15 | 該当なし — Sub-D（system-tray）スコープ | — |
+| R1-GUI-16 | 該当なし — Sub-E（build CI）スコープ | — |
 | R1-GUI-17 | 該当なし — Sub-A で `tauri.conf.json` に設定済み | — |
 | R1-GUI-18 | 該当なし — Sub-C（UI コンポーネント層）の責務 | — |
-| R1-GUI-19 | REQ-IPC-02, REQ-IPC-05, REQ-IPC-09 | `add_entry`, `assign_hotkey`, `decrypt_vault` の Rust 側検証 |
+| R1-GUI-19 | REQ-IPC-02, REQ-IPC-05, REQ-IPC-08, REQ-IPC-09, REQ-IPC-10 | `add_entry`, `assign_hotkey`, `encrypt_vault`, `decrypt_vault`, `unlock_vault` の Rust 側検証 |

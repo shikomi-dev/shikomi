@@ -23,6 +23,10 @@
 | Unix（macOS / Linux） | `tokio::net::UnixStream` |
 | Windows | `tokio::net::windows::named_pipe::NamedPipeClient` |
 
+**セキュリティ前提（UDS ピア認証）**:
+
+本クライアントが接続する UDS ソケットの認可（同一ユーザー UID の確認）は **daemon 側が `SO_PEERCRED` / Windows ACL で担保**している（`docs/architecture/context/threat-model.md §7` および `crates/shikomi-daemon/src/permission/` 参照）。`GuiIpcClient` はトランスポート層のみを担い、追加の認証処理は行わない。これは daemon が自身と同一 UID のクライアントのみ接続を受理する設計に依存しており、GUI プロセスが異なるユーザーで動作する場合は daemon が接続を拒否する。
+
 ### 1.2 接続・ハンドシェイクフロー
 
 ```mermaid
@@ -69,24 +73,31 @@ CLI の `IpcClient` と同一仕様で実装する（共通 daemon への接続�
 #### `round_trip(request: &IpcRequest) → Result<IpcResponse, GUIError>`
 
 1. `rmp_serde::to_vec(request)` でシリアライズ失敗時は `GUIError::Encode`
-2. `framed.send(bytes)` の IO 失敗は `GUIError::ConnectionFailed`
-3. `framed.next()` で受信。`None`（EOF）は `GUIError::ConnectionFailed`
+2. `framed.send(bytes)` の IO 失敗は `GUIError::ConnectionFailed(io_error.kind().to_string())`
+   — `std::io::Error` の `kind()` のみを文字列化し、OS 内部情報（ソケットパス・FD 番号等）を含む生メッセージは**使用しない**（OWASP A04 エラーメッセージ漏洩対策）
+3. `framed.next()` で受信。`None`（EOF）は `GUIError::ConnectionFailed("connection closed")`
 4. `rmp_serde::from_slice(&bytes)` のデシリアライズ失敗は `GUIError::Decode`
 5. 成功時は `IpcResponse` を返す
 
-### 1.5 ソケットパス解決
+### 1.5 ソケットパス解決（`IpcEndpoint`、REQ-IPC-13）
 
 `GuiIpcClient::connect()` は呼び出し元（`lib.rs::setup()`）から `socket_path: &Path` を受け取る。パス解決ロジックは `setup()` が担い、`GuiIpcClient` 自体はパス解決を行わない（単一責務）。
 
-パス解決の優先順位（`setup()` 内で実装）：
+**DRY 設計**: ソケットパス解決ロジックを CLI（`IpcVaultRepository::default_socket_path()`）と GUI（`lib.rs::setup()`）の2箇所に重複させない。`shikomi-infra` crate に新設する `IpcEndpoint::default_for_current_user()` に一元化し、両者がこれを呼び出す。
+
+#### `IpcEndpoint`（`shikomi-infra::ipc::IpcEndpoint`、Sub-B で新設）
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `IpcEndpoint::default_for_current_user()` | `Result<PathBuf, PersistenceError>` | 現ユーザーのデフォルト IPC ソケットパスを解決。優先順位は下表 |
 
 | 優先度 | パス | 条件 |
 |--------|------|------|
-| 1 | `$SHIKOMI_VAULT_DIR/shikomi.sock`（Unix）/ `\\.\pipe\shikomi`（Windows） | 環境変数 `SHIKOMI_VAULT_DIR` が設定されている場合 |
+| 1 | `$SHIKOMI_VAULT_DIR/shikomi.sock`（Unix）/ `\\.\pipe\shikomi-{username}`（Windows） | 環境変数 `SHIKOMI_VAULT_DIR` が設定されている場合 |
 | 2 | `$XDG_RUNTIME_DIR/shikomi/shikomi.sock` | Linux / macOS（XDG 準拠） |
 | 3 | `dirs::data_dir()/shikomi/shikomi.sock`（Unix）/ `\\.\pipe\shikomi`（Windows） | フォールバック |
 
-CLI（`IpcVaultRepository::default_socket_path()`）と同一の優先順位に従い、daemon との接続先を一致させる。
+**移行計画**: CLI の `IpcVaultRepository::default_socket_path()` は本 Sub-B で `IpcEndpoint::default_for_current_user()` への委譲に書き換える（Boy Scout Rule）。
 
 ---
 
@@ -97,7 +108,7 @@ CLI（`IpcVaultRepository::default_socket_path()`）と同一の優先順位に�
 | variant | フィールド | Serialize 後の `kind` 文字列 | 意味 |
 |---------|-----------|--------------------------|------|
 | `DaemonNotRunning` | なし | `"daemon_not_running"` | UDS / Named Pipe ファイルが存在しない（daemon 未起動） |
-| `ConnectionFailed(String)` | `message: String` | `"connection_failed"` | 接続後の IO エラー（切断含む） |
+| `ConnectionFailed(String)` | `message: String` | `"connection_failed"` | 接続後の IO エラー（切断含む）。`message` には `io::Error::kind().to_string()` のみを使用し、生の OS エラーメッセージ（ソケットパス・FD番号等）を含めない（OWASP A04） |
 | `ProtocolVersionMismatch` | `server: String, client: String` | `"protocol_version_mismatch"` | Handshake バージョン不一致 |
 | `Ipc(IpcErrorCode)` | なし（`IpcErrorCode` の `Display` を `message` に使用） | `"ipc_error"` | daemon 返却 `IpcErrorCode` の透過伝搬 |
 | `Encode(String)` | `message: String` | `"encode_error"` | MessagePack シリアライズ失敗 |
@@ -111,10 +122,16 @@ CLI（`IpcVaultRepository::default_socket_path()`）と同一の優先順位に�
 SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構造に写像する：
 
 ```
-{ "kind": "<上記の kind 文字列>", "message": "<人間可読エラーメッセージ>" }
+{ "kind": "<上記の kind 文字列>", "message": "<デバッグ用英語技術情報>" }
 ```
 
 `IpcErrorCode` の `Display` 実装（`shikomi-core::ipc::error_code`）を `message` フィールドに使用する。
+
+**`message` フィールドの用途制限**:
+
+- `message` は**開発者向けデバッグ・ログ記録用途のみ**。ユーザーへの直接表示に使ってはならない
+- Sub-C（UI 層）は `kind` フィールドを switch して**日本語メッセージを自前で表示する責務を持つ**（例: `"daemon_not_running"` → 「daemon が起動していません。`shikomi start` を実行してください」）
+- `message` を画面表示すると、ペルソナ A/C（田中俊介・佐々木健二）には意味不明な英語技術文字列が表示される（personas.md §ペルソナ A/C）
 
 ### 2.3 `IpcErrorCode` の透過伝搬
 
@@ -157,9 +174,9 @@ SolidJS 側が `switch` でエラー分岐できるよう、以下の JSON 構�
 | 項目 | 内容 |
 |------|------|
 | 入力 | `id: String, label: Option<String>, value: Option<String>` |
-| 処理 | 全フィールドが `None` かつ変更なし → 即時 `{ id }` 返却（IPC 省略）。それ以外は `EditRecord` round_trip |
+| 処理 | ハンドラに到達した場合は**必ず** `EditRecord` を IPC 送信する。Silent Failure（IPC 省略して `Ok` を返す）を**行わない**。Sub-C が変更なし時に `invoke` を呼ばない契約を持つ（`basic-design.md §3.3` 参照）。`id` は `RecordId::try_from_str` で検証 → 失敗時は `InvalidInput` |
 | 出力 | `{ id: String }` |
-| エラー時 | `InvalidInput` / `NotConnected` / `Ipc(NotFound)` / `Ipc(InvalidLabel)` 等 |
+| エラー時 | `InvalidInput`（不正 UUID）/ `NotConnected` / `Ipc(NotFound)` / `Ipc(InvalidLabel)` 等 |
 
 ### 3.4 `delete_entry`
 
@@ -270,8 +287,11 @@ JS 側バリデーションは `window.__TAURI__.invoke` 直接呼び出しで�
 | `add_entry::label` | 空文字列は拒否 | `InvalidInput("label must not be empty")` |
 | `add_entry::value` | 空文字列は拒否 | `InvalidInput("value must not be empty")` |
 | `assign_hotkey::combo` | `Ctrl+Alt+[1-9]` 形式以外は拒否 | `InvalidInput("hotkey must be Ctrl+Alt+[1-9]")` |
+| `encrypt_vault::master_password` | 空文字列は拒否 | `InvalidInput("master password must not be empty")` |
+| `decrypt_vault::master_password` | 空文字列は拒否 | `InvalidInput("master password must not be empty")` |
 | `decrypt_vault::confirmed` | `false` は拒否 | `InvalidInput("decrypt confirmation required")` |
-| `delete_entry::id` / `update_entry::id` 等 | `RecordId::try_from_str` 失敗は拒否 | `InvalidInput("invalid record id format")` |
+| `unlock_vault::master_password` | 空文字列は拒否 | `InvalidInput("master password must not be empty")` |
+| `delete_entry::id` / `update_entry::id` / `assign_hotkey::id` 等 | `RecordId::try_from_str` 失敗は拒否 | `InvalidInput("invalid record id format")` |
 
 ---
 
