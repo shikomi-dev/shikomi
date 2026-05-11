@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
 
       - name: tauri build setup
         uses: ./.github/actions/tauri-build-setup
@@ -64,7 +64,7 @@ jobs:
 
       - name: upload artifacts
         # 設計根拠: jobs.md §2.5 / §5.1
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4 as of 2026-05-11
         with:
           name: >-
             ${{ github.event_name == 'pull_request'
@@ -86,7 +86,7 @@ jobs:
     # fork PR はシークレットが注入されないためスキップ（jobs.md §3.2）
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
 
       - name: tauri build setup
         uses: ./.github/actions/tauri-build-setup
@@ -128,7 +128,7 @@ jobs:
 
       - name: upload artifacts
         # 設計根拠: jobs.md §3.6 / §5.1
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4 as of 2026-05-11
         with:
           name: >-
             ${{ github.event_name == 'pull_request'
@@ -148,7 +148,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
 
       - name: tauri build setup
         uses: ./.github/actions/tauri-build-setup
@@ -168,7 +168,7 @@ jobs:
 
       - name: upload artifacts
         # 設計根拠: jobs.md §4.5 / §5.1
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4 as of 2026-05-11
         with:
           name: >-
             ${{ github.event_name == 'pull_request'

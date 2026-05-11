@@ -381,3 +381,65 @@ impl SqliteVaultRepository {
         Ok(bytes_written)
     }
 }
+
+// ---------------------------------------------------------------------------
+// ユニットテスト
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // --- TC-U-REPO-01: prepare_dir — 存在しないディレクトリを作成する ---
+
+    #[test]
+    fn tc_u_repo_01_prepare_dir_creates_directory() {
+        let base = TempDir::new().unwrap();
+        let vault_dir = base.path().join("vault_new");
+
+        // 事前条件: ディレクトリが存在しない
+        assert!(!vault_dir.exists(), "事前条件: ディレクトリが未作成");
+
+        let repo = SqliteVaultRepository::from_directory(&vault_dir).unwrap();
+        repo.prepare_dir().expect("prepare_dir は成功すべき");
+
+        assert!(vault_dir.is_dir(), "prepare_dir 後: ディレクトリが作成されるべき");
+    }
+
+    // --- TC-U-REPO-02: prepare_dir — 既存ディレクトリに冪等 ---
+
+    #[test]
+    fn tc_u_repo_02_prepare_dir_is_idempotent_on_existing_dir() {
+        let dir = TempDir::new().unwrap();
+        let repo = SqliteVaultRepository::from_directory(dir.path()).unwrap();
+
+        // 2 回呼び出しても失敗しない
+        repo.prepare_dir().expect("1 回目: prepare_dir は成功すべき");
+        repo.prepare_dir().expect("2 回目: prepare_dir は冪等であるべき");
+    }
+
+    // --- TC-U-REPO-03: load_or_create — vault.db 未存在時に空 plaintext vault を返す ---
+
+    #[test]
+    fn tc_u_repo_03_load_or_create_returns_empty_vault_when_not_found() {
+        let dir = TempDir::new().unwrap();
+        let repo = SqliteVaultRepository::from_directory(dir.path()).unwrap();
+        // ディレクトリのパーミッションを OS 規定に設定してから load_or_create を呼ぶ
+        repo.prepare_dir().expect("prepare_dir は成功すべき");
+
+        // vault.db が存在しない → NotFound を捕捉して空 plaintext vault を返すべき
+        let vault = repo
+            .load_or_create()
+            .expect("load_or_create は空 vault を返すべき");
+
+        assert!(vault.records().is_empty(), "初期 vault はレコード 0 件");
+        assert!(
+            matches!(
+                vault.protection_mode(),
+                shikomi_core::ProtectionMode::Plaintext
+            ),
+            "初期 vault は plaintext モードであるべき"
+        );
+    }
+}

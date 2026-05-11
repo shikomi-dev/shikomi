@@ -105,8 +105,8 @@ echo "[smoke] Polling GUI process for ${GUI_WAIT_SECS}s ..."
 WAITED=0
 while [ "$WAITED" -lt "$((GUI_WAIT_SECS * 2))" ]; do
     if ! kill -0 "$GUI_PID" 2>/dev/null; then
-        wait "$GUI_PID" 2>/dev/null || true
-        GUI_EXIT=$?
+        GUI_EXIT=0
+        wait "$GUI_PID" 2>/dev/null || GUI_EXIT=$?
         if [ "$GUI_EXIT" -gt 128 ]; then
             GUI_SIG=$((GUI_EXIT - 128))
             echo "[smoke] FAIL: GUI process exited unexpectedly (exit=${GUI_EXIT}, signal=${GUI_SIG})"
