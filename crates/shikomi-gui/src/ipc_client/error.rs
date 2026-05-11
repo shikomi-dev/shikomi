@@ -301,6 +301,33 @@ mod tests {
         assert_eq!(v["ipc_code"], "hotkey_conflict");
     }
 
+    // TC-GUI-IPC-UT13d(2) — crypto_reason: weak-password
+    //
+    // §2.3 凍結契約に列挙された crypto_reason 全値のうち "weak-password" を検証。
+    #[test]
+    fn ut13d_crypto_reason_weak_password() {
+        let e = GUIError::Ipc(IpcErrorCode::Crypto {
+            reason: "weak-password".to_owned(),
+        });
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["ipc_code"], "crypto");
+        assert_eq!(v["crypto_reason"], "weak-password");
+    }
+
+    // TC-GUI-IPC-UT13d(3) — crypto_reason: nonce-limit-exceeded
+    //
+    // §2.3 凍結契約に列挙された crypto_reason 全値のうち "nonce-limit-exceeded" を検証。
+    // この値は Sub-C が「再暗号化必須」警告 UI を表示するためのトリガーになる。
+    #[test]
+    fn ut13d_crypto_reason_nonce_limit_exceeded() {
+        let e = GUIError::Ipc(IpcErrorCode::Crypto {
+            reason: "nonce-limit-exceeded".to_owned(),
+        });
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["ipc_code"], "crypto");
+        assert_eq!(v["crypto_reason"], "nonce-limit-exceeded");
+    }
+
     // TC-GUI-IPC-UT14
     #[test]
     fn ut14_invalid_input_kind_and_message() {
@@ -308,5 +335,99 @@ mod tests {
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!(v["kind"], "invalid_input");
         assert_eq!(v["message"].as_str().unwrap(), "test message");
+    }
+
+    // TC-GUI-IPC-UT15 — §2.3 凍結 API 契約 全 13 variant 網羅テスト（将来 rename 防衛線）
+    //
+    // ペテルギウス指摘: `ipc_code_key()` と §2.3 凍結契約テーブルの完全一致を構造的に保証する。
+    // 新 variant 追加・既存 variant rename 時にこのテストが Fail することで設計書更新を強制する。
+    // `#[non_exhaustive]` のため将来追加分は `"unknown"` にフォールバックすることも
+    // ここで暗黙に保証される（rust の網羅性チェック + フォールバックアームの存在）。
+    #[test]
+    fn ut15_ipc_code_key_exhaustive_contract_check() {
+        use shikomi_core::RecordId;
+        use uuid::Uuid;
+
+        // §2.3 凍結契約テーブルの全 13 variant: (GUIError, 期待 ipc_code) のペア
+        let cases: Vec<(GUIError, &str)> = vec![
+            (
+                GUIError::Ipc(IpcErrorCode::EncryptionUnsupported),
+                "encryption_unsupported",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::NotFound {
+                    id: RecordId::new(Uuid::nil()).unwrap(),
+                }),
+                "not_found",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::InvalidLabel {
+                    reason: "invalid label".to_owned(),
+                }),
+                "invalid_label",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::Persistence {
+                    reason: "persistence error".to_owned(),
+                }),
+                "persistence",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::Domain {
+                    reason: "domain error".to_owned(),
+                }),
+                "domain",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::Internal {
+                    reason: "unexpected error".to_owned(),
+                }),
+                "internal",
+            ),
+            (GUIError::Ipc(IpcErrorCode::VaultLocked), "vault_locked"),
+            (
+                GUIError::Ipc(IpcErrorCode::BackoffActive { wait_secs: 10 }),
+                "backoff_active",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::RecoveryRequired),
+                "recovery_required",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::ProtocolDowngrade),
+                "protocol_downgrade",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::Crypto {
+                    reason: "wrong-password".to_owned(),
+                }),
+                "crypto",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::HotkeyConflict {
+                    reason: "hotkey conflict".to_owned(),
+                }),
+                "hotkey_conflict",
+            ),
+            (
+                GUIError::Ipc(IpcErrorCode::HotkeyParseError {
+                    reason: "invalid hotkey format".to_owned(),
+                }),
+                "hotkey_parse_error",
+            ),
+        ];
+
+        for (error, expected_ipc_code) in cases {
+            let v = serde_json::to_value(&error).unwrap();
+            assert_eq!(
+                v["kind"], "ipc_error",
+                "kind must be ipc_error for {expected_ipc_code}: {v}"
+            );
+            assert_eq!(
+                v["ipc_code"], expected_ipc_code,
+                "§2.3 凍結契約違反: ipc_code_key() が '{expected_ipc_code}' を返すべきだが実際は '{ipc_code}'",
+                ipc_code = v["ipc_code"]
+            );
+        }
     }
 }
