@@ -13,6 +13,15 @@ use super::error::PersistenceError;
 // PermissionGuard
 // -------------------------------------------------------------------
 
+/// テスト専用（Windows）: TempDir の継承 DACL を正規化する。
+///
+/// `test-fixtures` feature または `cfg(test)` でのみ利用可能。
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(windows)]
+pub(crate) fn normalize_tempdir_dacl(path: &std::path::Path) {
+    windows::normalize_tempdir_dacl(path)
+}
+
 /// パーミッション操作を提供するゼロサイズ型。
 pub(crate) struct PermissionGuard;
 
