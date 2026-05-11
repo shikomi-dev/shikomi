@@ -141,11 +141,8 @@ pub async fn run() -> ExitCode {
                 "vault.db not found — starting with empty plaintext vault (new installation)"
             );
             Vault::new(
-                VaultHeader::new_plaintext(
-                    VaultVersion::CURRENT,
-                    time::OffsetDateTime::now_utc(),
-                )
-                .expect("CURRENT version is always valid"),
+                VaultHeader::new_plaintext(VaultVersion::CURRENT, time::OffsetDateTime::now_utc())
+                    .expect("CURRENT version is always valid"),
             )
         }
         Err(err) => {
