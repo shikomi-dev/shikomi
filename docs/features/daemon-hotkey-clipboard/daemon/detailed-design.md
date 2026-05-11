@@ -41,13 +41,14 @@
 |-----------|----|------|
 | `backend` | `Arc<BackendEnum>` | ホットキー OS バックエンド |
 | `registered` | `HashSet<String>` | 登録済みコンボ文字列の集合（Drop 時解除に使用） |
+| `notifier` | `Arc<dyn Notifier>` | OS 通知送信（ホットキー登録失敗時に使用。`basic-design §2.7` 参照）|
 
 ### 3.2 `register_all` 処理順序
 
 1. `vault.hotkey_entries()` をイテレート
 2. 各エントリの `hotkey.as_str()` を `backend.register(combo)` に渡す
 3. 成功した場合のみ `registered.insert(combo)` する
-4. 失敗時は `tracing::error!` でログ出力し継続（他ホットキーは登録する）
+4. 失敗時は `tracing::error!` でログ出力 + `self.notifier.notify(Normal, "shikomi", "ホットキー {combo} の登録に失敗しました。他のアプリと競合している可能性があります")` を呼び継続（他ホットキーは登録する）
 
 ### 3.3 `register_one` / `unregister_one` の使用コンテキスト
 

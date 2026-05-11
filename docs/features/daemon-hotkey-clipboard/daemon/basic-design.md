@@ -97,10 +97,20 @@ OS ホットキー登録・解除の抽象インターフェース。3 OS / 4 �
 
 vault 内の全ホットキーを OS バックエンドに登録・管理する RAII オブジェクト。
 
+**フィールド**:
+
+| フィールド | 型 | 説明 |
+|-----------|----|------|
+| `backend` | `Arc<BackendEnum>` | ホットキー OS バックエンド |
+| `registered` | `HashSet<String>` | 登録済みコンボ文字列の集合（Drop 時解除に使用）|
+| `notifier` | `Arc<dyn Notifier>` | OS 通知送信（ホットキー登録失敗時に使用。`§2.7` 参照）|
+
+**メソッド**:
+
 | メソッド | 説明 |
 |---------|------|
-| `new(backend, vault)` | コンストラクタ |
-| `register_all()` | vault の全ホットキー登録済みエントリを `backend.register` で一括登録 |
+| `new(backend, vault, notifier)` | コンストラクタ |
+| `register_all()` | vault の全ホットキー登録済みエントリを `backend.register` で一括登録。失敗時は `notifier.notify()` を呼ぶ |
 | `register_one(combo)` | 単一ホットキーを OS 登録（IPC add/edit ハンドラから呼ばれる） |
 | `unregister_one(combo)` | 単一ホットキーを OS 解除（IPC edit ハンドラから呼ばれる） |
 
@@ -291,7 +301,7 @@ flowchart LR
 
 | エラー発生箇所 | 方針 |
 |-------------|------|
-| `HotkeyBackend::register` 失敗 | `tracing::error!` + そのホットキーをスキップ（他のホットキーは登録継続） |
+| `HotkeyBackend::register` 失敗 | `tracing::error!` + OS 通知「ホットキー `{combo}` の登録に失敗しました。他のアプリと競合している可能性があります」を送信（`§2.7` 参照）+ そのホットキーをスキップし他は登録継続 |
 | `ClipboardWriter::new()` 失敗 | `tracing::warn!` + `ClipboardWriter` を無効状態に（ホットキー押下時はスキップ）。daemon 起動は継続 |
 | `ClipboardWriter::write()` 失敗 | `tracing::warn!` でログ記録 + OS 通知「クリップボードへの書き込みに失敗しました」を送信（R1-HK-14）。エラーを握り潰さない |
 | `ClearTimer` abort エラー | 無視（tokio task abort は `JoinError::is_cancelled()` で正常扱い） |
