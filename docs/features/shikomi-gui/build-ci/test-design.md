@@ -3,7 +3,7 @@
 <!-- feature: shikomi-gui / sub-feature: build-ci / Issue #98 -->
 <!-- 配置先: docs/features/shikomi-gui/build-ci/test-design.md -->
 <!-- システムテストは system-test-design.md に記述。本ファイルは IT + UT のみ -->
-<!-- 参照: basic-design.md §モジュール契約 / detailed-design.md §1〜11 -->
+<!-- 参照: basic-design.md §モジュール契約 / detailed-design/{index,jobs,e2e,misc}.md -->
 
 ## §0. テスト方針参照
 
@@ -27,7 +27,7 @@
 | IT（TC-GUI-E01 smoke） | OS プロセス（shikomi-daemon） | `shikomi start` バックグラウンド起動 | 実バイナリを直接起動。ソケットファイル生成をポーリングで待機（固定 sleep 廃止）| 不要（実バイナリ使用）|
 | IT（TC-GUI-E01 smoke） | UDS ソケット（IPC） | `shikomi list` で IPC 接続確認（exit 0 = 接続成立）| 実 IPC を通す（モック不要）。逆正常性（IT04）で「接続失敗 → exit 非ゼロ」を別途固定済み | 不要 |
 | IT（TC-GUI-E01 smoke） | 仮想ディスプレイ（xvfb） | `Xvfb :99 -screen 0 1280x720x24` セッション | CI ubuntu-22.04 ランナーで直接起動（`DISPLAY=:99`）。`trap EXIT` で終了を保証 | 不要 |
-| IT（TC-GUI-CI-IT04 逆正常性） | OS プロセス（shikomi-daemon） | **意図的に起動しない**（fault injection） | `e2e-smoke-fault` 独立ジョブで `! ./target/release/shikomi list` を実行。daemon 未起動のまま CLI を叩き exit 非ゼロを shell 反転で PASS に変換（`detailed-design.md §6.8`） | 不要 |
+| IT（TC-GUI-CI-IT04 逆正常性） | OS プロセス（shikomi-daemon） | **意図的に起動しない**（fault injection） | `e2e-smoke-fault` 独立ジョブで `! ./target/release/shikomi list` を実行。daemon 未起動のまま CLI を叩き exit 非ゼロを shell 反転で PASS に変換（`detailed-design/e2e.md §6.8`） | 不要 |
 | UT（actionlint 正常系） | なし（静的 YAML 解析） | — | 外部依存なし | 不要 |
 | UT（actionlint 負例） | なし（静的 YAML 解析） | 意図的に壊した YAML 断片 | `actionlint` が非ゼロ exit を返すことを確認 | 不要 |
 | UT（cargo deny） | RUSTSEC advisory DB（オンライン） | `deny.toml` + advisory feed | `deny.toml` の `[advisories.ignore]` エントリで対処 | 不要 |
@@ -70,20 +70,20 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 | テスト ID | REQ-CI | 設計根拠 | テスト内容 | 種別 |
 |---------|--------|--------|----------|------|
-| TC-GUI-CI-UT01 | REQ-CI-01, REQ-CI-08 | `detailed-design.md §1.2`（paths フィルタ）・`§1.3`（権限設計） | `actionlint` で `bundler.yml` 構文・アクションバージョン・secrets 参照・`if:` 式を検証 | 正常系 |
-| TC-GUI-CI-UT02 | REQ-CI-01, REQ-CI-05 | `detailed-design.md §1.3`（権限）・`§5`（artifact 命名）| `bundler.yml` 内 `permissions: write` 混入・`@v1` 等の旧バージョン使用・不正 artifact 命名を **actionlint が検知する** ことを確認（意図的に壊した YAML で FAIL を期待） | 異常系（負例） |
-| TC-GUI-CI-UT03 | REQ-CI-07 | `detailed-design.md §6`（e2e-smoke ジョブ） | `actionlint` で `test-gui.yml`（e2e-smoke 追記後）構文検証 | 正常系 |
-| TC-GUI-CI-UT04 | REQ-CI-07 | `detailed-design.md §6`（e2e-smoke ジョブ） | `test-gui.yml` 内 `e2e-smoke` ジョブに意図的な構文エラー（例: 存在しないアクション参照）を注入し **actionlint が検知する** ことを確認（FAIL を期待） | 異常系（負例） |
-| TC-GUI-CI-UT05 | REQ-CI-06 | `detailed-design.md §7.3`（RUSTSEC 対応手順） | `cargo deny check` が shikomi-gui 依存に対して未登録 advisory を報告しない | 正常系 |
+| TC-GUI-CI-UT01 | REQ-CI-01, REQ-CI-08 | `detailed-design/index.md §1.2`（paths フィルタ）・`§1.3`（権限設計） | `actionlint` で `bundler.yml` 構文・アクションバージョン・secrets 参照・`if:` 式を検証 | 正常系 |
+| TC-GUI-CI-UT02 | REQ-CI-01, REQ-CI-05 | `detailed-design/index.md §1.3`（権限）・`§5`（artifact 命名）| `bundler.yml` 内 `permissions: write` 混入・`@v1` 等の旧バージョン使用・不正 artifact 命名を **actionlint が検知する** ことを確認（意図的に壊した YAML で FAIL を期待） | 異常系（負例） |
+| TC-GUI-CI-UT03 | REQ-CI-07 | `detailed-design/e2e.md §6`（e2e-smoke ジョブ） | `actionlint` で `test-gui.yml`（e2e-smoke 追記後）構文検証 | 正常系 |
+| TC-GUI-CI-UT04 | REQ-CI-07 | `detailed-design/e2e.md §6`（e2e-smoke ジョブ） | `test-gui.yml` 内 `e2e-smoke` ジョブに意図的な構文エラー（例: 存在しないアクション参照）を注入し **actionlint が検知する** ことを確認（FAIL を期待） | 異常系（負例） |
+| TC-GUI-CI-UT05 | REQ-CI-06 | `detailed-design/misc.md §7.3`（RUSTSEC 対応手順） | `cargo deny check` が shikomi-gui 依存に対して未登録 advisory を報告しない | 正常系 |
 
 ### 4.2 結合テスト（E2E smoke — TC-GUI-E01）
 
 | テスト ID | REQ-CI | 設計根拠 | テスト内容 | 種別 |
 |---------|--------|--------|----------|------|
-| TC-GUI-CI-IT01 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.5`（ポーリング待機）・`§6.6`（起動確認） | `shikomi gui` を xvfb 環境で起動し、ポーリングループで生存確認（`kill -0`）。プロセス生存を確認 | 正常系 |
-| TC-GUI-CI-IT02 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.6`（IPC 接続確認）・`§6.7`（合否判定ロジック）| daemon 起動済み状態で `shikomi list` が exit 0（IPC 接続確認）。exit 0 = IPC 接続成立の等価性は IT04 逆正常性で固定済み | 正常系 |
-| TC-GUI-CI-IT03 | REQ-CI-07, AC-GUI-01 | `detailed-design.md §6.6`（正常終了確認）・`§6.5`（`trap EXIT` 設計） | GUI プロセスへ `SIGTERM` 送信後 5 秒以内に exit 0 で終了。`trap EXIT` によりリソースは必ず解放される | 正常系 |
-| TC-GUI-CI-IT04 | REQ-CI-07 | `detailed-design.md §6.8`（`e2e-smoke-fault` ジョブ設計）| `e2e-smoke-fault` ジョブで daemon を起動せず `! ./target/release/shikomi list` を実行。daemon 未接続 → `shikomi list` exit 非ゼロ → `!` 反転 → ジョブ PASS。**CI 自動実行（逆正常性確認）** | 異常系 |
+| TC-GUI-CI-IT01 | REQ-CI-07, AC-GUI-01 | `detailed-design/e2e.md §6.5`（ポーリング待機）・`§6.6`（起動確認） | `shikomi gui` を xvfb 環境で起動し、ポーリングループで生存確認（`kill -0`）。プロセス生存を確認 | 正常系 |
+| TC-GUI-CI-IT02 | REQ-CI-07, AC-GUI-01 | `detailed-design/e2e.md §6.6`（IPC 接続確認）・`§6.7`（合否判定ロジック）| daemon 起動済み状態で `shikomi list` が exit 0（IPC 接続確認）。exit 0 = IPC 接続成立の等価性は IT04 逆正常性で固定済み | 正常系 |
+| TC-GUI-CI-IT03 | REQ-CI-07, AC-GUI-01 | `detailed-design/e2e.md §6.6`（正常終了確認）・`§6.5`（`trap EXIT` 設計） | GUI プロセスへ `SIGTERM` 送信後 5 秒以内に exit 0 で終了。`trap EXIT` によりリソースは必ず解放される | 正常系 |
+| TC-GUI-CI-IT04 | REQ-CI-07 | `detailed-design/e2e.md §6.8`（`e2e-smoke-fault` ジョブ設計）| `e2e-smoke-fault` ジョブで daemon を起動せず `! ./target/release/shikomi list` を実行。daemon 未接続 → `shikomi list` exit 非ゼロ → `!` 反転 → ジョブ PASS。**CI 自動実行（逆正常性確認）** | 異常系 |
 
 ---
 
@@ -95,13 +95,13 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-UT01 |
 | 対応する要件ID | REQ-CI-01（R1-GUI-16）、REQ-CI-08 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §1`） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/index.md §1`） |
 | 種別 | 正常系 |
 | 前提条件 | `actionlint` インストール済み、`bundler.yml` 実装済み（composite action 参照を含む） |
 | 操作 | `actionlint .github/workflows/bundler.yml` |
 | 期待結果 | exit 0、エラーなし。secrets 参照（`secrets.APPLE_CERTIFICATE` 等）・アクションバージョン（`@v4`）・`if: github.event.pull_request.head.repo.full_name == github.repository` 式・`on.paths` フィルタが有効と判定される |
 
-**設計根拠**: `detailed-design.md §1.3` の権限設計（`permissions.contents: read`）と §1.2 の paths フィルタエントリが YAML として正当な式であることを静的に確認する。
+**設計根拠**: `detailed-design/index.md §1.3` の権限設計（`permissions.contents: read`）と §1.2 の paths フィルタエントリが YAML として正当な式であることを静的に確認する。
 
 ---
 
@@ -111,7 +111,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-UT02 |
 | 対応する要件ID | REQ-CI-01（R1-GUI-16）、REQ-CI-05 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §1.3` 権限・`§5.2` artifact 命名） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/index.md §1.3` 権限・`§5.2` artifact 命名） |
 | 種別 | 異常系（actionlint が機能していることの確認）|
 | 前提条件 | `actionlint` インストール済み |
 | 操作 | `mktemp` で一時 YAML ファイルを生成し、以下の意図的エラーを含む断片を記述して `actionlint <temp>.yml` を実行: ①`permissions: write-all`（過剰権限）、②`uses: actions/checkout@v1`（旧バージョン）、③不正な `secrets.*` 参照 |
@@ -128,13 +128,13 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-UT03 |
 | 対応する要件ID | REQ-CI-07 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6`） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6`） |
 | 種別 | 正常系 |
 | 前提条件 | `test-gui.yml` に `e2e-smoke`・`e2e-smoke-fault` ジョブが追記済み |
 | 操作 | `actionlint .github/workflows/test-gui.yml` |
 | 期待結果 | exit 0、エラーなし。`xvfb` インストールステップ・`bash scripts/smoke-e2e.sh` 呼び出し（`e2e-smoke` ジョブ）・`! ./target/release/shikomi list` 呼び出し（`e2e-smoke-fault` ジョブ）が有効な YAML 式と判定される |
 
-**設計根拠**: `detailed-design.md §6.3` のステップ一覧が YAML として実行可能であること、および `e2e-smoke-fault` ジョブの `! ./target/release/shikomi list` がシェルコマンドとして正当（shell negation）であることを静的に確認する。
+**設計根拠**: `detailed-design/e2e.md §6.3` のステップ一覧が YAML として実行可能であること、および `e2e-smoke-fault` ジョブの `! ./target/release/shikomi list` がシェルコマンドとして正当（shell negation）であることを静的に確認する。
 
 ---
 
@@ -144,7 +144,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-UT04 |
 | 対応する要件ID | REQ-CI-07 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6`） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6`） |
 | 種別 | 異常系（linter 機能確認）|
 | 前提条件 | `actionlint` インストール済み |
 | 操作 | `mktemp` で一時 YAML ファイルを生成し、e2e-smoke ジョブに意図的エラー（存在しない action 参照 `uses: nonexistent/action@v99`）を含む断片を記述して `actionlint <temp>.yml` を実行 |
@@ -159,21 +159,21 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-UT05 |
 | 対応する要件ID | REQ-CI-06 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §7.3`） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/misc.md §7.3`） |
 | 種別 | 正常系 |
 | 前提条件 | `deny.toml` に shikomi-gui 依存の ignore エントリが必要に応じて登録済み |
 | 操作 | `cargo deny check` |
 | 期待結果 | exit 0。`tauri-plugin-shell@2` 等 shikomi-gui 新規依存の advisory が `[advisories.ignore]` に登録済みか、advisory が存在しない。未登録 advisory が検出された場合は本 TC が FAIL |
 
-**設計根拠**: `detailed-design.md §7.2` の影響分析に従い、Sub-E で追加される依存が `deny.toml` の管理下に入っていることを確認する。RUSTSEC advisory 発生時は §7.3 の手順（影響分析 → Fix or Ignore 登録 + 理由コメント + Issue 番号）に従って対処し、本 TC を再 PASS させる。
+**設計根拠**: `detailed-design/misc.md §7.2` の影響分析に従い、Sub-E で追加される依存が `deny.toml` の管理下に入っていることを確認する。RUSTSEC advisory 発生時は §7.3 の手順（影響分析 → Fix or Ignore 登録 + 理由コメント + Issue 番号）に従って対処し、本 TC を再 PASS させる。
 
 ---
 
 ## §6. 結合テスト詳細設計（E2E smoke: TC-GUI-E01）
 
-本セクションの TC-GUI-CI-IT01〜IT04 は `basic-design.md §4` の `TC-GUI-E01` を IT レベル（モジュール間結合）として詳細化したものである。IT01〜IT03 は `scripts/smoke-e2e.sh` 内でシーケンシャルに実行される（`detailed-design.md §6.6` シーケンス図参照）。IT04 は `scripts/smoke-e2e.sh` とは独立した `e2e-smoke-fault` ジョブで `! ./target/release/shikomi list` を直接実行する（`detailed-design.md §6.8`）。
+本セクションの TC-GUI-CI-IT01〜IT04 は `basic-design.md §4` の `TC-GUI-E01` を IT レベル（モジュール間結合）として詳細化したものである。IT01〜IT03 は `scripts/smoke-e2e.sh` 内でシーケンシャルに実行される（`detailed-design/e2e.md §6.6` シーケンス図参照）。IT04 は `scripts/smoke-e2e.sh` とは独立した `e2e-smoke-fault` ジョブで `! ./target/release/shikomi list` を直接実行する（`detailed-design/e2e.md §6.8`）。
 
-**`scripts/smoke-e2e.sh` の共通前提**: スクリプト冒頭で `trap 'kill $GUI_PID $DAEMON_PID $XVFB_PID 2>/dev/null; exit' EXIT` を設定し、exit ハンドラで Xvfb・daemon・GUI プロセスの終了を保証する。これにより CI ジョブ失敗時もランナーリソースが残留しない（`detailed-design.md §9.3` の Keychain `if: always()` と対称な設計）。
+**`scripts/smoke-e2e.sh` の共通前提**: スクリプト冒頭で `trap 'kill $GUI_PID $DAEMON_PID $XVFB_PID 2>/dev/null; exit' EXIT` を設定し、exit ハンドラで Xvfb・daemon・GUI プロセスの終了を保証する。これにより CI ジョブ失敗時もランナーリソースが残留しない（`detailed-design/e2e.md §9.3` の Keychain `if: always()` と対称な設計）。
 
 ---
 
@@ -183,7 +183,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-IT01 |
 | 対応する要件ID | REQ-CI-07、AC-GUI-01 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.5` ポーリング設計・`§6.6` 起動確認） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6.5` ポーリング設計・`§6.6` 起動確認） |
 | 種別 | 正常系 |
 | 前提条件 | `Xvfb :99` 起動済み（`trap EXIT` 登録済み）。daemon が UDS ソケットファイル生成まで **ポーリング待機**（`while ! [ -S <socket-path> ]; do sleep 0.5; done`、最大 10 秒でタイムアウト）。shikomi-gui バイナリビルド済み |
 | 操作 | `DISPLAY=:99 ./target/release/shikomi-gui &` でバックグラウンド起動し `GUI_PID=$!`。`kill -0 $GUI_PID` ポーリングループ（0.5 秒間隔、最大 15 秒）でプロセス生存を確認 |
@@ -199,14 +199,14 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-IT02 |
 | 対応する要件ID | REQ-CI-07、AC-GUI-01 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.6` IPC 接続確認・`§6.7` 合否判定ロジック） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6.6` IPC 接続確認・`§6.7` 合否判定ロジック） |
 | 種別 | 正常系 |
 | 前提条件 | TC-GUI-CI-IT01 通過後（GUI プロセス生存）、shikomi-daemon 起動・UDS ソケット生成済み |
 | 操作 | `./target/release/shikomi list` を実行し exit 0 を確認（`scripts/smoke-e2e.sh` 内のシーケンシャルステップとして実行） |
-| 期待結果 | `shikomi list` が exit 0（0 件以上の出力）。exit 0 は daemon IPC ソケットへの接続成功を証明する（接続失敗時は exit 非ゼロ。`detailed-design.md §6.7` 参照） |
+| 期待結果 | `shikomi list` が exit 0（0 件以上の出力）。exit 0 は daemon IPC ソケットへの接続成功を証明する（接続失敗時は exit 非ゼロ。`detailed-design/e2e.md §6.7` 参照） |
 | 失敗条件 | exit 非ゼロ → スクリプトが exit 1 → `e2e-smoke` ジョブ FAIL |
 
-**設計根拠**: `shikomi list` が IPC 接続失敗時に exit 非ゼロを返すことは TC-GUI-CI-IT04（`e2e-smoke-fault` ジョブ）で構造的に検証済み。「`shikomi list` exit 0 = IPC 接続確立」の等価性を逆正常性テストで固定しているため、IT02 は単一コマンドで十分（`detailed-design.md §6.7` 参照）。存在しない `shikomi status` / `shikomi daemon-version` サブコマンドは参照しない。
+**設計根拠**: `shikomi list` が IPC 接続失敗時に exit 非ゼロを返すことは TC-GUI-CI-IT04（`e2e-smoke-fault` ジョブ）で構造的に検証済み。「`shikomi list` exit 0 = IPC 接続確立」の等価性を逆正常性テストで固定しているため、IT02 は単一コマンドで十分（`detailed-design/e2e.md §6.7` 参照）。存在しない `shikomi status` / `shikomi daemon-version` サブコマンドは参照しない。
 
 ---
 
@@ -216,7 +216,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-IT03 |
 | 対応する要件ID | REQ-CI-07、AC-GUI-01 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.5` `trap EXIT` 設計・`§6.6` 正常終了確認） |
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6.5` `trap EXIT` 設計・`§6.6` 正常終了確認） |
 | 種別 | 正常系 |
 | 前提条件 | TC-GUI-CI-IT01・IT02 通過後。`trap EXIT` が `$GUI_PID` / `$DAEMON_PID` / `$XVFB_PID` をカバーして登録済み |
 | 操作 | `kill -TERM $GUI_PID`、`timeout 5 wait $GUI_PID` を実行 |
@@ -232,7 +232,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 |------|------|
 | テストID | TC-GUI-CI-IT04 |
 | 対応する要件ID | REQ-CI-07 |
-| 対応する工程 | 階層 3 詳細設計（`detailed-design.md §6.8` `e2e-smoke-fault` ジョブ設計）|
+| 対応する工程 | 階層 3 詳細設計（`detailed-design/e2e.md §6.8` `e2e-smoke-fault` ジョブ設計）|
 | 種別 | 異常系（逆正常性確認）|
 | 前提条件 | `shikomi-cli` バイナリビルド済み（`cargo build --release -p shikomi-cli`）。**daemon は起動しない**（fault injection）。xvfb 不要（GUI 起動なし） |
 | 操作 | `e2e-smoke-fault` ジョブ（`test-gui.yml`）の fault check ステップで `! ./target/release/shikomi list` を実行 |
@@ -240,7 +240,7 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 | 失敗条件（回帰検知）| daemon が誤って起動していた場合 → `shikomi list` exit 0 → `!` 反転 → exit 非ゼロ → CI ステップ FAIL（テスト前提条件違反として検知される）|
 | CI での検証方法 | `e2e-smoke-fault` ジョブが `e2e-smoke` ジョブと独立して実行される。ジョブ PASS = 「IPC 未接続で正しく失敗する」ことの自動証明 |
 
-**設計根拠**: 「`shikomi list` は IPC 接続失敗を exit 非ゼロで正しく報告できる」ことを CI で構造的に固定する。IT02 の正常系チェック（`shikomi list` exit 0 = IPC 接続成立）はこの逆正常性テストによって「接続失敗 → exit 非ゼロ」が回帰テストで担保されることで信頼性を得る（`detailed-design.md §6.7` 参照）。`scripts/smoke-e2e.sh` への `--no-daemon` 引数フラグを使わず独立ジョブで直接実行することで KISS を維持する（`detailed-design.md §6.8` 末尾参照）。
+**設計根拠**: 「`shikomi list` は IPC 接続失敗を exit 非ゼロで正しく報告できる」ことを CI で構造的に固定する。IT02 の正常系チェック（`shikomi list` exit 0 = IPC 接続成立）はこの逆正常性テストによって「接続失敗 → exit 非ゼロ」が回帰テストで担保されることで信頼性を得る（`detailed-design/e2e.md §6.7` 参照）。smoke スクリプトに引数フラグを追加するより軽量で SSoT を保ちやすい独立ジョブ + `!` 反転方式を採用する（`detailed-design/e2e.md §6.8` 末尾参照、KISS）。
 
 ---
 
@@ -310,5 +310,6 @@ E2E smoke（IT）はすべて実バイナリを使用する。モックは一切
 
 *作成: 涅マユリ（テスト担当）/ 2026-05-11*
 *改訂 v2（2026-05-11）: ペテルギウス・ロマネコンティ査読フィードバック対応 — TC-GUI-CI-IT04 CI 自動化・actionlint 負例追加・sleep 固定 → ポーリング・smoke SSoT（scripts/smoke-e2e.sh）・trap EXIT・REQ-CI-02/03 カバレッジ articulate*
-*改訂 v3（2026-05-11）: セル整合修正 — IT04 `--no-daemon` 方式 → `e2e-smoke-fault` 独立ジョブ + `! shikomi list` 反転方式（detailed-design §6.8 に準拠）・IT02 幻想コマンド排除（`shikomi status` / `shikomi daemon-version` は非存在）・§8 モック方針整合・UT03 期待結果整合*
-*設計根拠: `docs/features/shikomi-gui/build-ci/basic-design.md` §モジュール契約 / `detailed-design.md §1〜11` / Issue #98*
+*改訂 v3（2026-05-11）: セル整合修正 — IT04 を `e2e-smoke-fault` 独立ジョブ + `! shikomi list` 反転方式に統一（`e2e.md §6.8` 準拠）・IT02 存在しないサブコマンド参照を排除・§8 モック方針整合・UT03 期待結果整合*
+*改訂 v4（2026-05-11）: detailed-design 分割対応 — ヘッダ・フッタの参照先を `detailed-design/{index,jobs,e2e,misc}.md` に更新*
+*設計根拠: `docs/features/shikomi-gui/build-ci/basic-design.md` §モジュール契約 / `detailed-design/{index,jobs,e2e,misc}.md` / Issue #98*

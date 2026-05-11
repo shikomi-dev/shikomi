@@ -5,6 +5,7 @@
 <!-- 疑似コード・実装コードブロック禁止 -->
 <!-- 参照: docs/features/shikomi-gui/feature-spec.md（凍結済み）-->
 <!-- 参照: docs/design/architecture.md §CI/CD -->
+<!-- 参照: detailed-design/{index,jobs,e2e,misc}.md -->
 
 ## §モジュール契約（機能要件マッピング）
 
