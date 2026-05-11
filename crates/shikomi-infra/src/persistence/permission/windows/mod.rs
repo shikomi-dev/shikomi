@@ -14,6 +14,9 @@ mod verify;
 
 pub(super) use ensure::{ensure_dir, ensure_file, verify_dir, verify_file};
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) use ensure::normalize_tempdir_dacl;
+
 // ---------------------------------------------------------------------------
 // 定数
 // ---------------------------------------------------------------------------

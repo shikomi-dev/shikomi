@@ -52,8 +52,10 @@ pub fn tighten_perms_unix(path: &Path) {
 
 #[cfg(windows)]
 pub fn tighten_perms_unix(path: &Path) {
-    shikomi_infra::persistence::ensure_vault_dir(path)
-        .expect("ensure_vault_dir (Windows DACL) failed");
+    // TempDir::new() は %TEMP% から DACL を継承するため、
+    // PermissionGuard::verify_dir の不変条件④（EXPECTED_DIR_MASK 完全一致）が通らない。
+    // normalize_tempdir_dacl で DACL を正規化してから load() を呼ぶ（Issue #86）。
+    shikomi_infra::persistence::normalize_tempdir_dacl(path);
 }
 
 #[cfg(not(any(unix, windows)))]

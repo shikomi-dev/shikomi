@@ -75,6 +75,11 @@ serial_test   = { workspace = true }
 # 暗号化 vault フィクスチャ helper (tests/common/fixtures.rs) で SQLite を直接書き出すため。
 # CLI 本体は rusqlite を参照しない（`shikomi-infra` 経由）。本依存はテスト限定。
 rusqlite      = { workspace = true }
+# Windows テスト: normalize_tempdir_dacl（test-fixtures feature gate）を CLI テストヘルパ
+# （tests/common/mod.rs）から参照するため dev-dependencies で明示的に feature を有効化する。
+# justfile/CI のフラグに依存せず `cargo test -p shikomi-cli` 単体でも Windows でコンパイル可能。
+# 設計根拠: docs/features/vault-persistence/test-design/integration/index.md
+shikomi-infra = { path = "../shikomi-infra", features = ["test-fixtures"] }
 
 [lints]
 workspace = true

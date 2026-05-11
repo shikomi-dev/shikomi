@@ -26,7 +26,17 @@ pub static ENV_MUTEX: Mutex<()> = Mutex::new(());
 ///
 /// `SHIKOMI_VAULT_DIR` 環境変数経由で `SqliteVaultRepository::new()` を呼び出す。
 /// `ENV_MUTEX` でプロセス内アクセスを直列化し、並列テストでの env 競合を防ぐ。
+///
+/// Windows: `TempDir::new()` は `%TEMP%` から DACL を継承するため、
+/// `PermissionGuard::verify_dir` の不変条件④（`EXPECTED_DIR_MASK` 完全一致）が通らない。
+/// `normalize_tempdir_dacl` で DACL を正規化して `load()` を確実に通過させる（Issue #86）。
 pub fn make_repo(dir: &Path) -> SqliteVaultRepository {
+    // Windows: load() 前に TempDir の継承 DACL を正規化する（Issue #86）。
+    // save() 経由の場合は ensure_dir が自動設定するため不要だが、
+    // load() を直接呼ぶケースで verify_dir が通らないことを防ぐ。
+    #[cfg(all(windows, feature = "test-fixtures"))]
+    shikomi_infra::persistence::normalize_tempdir_dacl(dir);
+
     let _guard = ENV_MUTEX.lock().unwrap();
     std::env::set_var("SHIKOMI_VAULT_DIR", dir);
     let repo = SqliteVaultRepository::new().unwrap();

@@ -71,6 +71,20 @@ pub fn ensure_vault_file(path: &std::path::Path) -> Result<(), PersistenceError>
     permission::PermissionGuard::ensure_file(path)
 }
 
+/// テスト専用（Windows）: TempDir の継承 DACL を正規化する。
+///
+/// `TempDir::new()` は `%TEMP%` から DACL を継承するため、
+/// `PermissionGuard::verify_dir` の不変条件④（`EXPECTED_DIR_MASK` 完全一致）が通らない。
+/// 本関数を `load()` / `prepare_dir()` の前に呼ぶことで `verify_dir` を確実に通過させる。
+///
+/// `test-fixtures` feature または `cfg(test)` でのみ利用可能（本番バイナリへの混入防止）。
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(windows)]
+#[doc(hidden)]
+pub fn normalize_tempdir_dacl(path: &std::path::Path) {
+    permission::normalize_tempdir_dacl(path)
+}
+
 // -------------------------------------------------------------------
 // VaultRepository trait
 // -------------------------------------------------------------------
