@@ -136,7 +136,7 @@ sequenceDiagram
     participant CLI as ./target/release/shikomi
 
     Note over Job: daemon は起動しない（fault injection）
-    Job->>CLI: ./target/release/shikomi list
+    Job->>CLI: ./target/release/shikomi list --ipc
     CLI-->>Job: exit 非ゼロ（daemon IPC ソケット未存在 → 接続失敗）
     Job->>Job: exit code が 0 なら FAIL（逆正常性違反）
     Job->>Job: exit code が 非ゼロ なら PASS
