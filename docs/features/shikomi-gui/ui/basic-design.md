@@ -24,6 +24,7 @@
 | REQ-UI-11 | `UnlockModal` が `ipc_code == "vault_locked"` 受信時に自動表示され、`unlock_vault` 成功後に元操作を再試行する（R1-GUI-13） |
 | REQ-UI-12 | 全入力フォームが JS 側 validation を UX の first line として実施する（空文字・形式チェック等）。Rust 側 Fail Fast との二重防御を構成する（R1-GUI-19） |
 | REQ-UI-13 | 全 Tauri Command エラーを `GUIError.kind` で switch し日本語メッセージを表示する。`ipc_code` が存在する場合は専用フィールド（`hotkey_conflict_entry` / `crypto_reason` / `wait_secs`）で補足表示する。`message` フィールドをユーザーに表示してはならない（ipc-client `detailed-design.md §2.3` 凍結 API 契約） |
+| REQ-UI-14 | 機密変数（マスターパスワード・recovery 24 語）は DOM ref または短命変数経由のみで保持し、Tauri Command 呼び出し直後にゼロ化する。`createSignal` / `createStore` の state への格納を禁止する（R1-GUI-18） |
 
 ## 1. モジュール構成
 
@@ -58,6 +59,31 @@ crates/shikomi-gui/ui/src/
 |-----------|------|------|
 | `zxcvbn ^4.4` | マスターパスワード強度評価（score 0〜4 + feedback） | feature-spec R1-GUI-10。出典: https://github.com/dropbox/zxcvbn |
 | `@types/zxcvbn ^4.4` | TypeScript 型定義 | 上記の型補完 |
+
+### zxcvbn 採用根拠と意思決定記録
+
+**CVE 調査結果**: npm advisory データベース（https://www.npmjs.com/advisories）および NIST NVD 照会（2026-05-11 時点）において、`zxcvbn` に対する既知の CVE は確認されていない。同ライブラリはネットワーク通信・ファイル I/O・OS API を一切使用しない純粋計算ライブラリであり、攻撃サーフェスが極小であることが無脆弱性の主因と評価する。
+
+**9 年間未更新の認識**: 最終公開バージョン 4.4.2（2017 年）以降、本家リポジトリ（https://github.com/dropbox/zxcvbn）は実質メンテナンス停止状態である。新規 PR・Issue への応答がなく、Node.js 依存の更新も行われていない。この事実を採用チームは認識した上で以下の比較を経て採用を決定した。
+
+**`@zxcvbn-ts/core` との比較**:
+
+| 観点 | `zxcvbn ^4.4` | `@zxcvbn-ts/core ^3` |
+|------|--------------|----------------------|
+| 最終更新 | 2017（9 年前） | 2023（活発）|
+| TypeScript ネイティブ | ✗（`@types/zxcvbn` 必要）| ✓（型同梱）|
+| score インターフェース | `result.score`（0〜4）| 互換（同一）|
+| feedback | `result.feedback.warning/suggestions` | 互換（同一）|
+| バンドルサイズ（minified）| 約 383 KB | 約 147 KB（本体のみ）|
+| 移行コスト | ゼロ（現状）| import パス変更のみ |
+
+**採用決定**: MVP では `zxcvbn ^4.4` を採用する。理由は以下の通り：
+
+1. **リスクが限定的**: score 表示は UX の補助指標に過ぎず、実際のパスワード強度強制は Rust バックエンドが担う（ipc-client `detailed-design.md §2.3` `crypto_reason: "weak-password"`）。攻撃者が zxcvbn の脆弱性を悪用しても暗号強度に直接影響しない。
+2. **API 互換性**: 将来 `@zxcvbn-ts/core` へ移行する際の変更コストは import パス変更のみ。移行リスクが低い。
+3. **YAGNI**: `@zxcvbn-ts/core` の追加機能（カスタム辞書・言語対応）は本 MVP では不要。
+
+**移行方針**: Sub-D 以降の Issue で `@zxcvbn-ts/core` への移行を検討する。現時点でのリスク評価は「低」。
 
 ## 2. コンポーネント設計
 
@@ -157,5 +183,5 @@ flowchart LR
 | R1-GUI-15 | 該当なし — Sub-D（system-tray）スコープ | — |
 | R1-GUI-16 | 該当なし — Sub-E（build CI）スコープ | — |
 | R1-GUI-17 | 該当なし — Sub-A で `tauri.conf.json` に設定済み | — |
-| R1-GUI-18 | REQ-UI-09（recovery 24 語）、REQ-UI-10, REQ-UI-11（マスターパスワード）| `RecoveryPhraseDisplay`, `VaultEncryptPanel`, `VaultDecryptPanel`, `UnlockModal` |
+| R1-GUI-18 | REQ-UI-14 | `RecoveryPhraseDisplay`, `VaultEncryptPanel`, `VaultDecryptPanel`, `UnlockModal` |
 | R1-GUI-19 | REQ-UI-04, REQ-UI-12 | `EntryForm`, `HotkeySelector`, 全入力フォーム |
