@@ -11,6 +11,7 @@
 //! | `message` | 常に存在 | デバッグ・ログ用英語技術情報。**ユーザーに直接表示禁止** |
 //! | `ipc_code` | `kind == "ipc_error"` のみ | daemon エラー種別の安定識別子（§2.3）|
 //! | `wait_secs` | `ipc_code == "backoff_active"` のみ | 次回試行可能までの待機秒数 |
+//! | `crypto_reason` | `ipc_code == "crypto"` のみ | 暗号エラー詳細識別子（kebab-case 固定文言: `wrong-password` / `weak-password` / `nonce-limit-exceeded` 等）。Sub-C はこの値で UI 分岐する |
 //!
 //! Sub-C は `kind` → `ipc_code` の順で分岐し、`message` は開発ツール専用。
 //!
@@ -88,7 +89,7 @@ impl Serialize for GUIError {
         S: Serializer,
     {
         match self {
-            // Ipc variant: kind + ipc_code + message（BackoffActive は wait_secs 追加）。
+            // Ipc variant: kind + ipc_code + message（BackoffActive は wait_secs、Crypto は crypto_reason を追加）。
             // Sub-C は ipc_code で daemon エラー種別を switch する（detailed-design.md §2.3）。
             Self::Ipc(code) => {
                 let mut map = serializer.serialize_map(None)?;
@@ -96,6 +97,9 @@ impl Serialize for GUIError {
                 map.serialize_entry("ipc_code", ipc_code_key(code))?;
                 if let IpcErrorCode::BackoffActive { wait_secs } = code {
                     map.serialize_entry("wait_secs", wait_secs)?;
+                }
+                if let IpcErrorCode::Crypto { reason } = code {
+                    map.serialize_entry("crypto_reason", reason)?;
                 }
                 map.serialize_entry("message", &code.to_string())?;
                 map.end()
@@ -249,6 +253,37 @@ mod tests {
         assert!(
             msg.contains("42"),
             "message must contain wait_secs value '42': {msg}"
+        );
+    }
+
+    // TC-GUI-IPC-UT13d — GUIError::Ipc(Crypto): crypto_reason フィールド検証
+    //
+    // Crypto variant は ipc_code == "crypto" かつ crypto_reason が
+    // kebab-case 固定文言（"wrong-password" 等）として存在する（§2.3 特例）。
+    // Sub-C は crypto_reason で UI 分岐する（パスワード不一致モーダル / 再暗号化必須警告 等）。
+    #[test]
+    fn ut13d_ipc_crypto_has_crypto_reason() {
+        let e = GUIError::Ipc(IpcErrorCode::Crypto {
+            reason: "wrong-password".to_owned(),
+        });
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["kind"], "ipc_error", "kind must be ipc_error: {v}");
+        assert_eq!(v["ipc_code"], "crypto", "ipc_code must be crypto: {v}");
+        // crypto_reason フィールドが設計書 §2.3 の安定識別子として存在する
+        assert_eq!(
+            v["crypto_reason"], "wrong-password",
+            "crypto_reason must be 'wrong-password': {v}"
+        );
+        // message はデバッグ専用（Display 準拠）。Sub-C は crypto_reason を使う
+        let msg = v["message"].as_str().unwrap();
+        assert!(
+            !msg.is_empty(),
+            "message must not be empty: {v}"
+        );
+        // BackoffActive 固有の wait_secs は Crypto には存在しない
+        assert!(
+            v.get("wait_secs").is_none() || v["wait_secs"].is_null(),
+            "wait_secs must not be present for Crypto: {v}"
         );
     }
 
