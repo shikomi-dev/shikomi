@@ -50,11 +50,11 @@ pub enum GUIError {
     #[error("ipc error: {0}")]
     Ipc(IpcErrorCode),
 
-    /// MessagePack シリアライズ失敗。
+    /// `MessagePack` シリアライズ失敗。
     #[error("encode error: {0}")]
     Encode(String),
 
-    /// MessagePack デシリアライズ失敗。
+    /// `MessagePack` デシリアライズ失敗。
     #[error("decode error: {0}")]
     Decode(String),
 
@@ -66,7 +66,7 @@ pub enum GUIError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
-    /// AppState が `None`（daemon 未接続）。
+    /// `AppState` が `None`（daemon 未接続）。
     #[error("not connected to daemon")]
     NotConnected,
 }

@@ -51,9 +51,10 @@ pub type AppState = Mutex<Option<GuiIpcClient>>;
 
 /// daemon との非同期 IPC 接続を保持する構造体。
 ///
-/// UDS（Unix）または Named Pipe（Windows）上で `LengthDelimitedCodec` + MessagePack を使用。
+/// UDS（Unix）または Named Pipe（Windows）上で `LengthDelimitedCodec` + `MessagePack` を使用。
 /// CLI の `IpcClient` と同一のトランスポート仕様（little-endian 4 byte 長さフィールド、
 /// 最大フレーム長 16 MiB）。
+#[derive(Debug)]
 pub struct GuiIpcClient {
     framed: Framed<Stream, LengthDelimitedCodec>,
 }
@@ -181,13 +182,19 @@ fn codec() -> LengthDelimitedCodec {
 // AppState 操作ヘルパ
 // ---------------------------------------------------------------------------
 
-/// AppState 経由で 1 往復 IPC を実行し、生 `IpcResponse` を返す。
+/// `AppState` 経由で 1 往復 IPC を実行し、生 `IpcResponse` を返す。
 ///
-/// - AppState が `None` の場合は `GUIError::NotConnected` を即返却
-/// - `ConnectionFailed` の場合は AppState を `None` にリセットして返す（Fail Fast §5）
+/// - `AppState` が `None` の場合は `GUIError::NotConnected` を即返却
+/// - `ConnectionFailed` の場合は `AppState` を `None` にリセットして返す（Fail Fast §5）
 ///
 /// クロージャ版 `exec_with_client` と異なり `&IpcRequest` を受け取ることで
 /// ライフタイム推論問題を回避し、呼び出しコードをシンプルに保つ。
+///
+/// # Errors
+///
+/// - `GUIError::NotConnected`: `AppState` が `None`（daemon 未接続）
+/// - `GUIError::ConnectionFailed`: IPC 送信または受信に失敗（`AppState` を `None` にリセット）
+/// - その他 `GUIError` variant: `GuiIpcClient::round_trip` が返すエラー
 ///
 /// 設計根拠: docs/features/shikomi-gui/ipc-client/detailed-design.md §5
 pub async fn round_trip_checked(

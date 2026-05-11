@@ -123,7 +123,7 @@ fn validate_hotkey_combo(combo: &str) -> Result<(), GUIError> {
         && combo
             .chars()
             .last()
-            .map_or(false, |c| c.is_ascii_digit() && c != '0');
+            .is_some_and(|c| c.is_ascii_digit() && c != '0');
 
     if valid {
         Ok(())
