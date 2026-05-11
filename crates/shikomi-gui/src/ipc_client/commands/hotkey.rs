@@ -128,9 +128,7 @@ fn validate_hotkey_combo(combo: &str) -> Result<(), GUIError> {
     if valid {
         Ok(())
     } else {
-        Err(GUIError::InvalidInput(
-            "hotkey must be Ctrl+Alt+[1-9]".to_owned(),
-        ))
+        Err(GUIError::InvalidInput("invalid hotkey format".to_owned()))
     }
 }
 

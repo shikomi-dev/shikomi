@@ -95,9 +95,9 @@ pub async fn add_entry(
         return Err(GUIError::InvalidInput("value must not be empty".to_owned()));
     }
 
-    // ラベル検証
-    let record_label =
-        RecordLabel::try_new(label).map_err(|e| GUIError::InvalidInput(e.to_string()))?;
+    // ラベル検証（形式不正は凍結文言で包む。e.to_string() の動的文言を Sub-C に漏出させない）
+    let record_label = RecordLabel::try_new(label)
+        .map_err(|_| GUIError::InvalidInput("invalid label format".to_owned()))?;
 
     // 機密値: String → SerializableSecretBytes に即変換してドロップ（§4.1）
     let secret_value = SerializableSecretBytes::new(SecretBytes::from_vec(value.into_bytes()));
@@ -143,9 +143,12 @@ pub async fn update_entry(
     let record_id = RecordId::try_from_str(&id)
         .map_err(|_| GUIError::InvalidInput("invalid record id format".to_owned()))?;
 
-    // ラベル検証（指定された場合のみ）
+    // ラベル検証（指定された場合のみ。形式不正は凍結文言で包む）
     let record_label = label
-        .map(|l| RecordLabel::try_new(l).map_err(|e| GUIError::InvalidInput(e.to_string())))
+        .map(|l| {
+            RecordLabel::try_new(l)
+                .map_err(|_| GUIError::InvalidInput("invalid label format".to_owned()))
+        })
         .transpose()?;
 
     // 機密値変換（指定された場合のみ）

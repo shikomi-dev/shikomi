@@ -180,6 +180,8 @@ function resolveInvalidInput(err: GUIError): MessageResult {
   switch (err.invalid_input_code) {
     case "label_empty":
       return { type: "message", text: "ラベルを入力してください" };
+    case "label_invalid":
+      return { type: "message", text: "ラベルの形式が正しくありません" };
     case "value_empty":
       return { type: "message", text: "値を入力してください" };
     case "password_empty":

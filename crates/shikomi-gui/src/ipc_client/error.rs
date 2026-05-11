@@ -168,6 +168,8 @@ fn invalid_input_code_key(msg: &str) -> &'static str {
         "master password must not be empty" => "password_empty",
         "decrypt confirmation required" => "confirmation_required",
         "invalid hotkey format" => "hotkey_invalid",
+        // entries.rs: RecordLabel::try_new のエラーを凍結文言で包んだもの（§2.2）
+        "invalid label format" => "label_invalid",
         _ => "unknown",
     }
 }
@@ -415,7 +417,7 @@ mod tests {
         );
     }
 
-    // TC-GUI-IPC-UT14b — invalid_input_code 全 6 値の網羅テスト
+    // TC-GUI-IPC-UT14b — invalid_input_code 全 7 値の網羅テスト（key テーブル凍結契約）
     #[test]
     fn ut14b_invalid_input_code_exhaustive() {
         let cases = [
@@ -425,6 +427,7 @@ mod tests {
             ("master password must not be empty", "password_empty"),
             ("decrypt confirmation required", "confirmation_required"),
             ("invalid hotkey format", "hotkey_invalid"),
+            ("invalid label format", "label_invalid"),
             ("unknown message", "unknown"),
         ];
         for (msg, expected_code) in cases {
@@ -437,6 +440,80 @@ mod tests {
             assert_eq!(
                 v["invalid_input_code"], expected_code,
                 "invalid_input_code must be '{expected_code}' for msg='{msg}': {v}"
+            );
+        }
+    }
+
+    // TC-GUI-IPC-UT16 — 全 InvalidInput 生成箇所の実文言 → invalid_input_code 網羅テスト
+    //
+    // ペテルギウス指摘対応（Sub-B UT15 同型）: `ipc_code_key()` と §2.3 凍結契約の
+    // 完全一致を CI で保証したように、`invalid_input_code_key()` と実際の
+    // `InvalidInput` 生成箇所（entries.rs / vault.rs / hotkey.rs）の固定文言を
+    // 構造的に照合する。
+    //
+    // このテストが Fail → 実文言の変更または `invalid_input_code_key` の更新漏れ。
+    // 「unknown」にフォールバックしているエントリが出た場合は §2.2 の凍結契約更新が必要。
+    //
+    // 実文言の出所（grep ソース）:
+    //   entries.rs L92:  "label must not be empty"
+    //   entries.rs L95:  "value must not be empty"
+    //   entries.rs L100: "invalid label format"  ← RecordLabel::try_new error path
+    //   entries.rs L144: "invalid record id format"
+    //   entries.rs L148: "invalid label format"  ← update_entry RecordLabel path
+    //   entries.rs L189: "invalid record id format"
+    //   vault.rs   L87:  "master password must not be empty"
+    //   vault.rs   L140: "master password must not be empty"
+    //   vault.rs   L145: "decrypt confirmation required"
+    //   vault.rs   L189: "master password must not be empty"
+    //   hotkey.rs  L55:  "invalid record id format"
+    //   hotkey.rs  L92:  "invalid record id format"
+    //   hotkey.rs  L131: "invalid hotkey format"   ← validate_hotkey_combo
+    #[test]
+    fn ut16_all_invalid_input_sources_map_to_known_code() {
+        // (ファイル:行, 実文言, 期待 invalid_input_code) — "unknown" は許容しない
+        let sources: &[(&str, &str, &str)] = &[
+            ("entries.rs:92", "label must not be empty", "label_empty"),
+            ("entries.rs:95", "value must not be empty", "value_empty"),
+            ("entries.rs:100", "invalid label format", "label_invalid"),
+            ("entries.rs:144", "invalid record id format", "id_invalid"),
+            ("entries.rs:148", "invalid label format", "label_invalid"),
+            ("entries.rs:189", "invalid record id format", "id_invalid"),
+            (
+                "vault.rs:87",
+                "master password must not be empty",
+                "password_empty",
+            ),
+            (
+                "vault.rs:140",
+                "master password must not be empty",
+                "password_empty",
+            ),
+            (
+                "vault.rs:145",
+                "decrypt confirmation required",
+                "confirmation_required",
+            ),
+            (
+                "vault.rs:189",
+                "master password must not be empty",
+                "password_empty",
+            ),
+            ("hotkey.rs:55", "invalid record id format", "id_invalid"),
+            ("hotkey.rs:92", "invalid record id format", "id_invalid"),
+            ("hotkey.rs:131", "invalid hotkey format", "hotkey_invalid"),
+        ];
+
+        for (location, msg, expected_code) in sources {
+            let e = GUIError::InvalidInput(msg.to_owned().to_owned());
+            let v = serde_json::to_value(&e).unwrap();
+            assert_ne!(
+                v["invalid_input_code"], "unknown",
+                "§2.2 凍結契約違反: {location} の文言 '{msg}' が unknown にフォールバック: {v}"
+            );
+            assert_eq!(
+                v["invalid_input_code"], *expected_code,
+                "§2.2 凍結契約違反: {location} の文言 '{msg}' が期待 '{expected_code}' でなく '{}': {v}",
+                v["invalid_input_code"]
             );
         }
     }
