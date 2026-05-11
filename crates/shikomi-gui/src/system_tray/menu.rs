@@ -23,12 +23,10 @@ use tauri::{App, AppHandle, Manager as _, Runtime};
 ///
 /// メニュー構築失敗時は `tauri::Error` を返す。
 pub fn build_menu(app: &App) -> tauri::Result<Menu<tauri::Wry>> {
-    let open_window = MenuItemBuilder::with_id("open_window", "ウィンドウを開く")
-        .build(app)?;
+    let open_window = MenuItemBuilder::with_id("open_window", "ウィンドウを開く").build(app)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
     let restart_daemon =
-        MenuItemBuilder::with_id("restart_daemon", "shikomi のサービスを再起動する")
-            .build(app)?;
+        MenuItemBuilder::with_id("restart_daemon", "shikomi のサービスを再起動する").build(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItemBuilder::with_id("quit", "終了").build(app)?;
 

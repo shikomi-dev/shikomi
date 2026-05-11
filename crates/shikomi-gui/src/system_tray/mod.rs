@@ -54,9 +54,7 @@ pub fn setup(app: &mut App) -> tauri::Result<()> {
 /// `AppHandle::exit(0)` はトレイメニューの「終了」のみが呼ぶ唯一の終了経路（§2.2）。
 fn register_close_to_tray_handler(app: &App) {
     let Some(window) = app.get_webview_window("main") else {
-        tracing::warn!(
-            "system_tray::setup: main window not found; close-to-tray not registered"
-        );
+        tracing::warn!("system_tray::setup: main window not found; close-to-tray not registered");
         return;
     };
 

@@ -64,8 +64,7 @@ async fn it01_get_clipboard_countdown_not_connected_returns_none() {
     let result = get_clipboard_countdown(state).await;
 
     // GUIError を返さない（Ok の確認）
-    let output =
-        result.expect("get_clipboard_countdown should return Ok even when not connected");
+    let output = result.expect("get_clipboard_countdown should return Ok even when not connected");
     // remaining_secs は None（カウントダウン非アクティブ扱い）
     assert_eq!(output.remaining_secs, None);
 }
@@ -132,8 +131,7 @@ async fn it04_get_clipboard_countdown_ipc_error_silent_fallback() {
     let result = get_clipboard_countdown(state).await;
 
     // IPC エラーでも Ok を返す（countdown ポーリングがエラーパネルを誘発しない）
-    let output =
-        result.expect("get_clipboard_countdown should return Ok even on IPC error");
+    let output = result.expect("get_clipboard_countdown should return Ok even on IPC error");
     assert_eq!(output.remaining_secs, None);
 }
 
