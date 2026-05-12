@@ -8,6 +8,12 @@
 name: "Tauri Build Setup"
 description: "Common setup steps for Tauri builds: checkout, Rust, cache, Node.js, npm ci, tauri-cli"
 
+inputs:
+  save-cache:
+    description: "Rust ビルドキャッシュを保存するか（デフォルト: 'true'）。Windows の rust-cache 保存失敗回避のため build-windows は 'false' を渡す"
+    required: false
+    default: "true"
+
 runs:
   using: "composite"
   steps:
@@ -16,6 +22,8 @@ runs:
 
     - name: Rust build cache
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2 as of 2026-05-11
+      with:
+        save-if: ${{ inputs.save-cache == 'true' }}
 
     - name: setup Node.js 20
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4 as of 2026-05-11

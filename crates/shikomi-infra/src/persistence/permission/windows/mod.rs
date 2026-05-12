@@ -26,7 +26,7 @@ pub(crate) use ensure::normalize_tempdir_dacl;
 /// Windows SDK: `#define ACCESS_ALLOWED_ACE_TYPE 0x0`
 const ACE_TYPE_ACCESS_ALLOWED: u8 = 0x00;
 
-/// ファイルの期待 AccessMask（`FILE_GENERIC_READ | FILE_GENERIC_WRITE`）。
+/// ファイルの期待 AccessMask（`FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE`）。
 ///
 /// ```text
 /// FILE_GENERIC_READ  = SYNCHRONIZE(0x100000) | READ_CONTROL(0x20000)
@@ -36,16 +36,17 @@ const ACE_TYPE_ACCESS_ALLOWED: u8 = 0x00;
 ///                    | FILE_WRITE_DATA(0x2) | FILE_WRITE_ATTRIBUTES(0x100)
 ///                    | FILE_WRITE_EA(0x10) | FILE_APPEND_DATA(0x4)
 ///                    = 0x0012_0116
+/// DELETE             = 0x0001_0000
 /// ```
-const EXPECTED_FILE_MASK: u32 = 0x0012_0089 | 0x0012_0116; // = 0x0012_019F
+const EXPECTED_FILE_MASK: u32 = 0x0012_0089 | 0x0012_0116 | 0x0001_0000;
 
 /// ディレクトリの期待 AccessMask（`FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_TRAVERSE`）。
 ///
 /// FILE_TRAVERSE = FILE_EXECUTE = 0x20
-const EXPECTED_DIR_MASK: u32 = EXPECTED_FILE_MASK | 0x0000_0020; // = 0x0012_01BF
+const EXPECTED_DIR_MASK: u32 = EXPECTED_FILE_MASK | 0x0000_0020; // = 0x0013_01BF
 
 /// `InvalidPermission.expected` フィールドの値 — ファイル用（`&'static str`）。
-const EXPECTED_FILE_STR: &str = "owner-only DACL (FILE_GENERIC_READ|FILE_GENERIC_WRITE)";
+const EXPECTED_FILE_STR: &str = "owner-only DACL (FILE_GENERIC_READ|FILE_GENERIC_WRITE|DELETE)";
 
 /// `InvalidPermission.expected` フィールドの値 — ディレクトリ用（`&'static str`）。
 const EXPECTED_DIR_STR: &str =

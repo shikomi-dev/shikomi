@@ -305,12 +305,12 @@ fn tc_u24_verify_file_extra_write_dac_bit_invariant_violation() {
         fetch_owner_sid_from_path(&file).expect("fetch_owner_sid_from_path が失敗");
 
     // WRITE_DAC (0x0004_0000) を付加した過剰 AccessMask — 不変条件④ を破る
-    // 結果: 0x0012_019F | 0x0004_0000 = 0x0016_019F
+    // 結果: 0x0013_019F | 0x0004_0000 = 0x0017_019F
     let excess_mask = EXPECTED_FILE_MASK | 0x0004_0000u32;
 
     // 1 ACE (owner, excess_mask) PROTECTED で適用する
     // ① PROTECTED: pass / ② AceCount=1: pass / ③ EqualSid(owner, owner): pass
-    // ④ Mask(0x0016_019F) ≠ EXPECTED_FILE_MASK(0x0012_019F): 違反
+    // ④ Mask(0x0017_019F) ≠ EXPECTED_FILE_MASK(0x0013_019F): 違反
     let aces = unsafe { [make_ea(owner_sid, excess_mask)] };
     unsafe { apply_dacl_for_test(&file, &aces, true) };
 
