@@ -55,12 +55,15 @@
 | TC-UT-180 | REQ-DP-001 | AC-DP-02 | 正常 | `Redacted` の JSON 表現が `{"kind":"redacted"}` で `value` キーを含まない |
 | TC-UT-181 | REQ-DP-001 | AC-DP-01 | 正常 | `Plaintext` の JSON 表現が `{"kind":"plaintext","value":"..."}` |
 | TC-UT-195 | REQ-DP-001 | —（設計内部保証）| 異常 | `ExportRecordPayload::from_record`: `Encrypted` payload → `Err(ExportError::VaultLocked)`（Fail Fast、release ビルド動作保証）|
+| TC-UT-195b | REQ-DP-001 | —（設計内部保証）| 異常 | `ExportRecordPayload::from_record`: `Encrypted` + Text kind → `Err(VaultLocked)`（kind に関わらず即時 Err）|
 | TC-UT-182 | REQ-DP-002 | AC-DP-01 | 正常 | `ExportRecord::try_from`: 全フィールド（id / kind / label / payload / created_at / updated_at / hotkey=Some）が正しくマッピングされる |
 | TC-UT-183 | REQ-DP-002 | AC-DP-01 | 正常 | `ExportRecord::try_from`: `hotkey=None` → JSON `null` |
 | TC-UT-184 | REQ-DP-003 | AC-DP-01 | 正常 | `ExportPayload::new` の `format_version` フィールドが常に `1` |
 | TC-UT-185 | REQ-DP-003 / REQ-DP-004 | AC-DP-01 | 正常 | `ExportPayload` → JSON 文字列 → `ImportPayload` serde ラウンドトリップ（全フィールド一致）|
 | TC-UT-186 | REQ-DP-005 | AC-DP-05 | 異常 | `ImportValidator::validate`: `format_version > 1` → `ImportValidationError::UnknownFormatVersion { found }` |
+| TC-UT-186b | REQ-DP-005 | AC-DP-05 | 異常 | `ImportValidator::validate`: JSON パース経由 `format_version > 1` → `UnknownFormatVersion`（ラウンドトリップ統合検証）|
 | TC-UT-187 | REQ-DP-005 | AC-DP-01 | 正常 | `ImportValidator::validate`: `format_version == 1`・重複なし・Redacted なし → `Ok(ImportValidationReport)` |
+| TC-UT-187b | REQ-DP-005 | AC-DP-01 | 正常 | `ImportValidator::validate`: JSON パース経由正常バリデーション通過 → `Ok(ImportValidationReport)`（ラウンドトリップ統合検証）|
 | TC-UT-188 | REQ-DP-005 | AC-DP-04 | 異常 | `ImportValidator::validate`: ファイル内 ID 重複 → `ImportValidationError::DuplicateIdInFile { id }` |
 | TC-UT-189 | REQ-DP-005 | AC-DP-03 | 異常 | `ImportValidator::validate`: `payload.kind == "redacted"` レコード → `ImportValidationError::RedactedPayload { id }` |
 | TC-UT-190 | REQ-DP-005 | AC-DP-01 | 正常 | `ImportValidator::validate`: 既存 vault と ID 衝突 → `Ok` かつ `report.conflicting_ids` に衝突 ID が含まれる |
@@ -70,7 +73,7 @@
 | TC-UT-194 | REQ-DP-006 | AC-DP-03 | 正常 | `ImportValidationError::RedactedPayload` の `Display` 出力に record id が含まれる |
 | TC-UT-196 | REQ-DP-005 / REQ-DP-001 | AC-DP-08（domain部分）| 正常 | `--export-secrets` で書き出した plaintext payload（`{"kind":"plaintext","value":"..."}`）→ `ImportValidator` が `Ok` を返す（Redacted 判定されない）|
 
-上位トレーサビリティ: `TC-UT-177〜196` → `ST-DP-*`（system-test-design.md）→ `AC-DP-01〜05、08（domain 部分）`（feature-spec.md §5）
+上位トレーサビリティ: `TC-UT-177〜196、TC-UT-186b/187b、TC-UT-195b` → `ST-DP-*`（system-test-design.md）→ `AC-DP-01〜05、08（domain 部分）`（feature-spec.md §5）
 
 ---
 
@@ -78,7 +81,7 @@
 
 ### 5.1 `ExportRecordPayload::from_record` — Secret リダクション（REQ-DP-001）
 
-配置: `crates/shikomi-core/src/portability/export.rs` `#[cfg(test)] mod tests`
+配置: `crates/shikomi-core/src/portability/export.rs` `#[cfg(test)] mod tests`（TC-UT-177〜179、TC-UT-195/195b）/ `crates/shikomi-core/tests/portability_roundtrip.rs`（TC-UT-180/181。`serde_json` は dev-dependency のため `export.rs` 内では利用不可）
 
 > **シグネチャ（rev2 反映）**: `from_record(payload: &RecordPayload, kind: RecordKind, include_secrets: bool) -> Result<ExportRecordPayload, ExportError>` — 全 TC の期待結果は `Ok(...)` または `Err(...)` で記述する
 
@@ -154,6 +157,18 @@
 | 操作 | 1. `RecordPayload::Encrypted(...)` と `RecordKind::Secret` を用意する / 2. `ExportRecordPayload::from_record(&payload, RecordKind::Secret, false)` を呼ぶ |
 | 期待結果 | `Err(ExportError::VaultLocked)` が返ること（`debug_assert!` は release で無視されるため、`if let Encrypted` 分岐による即時 `Err` で本番ビルドでも動作することを確認）|
 
+#### TC-UT-195b: `Encrypted` payload + Text kind → `Err(ExportError::VaultLocked)`（kind に関わらず即時エラー）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-UT-195b |
+| 対応要件 | REQ-DP-001 |
+| 対応受入基準 | —（設計内部の Fail Fast 保証。`Encrypted` チェックが `kind` ゲートの**前**に走ることを検証）|
+| 種別 | 異常系 |
+| 前提条件 | なし |
+| 操作 | 1. `RecordPayload::Encrypted(...)` と `RecordKind::Text` を用意する / 2. `ExportRecordPayload::from_record(&payload, RecordKind::Text, false)` を呼ぶ |
+| 期待結果 | `Err(ExportError::VaultLocked)` が返ること。Text kind であっても `Encrypted` payload は `include_secrets` / `kind` ゲートより前に即時 `Err` を返す（TC-UT-195 との対比: Secret kind でも Text kind でも挙動が同じ——`Encrypted` チェックは kind 非依存であることを保証）|
+
 ---
 
 ### 5.2 `ExportRecord` フィールドマッピング（REQ-DP-002）
@@ -220,7 +235,7 @@
 
 ### 5.4 `ImportValidator::validate` — バリデーション順序（REQ-DP-005）
 
-配置: `crates/shikomi-core/src/portability/import.rs` `#[cfg(test)] mod tests`
+配置: `crates/shikomi-core/src/portability/import.rs` `#[cfg(test)] mod tests`（TC-UT-186〜193）/ `crates/shikomi-core/tests/portability_roundtrip.rs`（TC-UT-186b/187b。JSON ラウンドトリップ検証、`serde_json` dev-dependency 制約のため）
 
 #### TC-UT-186: `format_version > 1` → `UnknownFormatVersion`
 
@@ -245,6 +260,30 @@
 | 前提条件 | なし |
 | 操作 | 1. `format_version: 1`・重複なし・Redacted なし の `ImportPayload` を構築する / 2. `existing_ids` が空の `HashSet` を用意する / 3. `ImportValidator::validate(&payload, &existing_ids)` を呼ぶ |
 | 期待結果 | `Ok(report)` / `report.conflicting_ids` が空 / `report.warnings` が空 |
+
+#### TC-UT-186b: `format_version > 1` → JSON パース経由で `UnknownFormatVersion`（ラウンドトリップ統合検証）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-UT-186b |
+| 対応要件 | REQ-DP-005 |
+| 対応受入基準 | AC-DP-05 |
+| 種別 | 異常系 |
+| 前提条件 | なし |
+| 操作 | 1. `format_version: 999`・`records: []` の `ImportPayload` を `serde_json::to_string` で JSON 文字列に変換する / 2. `serde_json::from_str::<ImportPayload>` で再デシリアライズする / 3. `ImportValidator::validate(&payload, &HashSet::new())` を呼ぶ |
+| 期待結果 | `Err(ImportValidationError::UnknownFormatVersion { found: 999 })` / TC-UT-186 との違い: 構造体直接構築ではなく JSON シリアライズ→デシリアライズ経路を通すことで、serde の tagged union 設定が end-to-end で正しく動作することを確認 |
+
+#### TC-UT-187b: 正常バリデーション通過 → JSON パース経由で `Ok(ImportValidationReport)`（ラウンドトリップ統合検証）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-UT-187b |
+| 対応要件 | REQ-DP-005 |
+| 対応受入基準 | AC-DP-01 |
+| 種別 | 正常系 |
+| 前提条件 | なし |
+| 操作 | 1. `format_version: 1`・Plaintext レコードを含む `ExportPayload` を `serde_json::to_string` で JSON に変換する / 2. `serde_json::from_str::<ImportPayload>` でデシリアライズする / 3. `ImportValidator::validate(&payload, &HashSet::new())` を呼ぶ |
+| 期待結果 | `Ok(report)` / TC-UT-187 との違い: JSON 経由の実シリアライズ経路を通すことで、tagged union の serde 設定（`rename_all = "snake_case"` 等）が end-to-end で正しく動作することを確認 |
 
 #### TC-UT-188: ファイル内 ID 重複 → `DuplicateIdInFile`
 
@@ -362,13 +401,13 @@
 
 | グループ | 対象 | TC 数 |
 |---------|------|-------|
-| 5.1 | `ExportRecordPayload::from_record`（Result 戻り値含む）| 6（TC-UT-177〜181、TC-UT-195）|
+| 5.1 | `ExportRecordPayload::from_record`（Result 戻り値含む）| 7（TC-UT-177〜181、TC-UT-195/195b）|
 | 5.2 | `ExportRecord` フィールドマッピング（`TryFrom` 対応）| 2（TC-UT-182〜183）|
 | 5.3 | `ExportPayload` 構造 / serde ラウンドトリップ | 2（TC-UT-184〜185）|
-| 5.4 | `ImportValidator::validate` バリデーション順序 | 8（TC-UT-186〜193）|
+| 5.4 | `ImportValidator::validate` バリデーション順序 | 10（TC-UT-186/186b、TC-UT-187/187b、TC-UT-188〜193）|
 | 5.5 | `ImportValidationError::Display` | 1（TC-UT-194）|
 | 5.6 | AC-DP-08 domain カバレッジ（plaintext payload 受理）| 1（TC-UT-196）|
-| **合計** | | **20** |
+| **合計** | | **23** |
 
 結合テスト: **なし**（`basic-design.md §テスト戦略` の「IT: 該当なし — domain 型はファイル I/O を持たない」に従う）
 
