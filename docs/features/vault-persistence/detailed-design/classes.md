@@ -212,7 +212,7 @@ classDiagram
 - **`AtomicWriteSession { conn, new_path }`**: SQLite 書込中の状態（開いた `Connection` + `.new` のパス）を保持するセッション型。`new(paths, vault)` でセッション開始、`finalize(self, retry_policy)` の所有権消費で全工程（クローズ → サイドカー DACL → fsync → rename）を順序固定で完結（Tell, Don't Ask、型レベルでクローズ順序を強制）
 - **`AtomicWriter`（ZST 残存）**: `detect_orphan` / `cleanup_new` / `#[cfg(test)] write_new_only` の 3 静的メソッドの名前空間として機能。`write_new` は `AtomicWriteSession::new` に昇格した
 
-**3.1 クローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `AtomicWriteSession::new` 内で SQLite `Connection` を取得し、以下の順序を**契約**として固定する。Phase 8 で `AtomicWriteSession::finalize(self, ...)` の所有権消費パターンにより**型レベルで強制**できるようになった（§3.2 参照）。各ステップは `./flows.md` §`save` step 7.1〜7.3 に対応し、順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast する:
+**3.1 クローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `AtomicWriteSession::new` 内で SQLite `Connection` を取得し、以下の順序を**契約**として固定する。Phase 8 で `AtomicWriteSession::finalize(self, ...)` の所有権消費パターンにより**型レベルで強制**できるようになった（§3.2 参照）。各ステップの `./flows.md` 対応番号は末尾に記す。順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast する:
 
 1. 全 `INSERT` を含むトランザクションを `tx.commit()` で締める（`AtomicWriteSession::new` 最終処理）
 2. **`PRAGMA wal_checkpoint(TRUNCATE)`** を発行（WAL 採用時のサイドカー強制空化、DELETE 採用時は no-op で害なし）— `finalize` step 7.1
