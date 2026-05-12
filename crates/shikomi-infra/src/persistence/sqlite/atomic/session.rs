@@ -15,8 +15,8 @@ use crate::persistence::permission::PermissionGuard;
 use crate::persistence::sqlite::mapping::Mapping;
 use crate::persistence::sqlite::schema::SchemaSql;
 
-use super::{RetryPolicy, SQLITE_SIDECAR_SUFFIXES};
 use super::writer::AtomicWriter;
+use super::{RetryPolicy, SQLITE_SIDECAR_SUFFIXES};
 
 /// SQLite 書込中の `Connection` を保持するセッション型（Phase 8 新設、Issue #73）。
 ///

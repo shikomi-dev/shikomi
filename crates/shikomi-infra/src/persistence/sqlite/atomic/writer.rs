@@ -5,11 +5,11 @@ use std::path::Path;
 use crate::persistence::error::PersistenceError;
 
 #[cfg(test)]
-use shikomi_core::Vault;
+use super::session::AtomicWriteSession;
 #[cfg(test)]
 use crate::persistence::paths::VaultPaths;
 #[cfg(test)]
-use super::session::AtomicWriteSession;
+use shikomi_core::Vault;
 
 /// アトミック書き込みの補助ユーティリティ（ZST 名前空間）。
 ///

@@ -233,7 +233,10 @@ mod tests {
         // .new が残存している状態での load は OrphanNewFile になる
         let orphan_result = AtomicWriter::detect_orphan(paths.vault_db_new());
         assert!(
-            matches!(orphan_result, Err(crate::persistence::error::PersistenceError::OrphanNewFile { .. })),
+            matches!(
+                orphan_result,
+                Err(crate::persistence::error::PersistenceError::OrphanNewFile { .. })
+            ),
             "OrphanNewFile を期待したが {orphan_result:?}"
         );
 
@@ -378,10 +381,12 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(crate::persistence::error::PersistenceError::AtomicWriteFailed {
-                    stage: crate::persistence::error::AtomicWriteStage::FsyncTemp,
-                    ..
-                })
+                Err(
+                    crate::persistence::error::PersistenceError::AtomicWriteFailed {
+                        stage: crate::persistence::error::AtomicWriteStage::FsyncTemp,
+                        ..
+                    }
+                )
             ),
             "AtomicWriteFailed {{ stage: FsyncTemp }} を期待したが: {:?}",
             result.err()
@@ -459,10 +464,12 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(crate::persistence::error::PersistenceError::AtomicWriteFailed {
-                    stage: crate::persistence::error::AtomicWriteStage::Rename,
-                    ..
-                })
+                Err(
+                    crate::persistence::error::PersistenceError::AtomicWriteFailed {
+                        stage: crate::persistence::error::AtomicWriteStage::Rename,
+                        ..
+                    }
+                )
             ),
             "AtomicWriteFailed {{ stage: Rename }} を期待したが: {:?}",
             result.err()
