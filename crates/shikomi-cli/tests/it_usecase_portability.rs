@@ -206,11 +206,9 @@ fn tc_it_dp_005_import_records_sqlite_busy_timeout_returns_vault_busy() {
 
     // 3. busy_timeout(2000ms) 設定の SqliteVaultRepository を取得
     //    （`lib.rs::run_import` と同等の設定。usecase.md §busy_timeout 設定 参照）
-    let repo = SqliteVaultRepository::from_directory_with_busy_timeout(
-        dir.path(),
-        Duration::from_secs(2),
-    )
-    .expect("from_directory_with_busy_timeout");
+    let repo =
+        SqliteVaultRepository::from_directory_with_busy_timeout(dir.path(), Duration::from_secs(2))
+            .expect("from_directory_with_busy_timeout");
 
     // 4. 空の valid ImportPayload JSON を書き出す
     let import_json = dir.path().join("busy_import.json");

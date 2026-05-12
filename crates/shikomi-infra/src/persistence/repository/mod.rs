@@ -417,7 +417,7 @@ impl SqliteVaultRepository {
         AtomicWriter::detect_orphan(self.paths.vault_db_new())?;
 
         // Step 6: `.new` 作成から SQLite COMMIT まで実行しセッションを取得
-        let session = AtomicWriteSession::new(&self.paths, vault)?;
+        let session = AtomicWriteSession::new(&self.paths, vault, self.busy_timeout)?;
 
         // Step 7: クローズ順序固定 → sidecar DACL → fsync → rename（Win: retry 補強）
         session.finalize(&ExponentialBackoffRetryPolicy)?;
