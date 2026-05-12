@@ -93,7 +93,7 @@ Phase 1（`daemon-ipc` feature）では `--ipc` フラグが opt-in だった。
 | 項目 | 理由 |
 |------|------|
 | OS 再起動後の daemon 自動起動実証 | CI 環境での OS 再起動テストは実施不可。手動受入テストとして実施する（`SC-DDM-002` §手動確認事項）|
-| MSG-CLI-110 hint への `shikomi daemon install` 誘導追加 | Sub-B 完了後の別 PR で実施（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ`）|
+| MSG-CLI-110 hint への `shikomi daemon install` 誘導追加 | Issue #134 / PR #138 で完了（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ` 参照）|
 | `--ipc` 廃止の移行支援 CLI（`shikomi migrate` 等）| YAGNI（移行コストは軽微、`CHANGELOG.md` で十分）|
 | IPC プロトコルの変更 | `daemon-ipc` feature の protocol は `V1` で凍結済み（`ipc-protocol.md §バージョニングルール`）|
 | ホットキー / クリップボード / 暗号化 vault の Phase 2 対応 | 各後続 feature のスコープ |

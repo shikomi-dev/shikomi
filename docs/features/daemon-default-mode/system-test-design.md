@@ -193,7 +193,7 @@
 | OS 再起動後の daemon 自動起動実証 | CI 環境での OS 再起動は不可。`SC-DDM-002 §手動確認事項` として記録 |
 | `--no-ipc` と暗号化 vault の組み合わせ | `daemon-vault-encryption` feature スコープ（未起票）|
 | Windows Named Pipe + `--no-ipc` 同時接続 | CI 環境で `\\.\pipe\` 経路のテスト設定が複雑。Phase 2 過渡期は Linux / macOS のみ重点確認 |
-| MSG-CLI-110 hint への `shikomi daemon install` 誘導 | Sub-B 完了後の別 PR（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ`）|
+| MSG-CLI-110 hint への `shikomi daemon install` 誘導 | Issue #134 / PR #138 で完了（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ` 参照）|
 
 ## 6. 受入テストシナリオとの対応
 
