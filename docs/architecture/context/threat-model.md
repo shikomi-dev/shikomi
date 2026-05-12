@@ -102,6 +102,27 @@ shikomi は「ホットキーで投入 → ユーザが即貼付」が主ユー�
 
 出典: https://v2.tauri.app/security/
 
+### 7.5 data-portability feature 固有の攻撃面（Issue #135 追加）
+
+`shikomi export` / `shikomi import` は vault データをローカルファイルとして読み書きする新しい攻撃面を開く。
+
+#### 7.5.1 STRIDE 補足
+
+| 脅威カテゴリ | data-portability 固有リスク | 対策 |
+|------------|---------------------------|------|
+| **I**nformation Disclosure | `--export-secrets` フラグで全 Secret kind レコードが平文 JSON ファイルに書き出される。誤操作・スクリプト自動化・CI 環境への出力が漏洩経路になる | (1) `MSG-CLI-145` を stderr に必ず出力（`--quiet` 抑止不可）。(2) export ファイルを `0600` で作成（同ユーザ内の他プロセスからの読み取りを OS レベルで阻止）。(3) デフォルト動作では Secret kind を `{"kind":"redacted"}` tagged union でリダクト |
+| **I**nformation Disclosure | export ファイルが `0644`（ワールドリーダブル）で作成された場合、同マシンの他ユーザが読み取り可能になる | `tempfile::Builder::new().permissions(0o600)` で書き込み前にパーミッションを設定する（`threat-model.md §7.1` の vault.db と同等の保護水準）|
+| **T**ampering | 攻撃者が import ファイルを改ざんして不正なレコード（例: 既知のラベル・ID を持つ偽レコード）を注入する | `ImportValidator` が `format_version` / 重複 ID / Redacted payload を検出。ファイル完全性検証（HMAC / 署名）は将来拡張（MVP スコープ外）。ユーザーは信頼できるソースからのファイルのみ import することを README で明示する |
+| **D**enial of Service | 巨大な import ファイル（数 GB）を渡して OOM を引き起こす | `serde_json::from_reader` のストリーミング読み込みを使用する（Sub-B 実装ガイドライン）。レコード数の上限チェック（例: 100 万件超で警告）は将来拡張 |
+
+#### 7.5.2 OWASP A04 補足（Insecure Design）
+
+`--export-secrets` は意図的に設計された危険操作である。誤操作防止のため:
+
+1. `MSG-CLI-145` は `--quiet` フラグでも抑止不可にする
+2. エラーではなく警告（exit 0 で続行）とするが、stderr への出力は保証する
+3. 将来拡張として「Are you sure? (yes/no)」確認プロンプトを Sub-B の後続 Issue で検討する（MVP スコープ外）
+
 ## 8. OWASP Top 10 対応表（2021 版・デスクトップアプリ適用）
 
 OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たないデスクトップアプリでも**多くが該当する**（認可・ログ・暗号失敗・依存コンポーネント等）。設計上の取扱を以下に明示する。
@@ -111,7 +132,7 @@ OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たな�
 | **A01: Broken Access Control** | 該当（ローカル多重プロセス・多重ユーザ） | IPC の UID 検証＋ソケット `0700`（`process-model.md` §4.2）。vault ファイルパーミッション `0600`、ディレクトリ `0700`。Windows は同等の ACL を SDDL で設定 |
 | **A02: Cryptographic Failures** | **暗号化モード（オプトイン）で該当** | 暗号化モード有効時のみ AEAD（AES-256-GCM）＋ Argon2id（OWASP 推奨 `m=19456, t=2, p=1`）を適用。nonce は CSPRNG から毎回 96bit 生成、vault 内に per-record 記録（`../tech-stack.md` §2.4 参照）。VEK は `secrecy` + `zeroize`。MAC（GMAC タグ）で改竄検知。**平文モードは暗号保護を行わないことを明示**（§7.0 のユーザ自己責任リスク表を参照）。デフォルト平文を選ぶ場合、A02 は「暗号を使わない設計判断」として該当外だが、代わりに §7.0 の脅威表を受容する |
 | **A03: Injection** | 該当（SQL / コマンド引数） | SQLite 操作は `rusqlite` の parameter binding のみ使用し生 SQL 連結禁止。CLI → daemon IPC は MessagePack 型付きスキーマ、文字列として shell に渡す経路なし |
-| **A04: Insecure Design** | 該当 | 本ドキュメント全体で扱う（プロセスモデル・Threat Model・Fail Secure 方針）。**デフォルト平文を Insecure Design と誤解されないよう**、§7.0 でリスク提示と UI 可視化（`[plaintext]` 表示）を強制する設計とした。「知らされず平文だった」事故を防ぐ |
+| **A04: Insecure Design** | 該当 | 本ドキュメント全体で扱う（プロセスモデル・Threat Model・Fail Secure 方針）。**デフォルト平文を Insecure Design と誤解されないよう**、§7.0 でリスク提示と UI 可視化（`[plaintext]` 表示）を強制する設計とした。「知らされず平文だった」事故を防ぐ。**data-portability 追加（§7.5.2）**: `--export-secrets` は意図的危険操作として `MSG-CLI-145` 警告を `--quiet` 抑止不可で出力する |
 | **A05: Security Misconfiguration** | 該当 | 既定値を安全側に（自動クリア 30 秒、アイドルタイムアウト 15 分、テレメトリ off、キーチェーン連携 off）。**vault 保護モードはデフォルト平文**だが、それを**必ず可視化する**ことで「設定ミスでオフのまま」を回避。デバッグビルドは別バイナリでリリースチャネルに混入しない。**GUI 追加対策（Issue #90）**: Tauri v2 WebView の `security.csp = "script-src 'self'"` を `tauri.conf.json` で強制し `unsafe-eval` / `unsafe-inline` を禁止する（§7.3.2 参照）。production ビルドで `devTools: false` 必須 |
 | **A06: Vulnerable and Outdated Components** | 該当 | `cargo-deny` + `cargo-audit` + Dependabot（`../dev.md` §5）。`Cargo.lock` をコミットし lock 書換え監査。SBOM（CycloneDX）をリリースに添付 |
 | **A07: Identification and Authentication Failures** | **暗号化モードで該当** | 暗号化モード時のみマスターパスワード認証を行うため、該当は暗号化モードに限定。Argon2id で総当たり耐性、連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフを該当 IPC リクエストにのみ適用**（プロセス全体を blocking sleep させない＝ホットキー購読を継続、`../tech-stack.md` §2.4 参照）。IPC 認証（UID 検証は Issue #26 で実装、**セッショントークンは後続 Issue で追加予定**）は両モード共通。リカバリコード：BIP-39 24 語、1 度だけ表示、再発行不可（暗号化モード時のみ） |
