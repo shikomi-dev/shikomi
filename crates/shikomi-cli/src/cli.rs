@@ -100,6 +100,20 @@ pub enum Subcommand {
         about = "Manage daemon autostart registration and check daemon status"
     )]
     Daemon(DaemonSubcommand),
+
+    // ---------------- Issue #141: data-portability export / import ----------------
+
+    /// vault レコードを JSON ファイルへ export する（Issue #141 Sub-B、REQ-DP-007）。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/basic-design.md §REQ-DP-007
+    #[command(about = "Export vault records to a JSON file")]
+    Export(ExportArgs),
+
+    /// JSON export ファイルから vault へレコードを import する（Issue #141 Sub-B、REQ-DP-007）。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/basic-design.md §REQ-DP-007
+    #[command(about = "Import records from a JSON export file into the vault")]
+    Import(ImportArgs),
 }
 
 // -------------------------------------------------------------------
@@ -311,6 +325,62 @@ impl From<KindArg> for RecordKind {
             KindArg::Secret => RecordKind::Secret,
         }
     }
+}
+
+// -------------------------------------------------------------------
+// Issue #141: data-portability export / import 引数型
+// -------------------------------------------------------------------
+
+/// `shikomi export` の引数（REQ-DP-007）。
+///
+/// 設計根拠: docs/features/data-portability/cli/detailed-design/cli.md §ExportArgs 型
+#[derive(Args, Debug)]
+pub struct ExportArgs {
+    /// export 先ファイルパス（必須）。
+    #[arg(long, value_name = "FILE")]
+    pub output: std::path::PathBuf,
+
+    /// Secret kind のペイロードを平文で export する（既定はリダクト）。
+    ///
+    /// 実行時は stderr に MSG-CLI-145 が必ず出力される（--quiet でも抑止不可）。
+    #[arg(long)]
+    pub export_secrets: bool,
+
+    /// 出力先ファイルが既に存在する場合に上書きする。
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// `shikomi import` の引数（REQ-DP-007）。
+///
+/// 設計根拠: docs/features/data-portability/cli/detailed-design/cli.md §ImportArgs 型
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    /// import 元ファイルパス（必須）。
+    #[arg(long, value_name = "FILE")]
+    pub input: std::path::PathBuf,
+
+    /// 衝突戦略（既定: `error`）。
+    ///
+    /// - `error`: 衝突 ID が存在した場合即座に MSG-CLI-142 で exit 1
+    /// - `skip`: 衝突 ID のレコードをスキップして残りを追加
+    /// - `overwrite`: 衝突 ID の既存レコードを import ファイルの値で置換
+    #[arg(long, value_enum, default_value = "error")]
+    pub on_conflict: OnConflictArg,
+}
+
+/// `--on-conflict` の衝突戦略（REQ-DP-007）。
+///
+/// 設計根拠: docs/features/data-portability/cli/detailed-design/cli.md §OnConflictArg 型
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub enum OnConflictArg {
+    /// 衝突 ID が存在した場合即座に MSG-CLI-142 で exit 1（既定）。
+    Error,
+    /// 衝突 ID のレコードをスキップして残りを追加する。
+    Skip,
+    /// 衝突 ID の既存レコードを import ファイルの値で置換する。
+    Overwrite,
 }
 
 // -------------------------------------------------------------------

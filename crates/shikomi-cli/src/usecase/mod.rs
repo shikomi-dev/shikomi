@@ -10,5 +10,6 @@
 pub mod add;
 pub mod edit;
 pub mod list;
+pub mod portability;
 pub mod remove;
 pub mod vault;

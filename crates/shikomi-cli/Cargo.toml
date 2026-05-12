@@ -34,6 +34,10 @@ tracing       = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror     = { workspace = true }
 dirs          = { workspace = true }
+# Issue #141: data-portability export / import（UseCase 層での JSON シリアライズ・デシリアライズ）
+serde_json    = { workspace = true }
+# Issue #141: export の atomic write（tempfile + persist パターン、R1-DP-09）
+tempfile      = { workspace = true }
 # Issue #75 / Bug-F-007: `windows_pipe_name_from_dir` で `<DIR>` 絶対パスを SHA-256
 # Base32 先頭 16 文字の純関数化（`docs/features/vault-encryption/detailed-design/cli-subcommands.md`
 # §Bug-F-007 解消の Windows pipe 名 `<H>` 契約）。CLI / daemon が同 hash を導出する

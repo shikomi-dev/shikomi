@@ -14,6 +14,7 @@ use super::Locale;
 ///
 /// 例外: MSG-CLI-110（DaemonNotRunning）は 3 OS 並記の hint で複数行 / MSG-CLI-111
 /// （ProtocolVersionMismatch）は 1 hint 行で構成し、それぞれ専用 helper を呼ぶ。
+/// Issue #141: MSG-CLI-144（ImportValidationFailed::RedactedPayload）も専用 helper を呼ぶ。
 #[must_use]
 pub fn render_error(err: &CliError, locale: Locale) -> String {
     match err {
@@ -21,6 +22,11 @@ pub fn render_error(err: &CliError, locale: Locale) -> String {
         CliError::ProtocolVersionMismatch { server, client } => {
             render_protocol_version_mismatch(server, client, locale)
         }
+        // Issue #141: MSG-CLI-144 — RedactedPayload は専用 helper で描画する。
+        // UnknownFormatVersion / DuplicateIdInFile は lines_for の fallback（MSG-CLI-143）で処理する。
+        CliError::ImportValidationFailed(
+            shikomi_core::portability::ImportValidationError::RedactedPayload { id },
+        ) => render_import_validation_redacted(id, locale),
         _ => render_default(err, locale),
     }
 }
@@ -286,6 +292,49 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "is shikomi-gui installed? try reinstalling shikomi".to_owned(),
             "shikomi-gui がインストールされているか確認してください".to_owned(),
         ),
+        // Issue #141: data-portability export / import エラー文言（MSG-CLI-140〜143）
+        CliError::ExportImportVaultLocked => lit(
+            "vault is locked; unlock the vault before running export or import",
+            "vault がロックされています。export / import の前に vault のロックを解除してください",
+            "run `shikomi vault unlock` first",
+            "先に `shikomi vault unlock` を実行してください",
+        ),
+        CliError::ExportOutputFileExists { path } => (
+            format!("export output file already exists: {}", path.display()),
+            format!("export 先ファイルが既に存在します: {}", path.display()),
+            "pass --force to overwrite, or choose a different --output path".to_owned(),
+            "上書きする場合は --force を指定するか、別の --output パスを指定してください".to_owned(),
+        ),
+        CliError::ImportConflict { ids } => {
+            let display = format_conflict_ids(ids);
+            (
+                format!("import conflict: {} record(s) already exist in vault (ids: {display})", ids.len()),
+                format!("import 衝突: {} 件のレコードが vault に既に存在します（ID: {display}）", ids.len()),
+                "use --on-conflict skip to skip conflicting records, or --on-conflict overwrite to replace them".to_owned(),
+                "--on-conflict skip で衝突レコードをスキップするか、--on-conflict overwrite で上書きしてください".to_owned(),
+            )
+        }
+        CliError::ImportDeserializationFailed { reason } => (
+            format!("failed to parse import file: {reason}"),
+            format!("import ファイルの解析に失敗しました: {reason}"),
+            "verify the file is a valid shikomi export (format_version must be 1)".to_owned(),
+            "ファイルが有効な shikomi export ファイルであることを確認してください（format_version は 1 である必要があります）".to_owned(),
+        ),
+        // `RedactedPayload` は `render_error` 側の専用 helper で処理済のため、
+        // `lines_for` には到達しない契約。万一到達した場合のコンパイル時網羅性のため記述する。
+        CliError::ImportValidationFailed(err) => {
+            debug_assert!(
+                false,
+                "ImportValidationFailed(RedactedPayload) should be rendered by render_import_validation_redacted; \
+                 other variants fall through to lines_for"
+            );
+            (
+                format!("failed to parse import file: {err}"),
+                format!("import ファイルの解析に失敗しました: {err}"),
+                "verify the file is a valid shikomi export (format_version must be 1)".to_owned(),
+                "ファイルが有効な shikomi export ファイルであることを確認してください（format_version は 1 である必要があります）".to_owned(),
+            )
+        }
     }
 }
 
@@ -321,6 +370,43 @@ fn render_persistence_lines(pe: &PersistenceError) -> (String, String, String, S
             "パーミッションを確認して再実行してください".to_owned(),
         ),
     }
+}
+
+// -------------------------------------------------------------------
+// Issue #141: data-portability private helpers
+// -------------------------------------------------------------------
+
+/// 衝突 ID 一覧を最大 4 件 + 省略で整形する。
+///
+/// 4 件以下: `ids.join(", ")`
+/// 5 件以上: `"id1, id2, id3, id4, ... (N more)"` 形式（terminal 溢れ防止）
+fn format_conflict_ids(ids: &[String]) -> String {
+    if ids.len() <= 4 {
+        ids.join(", ")
+    } else {
+        let head = ids[..4].join(", ");
+        format!("{head}, ... ({} more)", ids.len() - 4)
+    }
+}
+
+/// MSG-CLI-144: `ImportValidationFailed(RedactedPayload)` の専用 render helper。
+///
+/// `render_error` から dispatch される。リダクトペイロードを含むレコードの
+/// import 試行に対し、`--export-secrets` 付き再 export を案内する。
+fn render_import_validation_redacted(id: &str, locale: Locale) -> String {
+    let mut out = format!("error: cannot import record {id}: payload is redacted\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("error: レコード {id} を import できません: ペイロードがリダクトされています\n"));
+    }
+    out.push_str(
+        "hint: re-export the source vault with --export-secrets, then import the new file\n",
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "hint: ソース vault を --export-secrets 付きで再 export し、新しいファイルを import してください\n",
+        );
+    }
+    out
 }
 
 // -------------------------------------------------------------------
@@ -444,6 +530,122 @@ mod tests {
                 "MSG-CLI-110 must contain 'not running' for locale {locale:?}: {rendered:?}"
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #141: data-portability Presenter / ExitCode UT — TC-UT-205〜208
+    // 設計根拠: docs/features/data-portability/cli/test-design.md §5.3
+    // -------------------------------------------------------------------
+
+    /// TC-UT-205 (REQ-DP-010): data-portability 新バリアント 5 種が全て
+    /// `ExitCode::UserError`（exit 1）に写像される（SSoT 拡張の局所検証）。
+    ///
+    /// `tc_f_u15` の全体 SSoT 網羅マトリクスと直交し、本 TC は Issue #141 由来の
+    /// 5 バリアントだけに絞った焦点検証として機能する。
+    #[test]
+    fn tc_ut_205_data_portability_error_variants_all_map_to_exit_1() {
+        use crate::error::ExitCode;
+
+        let cases: Vec<(&str, CliError)> = vec![
+            ("ExportImportVaultLocked", CliError::ExportImportVaultLocked),
+            (
+                "ExportOutputFileExists",
+                CliError::ExportOutputFileExists {
+                    path: std::path::PathBuf::from("/tmp/out.json"),
+                },
+            ),
+            (
+                "ImportConflict(empty)",
+                CliError::ImportConflict { ids: vec![] },
+            ),
+            (
+                "ImportDeserializationFailed",
+                CliError::ImportDeserializationFailed {
+                    reason: "reason".to_owned(),
+                },
+            ),
+            (
+                "ImportValidationFailed(UnknownFormatVersion)",
+                CliError::ImportValidationFailed(
+                    shikomi_core::portability::ImportValidationError::UnknownFormatVersion {
+                        found: 999,
+                    },
+                ),
+            ),
+        ];
+        for (name, err) in cases {
+            assert_eq!(
+                ExitCode::from(&err),
+                ExitCode::UserError,
+                "TC-UT-205: {name} should map to ExitCode::UserError (exit 1)"
+            );
+        }
+    }
+
+    /// TC-UT-206 (REQ-DP-011 / AC-DP-10): `format_conflict_ids` — 4 件以下は
+    /// 全 ID をそのままカンマ区切りで返す（省略なし境界値）。
+    #[test]
+    fn tc_ut_206_format_conflict_ids_four_or_fewer_returns_all_ids() {
+        let ids: Vec<String> = vec![
+            "id-1".to_owned(),
+            "id-2".to_owned(),
+            "id-3".to_owned(),
+            "id-4".to_owned(),
+        ];
+        let result = format_conflict_ids(&ids);
+        assert_eq!(
+            result, "id-1, id-2, id-3, id-4",
+            "4 IDs must be joined without ellipsis"
+        );
+    }
+
+    /// TC-UT-207 (REQ-DP-011 / AC-DP-10): `format_conflict_ids` — 5 件以上は
+    /// 先頭 4 件 + `... (N more)` 形式で省略される（terminal 溢れ防止境界値）。
+    #[test]
+    fn tc_ut_207_format_conflict_ids_five_or_more_shows_ellipsis() {
+        let ids: Vec<String> = vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned(),
+            "d".to_owned(),
+            "e".to_owned(),
+            "f".to_owned(),
+        ];
+        let result = format_conflict_ids(&ids);
+        assert!(
+            result.contains("a, b, c, d"),
+            "must contain first 4 IDs 'a, b, c, d', got: {result:?}"
+        );
+        assert!(
+            result.contains("... (2 more)"),
+            "must contain '... (2 more)' for 6 total IDs, got: {result:?}"
+        );
+    }
+
+    /// TC-UT-208 (REQ-DP-010/011 / AC-DP-08): `render_error` —
+    /// `ImportValidationFailed(RedactedPayload)` → MSG-CLI-144 文面が出力される。
+    ///
+    /// `render_error` → `render_import_validation_redacted` dispatch の検証。
+    #[test]
+    fn tc_ut_208_render_error_import_validation_redacted_returns_msg_cli_144() {
+        let err = CliError::ImportValidationFailed(
+            shikomi_core::portability::ImportValidationError::RedactedPayload {
+                id: "test-id-xyz".to_owned(),
+            },
+        );
+        let out = render_error(&err, Locale::English);
+        assert!(
+            out.contains("cannot import record test-id-xyz"),
+            "must contain 'cannot import record test-id-xyz', got: {out:?}"
+        );
+        assert!(
+            out.contains("payload is redacted"),
+            "must contain 'payload is redacted', got: {out:?}"
+        );
+        assert!(
+            out.contains("re-export"),
+            "must contain 're-export' hint, got: {out:?}"
+        );
     }
 
     /// TC-UT-158b (Issue #134 / MSG-CLI-110): `render_daemon_not_running()` の出力に

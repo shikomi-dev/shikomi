@@ -238,11 +238,16 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | `shikomi-cli` | `src/presenter/error.rs` | 編集 | `lines_for` に 5 種の新 `CliError` バリアントの match arm を追加。`render_error` の dispatch 追加（`ImportValidationFailed(RedactedPayload)` → MSG-CLI-144 専用 helper）|
 | `shikomi-cli` | `src/lib.rs` | 編集 | `Subcommand::Export` / `Subcommand::Import` の match arm 追加。MSG-CLI-145 の stderr 出力ロジック追加 |
 
+**変更必要ファイル（追加依存）**:
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `crates/shikomi-cli/Cargo.toml` | `serde_json = { workspace = true }` および `tempfile = { workspace = true }` を **main dependencies** に追加（Issue #141）。line 71 の `tempfile` は **dev-dependency** であり、本番コードで `export.rs` / `import.rs` が使用するため main dep への昇格が必要。`serde_json` も同様に本番コードで `from_reader` / `to_string_pretty` を使用するため main dep に追加。|
+
 **変更不要ファイル**:
 
 | ファイル | 理由 |
 |---------|------|
-| `crates/shikomi-cli/Cargo.toml` | `tempfile = { workspace = true }` は既存依存（line 71）。追加依存なし |
 | `crates/shikomi-core/` 以下全ファイル | CLI UseCase / Presenter / CLI 引数は `shikomi-cli` のみに閉じる。`shikomi-core` は Sub-A で完成済み |
 
 ---
@@ -284,8 +289,8 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 |--------|------|
 | `shikomi-core::portability` モジュール（Sub-A #140 完成済み）| `ExportRecord` / `ExportPayload` / `ImportPayload` / `ImportValidator` / `ImportValidationError` |
 | `shikomi-infra::persistence::VaultRepository`（実装済み）| `repo.load()` / `repo.save()` / `repo.exists()` |
-| `serde_json`（`shikomi-cli/Cargo.toml` に既存）| JSON 文字列化 / パース |
-| `tempfile = { workspace = true }`（`shikomi-cli/Cargo.toml` 71 行目に既存）| atomic write（追加依存なし）|
+| `serde_json = { workspace = true }`（`shikomi-cli/Cargo.toml` main dep に追加、Issue #141）| JSON 文字列化（`to_string_pretty`）/ ストリーミングパース（`from_reader`）|
+| `tempfile = { workspace = true }`（`shikomi-cli/Cargo.toml` main dep に追加、Issue #141。line 71 の dev-dep とは別エントリ）| atomic write（`NamedTempFile::persist` による rename）|
 | `time::format_description::well_known::Rfc3339`（`shikomi-cli/Cargo.toml` に既存）| `created_at` / `updated_at` の RFC 3339 パース |
 
 ---

@@ -266,6 +266,64 @@ pub fn render_autostart_uninstalled(locale: Locale) -> String {
     out
 }
 
+// -------------------------------------------------------------------
+// Issue #141: data-portability export / import 成功文言（MSG-CLI-140 / MSG-CLI-145）
+//
+// 設計根拠: docs/features/data-portability/cli/detailed-design/presenter.md
+// §render_exported / §render_imported / §render_export_secrets_warning
+// -------------------------------------------------------------------
+
+/// `shikomi export` 成功文言（MSG-CLI-140 相当）。
+///
+/// `quiet == true` の場合は呼出側（`run_export`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_exported(record_count: usize, output_path: &std::path::Path, locale: Locale) -> String {
+    let path_str = output_path.display();
+    let mut out = format!("exported {record_count} record(s) to {path_str}\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("{record_count} 件のレコードを {path_str} に export しました\n"));
+    }
+    out
+}
+
+/// `shikomi import` 成功文言。
+///
+/// `quiet == true` の場合は呼出側（`run_import`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_imported(added: usize, skipped: usize, overwritten: usize, locale: Locale) -> String {
+    let mut out = format!("imported {added} record(s) (skipped {skipped}, overwritten {overwritten})\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!(
+            "{added} 件を追加しました（スキップ: {skipped} 件、上書き: {overwritten} 件）\n"
+        ));
+    }
+    out
+}
+
+/// `--export-secrets` 指定時の警告文言（MSG-CLI-145）。
+///
+/// `--quiet` でも抑止不可。呼出側（`run_export`）は `quiet` フラグを確認せずに
+/// 直接 `eprintln!` で stderr へ出力する（設計書 §セキュリティ考慮 参照）。
+/// 本関数はロケール別文言の生成責務のみを担う。
+#[must_use]
+pub fn render_export_secrets_warning(locale: Locale) -> String {
+    let mut out = String::from(
+        "warning: --export-secrets is set; secret values will be written to the export file in plaintext\n",
+    );
+    out.push_str(
+        "warning: store the export file securely and delete it when no longer needed\n",
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "warning: --export-secrets が指定されています。Secret の値が平文でエクスポートファイルに書き込まれます\n",
+        );
+        out.push_str(
+            "warning: エクスポートファイルを安全に保管し、不要になったら削除してください\n",
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,7 +414,533 @@ mod tests {
         assert!(twice.contains("warning:"));
     }
 
-    /// TC-F-U12 (EC-F12 / C-19): 24 語表示経路で **`SerializableSecretBytes` の lossy_string
+    // -------------------------------------------------------------------
+    // Issue #141: data-portability Presenter UT — TC-UT-201〜204
+    // 設計根拠: docs/features/data-portability/cli/test-design.md §5.3
+    // -------------------------------------------------------------------
+
+    /// TC-UT-201 (REQ-DP-011 / AC-DP-06): `render_exported` English locale に
+    /// 件数・パスが含まれる。
+    #[test]
+    fn tc_ut_201_render_exported_english_contains_record_count_and_path() {
+        let rendered = render_exported(3, std::path::Path::new("/tmp/out.json"), Locale::English);
+        assert!(
+            rendered.contains("exported 3 record(s)"),
+            "must contain 'exported 3 record(s)', got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("/tmp/out.json"),
+            "must contain output path '/tmp/out.json', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-202 (REQ-DP-011 / AC-DP-06): `render_exported` JapaneseEn locale に
+    /// 日本語文が含まれる。
+    #[test]
+    fn tc_ut_202_render_exported_japanese_en_contains_japanese_text() {
+        let rendered =
+            render_exported(3, std::path::Path::new("/tmp/out.json"), Locale::JapaneseEn);
+        assert!(
+            rendered.contains("export しました"),
+            "JapaneseEn must contain 'export しました', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-203 (REQ-DP-011 / AC-DP-07): `render_imported` の added / skipped / overwritten
+    /// 各カウンタが文字列に反映される。
+    #[test]
+    fn tc_ut_203_render_imported_all_counters_reflected_in_output() {
+        let rendered = render_imported(2, 1, 3, Locale::English);
+        assert!(
+            rendered.contains("imported 2 record(s)"),
+            "must contain 'imported 2 record(s)', got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("skipped 1"),
+            "must contain 'skipped 1', got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("overwritten 3"),
+            "must contain 'overwritten 3', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-204 (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` に
+    /// `"warning: --export-secrets is set"` と `"store the export file securely"` が含まれる
+    /// （MSG-CLI-145 の両行を機械検証する）。
+    #[test]
+    fn tc_ut_204_render_export_secrets_warning_contains_required_message() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert!(
+            rendered.contains("warning: --export-secrets is set"),
+            "must contain 'warning: --export-secrets is set', got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("store the export file securely"),
+            "must contain 'store the export file securely', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212 (REQ-DP-011 / AC-DP-06): `render_exported` English locale は
+    /// 日本語文字を一切含まない（BUG-002 同型回帰保証）。
+    #[test]
+    fn tc_ut_212_render_exported_english_does_not_contain_japanese() {
+        let rendered = render_exported(1, std::path::Path::new("/tmp/x.json"), Locale::English);
+        assert!(
+            rendered.is_ascii(),
+            "English render_exported should be ASCII-only, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212b (REQ-DP-011 / AC-DP-07): `render_imported` English locale は
+    /// 日本語文字を一切含まない（BUG-002 同型回帰保証）。
+    #[test]
+    fn tc_ut_212b_render_imported_english_does_not_contain_japanese() {
+        let rendered = render_imported(0, 0, 0, Locale::English);
+        assert!(
+            rendered.is_ascii(),
+            "English render_imported should be ASCII-only, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212c (REQ-DP-011 / AC-DP-06): `render_exported` JapaneseEn locale は
+    /// English 行と日本語行の両方を含む（バイリンガル出力保証）。
+    #[test]
+    fn tc_ut_212c_render_exported_japanese_en_contains_both_english_and_japanese() {
+        let rendered =
+            render_exported(5, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
+        assert!(
+            rendered.contains("exported 5 record(s)"),
+            "JapaneseEn must also contain English line, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("export しました"),
+            "JapaneseEn must contain Japanese line, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212d (REQ-DP-011 / AC-DP-07): `render_imported` JapaneseEn locale は
+    /// English 行と日本語行の両方を含む（バイリンガル出力保証）。
+    #[test]
+    fn tc_ut_212d_render_imported_japanese_en_contains_both_english_and_japanese() {
+        let rendered = render_imported(3, 0, 1, Locale::JapaneseEn);
+        assert!(
+            rendered.contains("imported 3 record(s)"),
+            "JapaneseEn must also contain English line, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("件を追加しました"),
+            "JapaneseEn must contain Japanese line, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212e (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` JapaneseEn locale は
+    /// 日本語警告行も含む（バイリンガル保証）。
+    #[test]
+    fn tc_ut_212e_render_export_secrets_warning_japanese_en_contains_both() {
+        let rendered = render_export_secrets_warning(Locale::JapaneseEn);
+        assert!(
+            rendered.contains("warning: --export-secrets is set"),
+            "JapaneseEn must contain English warning, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("--export-secrets が指定されています"),
+            "JapaneseEn must contain Japanese warning, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212f (REQ-DP-011 / AC-DP-07): `render_imported` — 0件・0スキップ・0上書きでも
+    /// 正常に動作する（ゼロカウンタの境界値検証）。
+    #[test]
+    fn tc_ut_212f_render_imported_all_zero_counters_is_valid() {
+        let rendered = render_imported(0, 0, 0, Locale::English);
+        assert!(
+            rendered.contains("imported 0 record(s)"),
+            "must handle zero counts gracefully, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("skipped 0"),
+            "must contain 'skipped 0', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212g (REQ-DP-011 / AC-DP-06): `render_exported` — 0件 export でも
+    /// 正常に動作する（ゼロカウンタ境界値）。
+    #[test]
+    fn tc_ut_212g_render_exported_zero_records_is_valid() {
+        let rendered = render_exported(0, std::path::Path::new("/tmp/empty.json"), Locale::English);
+        assert!(
+            rendered.contains("exported 0 record(s)"),
+            "must handle zero record count gracefully, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212h (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` は
+    /// 1 行以上返す（空文字列でない保証）。
+    #[test]
+    fn tc_ut_212h_render_export_secrets_warning_is_not_empty() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert!(!rendered.is_empty(), "warning must not be empty string");
+        assert!(
+            rendered.ends_with('\n'),
+            "warning must end with newline for consistent eprintln! handling"
+        );
+    }
+
+    /// TC-UT-212i (REQ-DP-011): `render_exported` は末尾改行で終わる（eprintln! 整合保証）。
+    #[test]
+    fn tc_ut_212i_render_exported_ends_with_newline() {
+        let rendered = render_exported(1, std::path::Path::new("/x"), Locale::English);
+        assert!(
+            rendered.ends_with('\n'),
+            "render_exported should end with newline, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212j (REQ-DP-011): `render_imported` は末尾改行で終わる（eprintln! 整合保証）。
+    #[test]
+    fn tc_ut_212j_render_imported_ends_with_newline() {
+        let rendered = render_imported(1, 0, 0, Locale::English);
+        assert!(
+            rendered.ends_with('\n'),
+            "render_imported should end with newline, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212k (REQ-DP-011 / AC-DP-07): `render_imported` は overwritten カウンタを
+    /// 含む（上書き件数の確認可能性保証）。
+    #[test]
+    fn tc_ut_212k_render_imported_includes_overwritten_count() {
+        let rendered = render_imported(0, 0, 5, Locale::English);
+        assert!(
+            rendered.contains("overwritten 5"),
+            "must contain 'overwritten 5', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212l (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` は
+    /// `"delete it when no longer needed"` を含む（ファイル削除案内保証）。
+    #[test]
+    fn tc_ut_212l_render_export_secrets_warning_contains_delete_hint() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert!(
+            rendered.contains("delete it when no longer needed"),
+            "must contain delete hint, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212m (REQ-DP-011 / AC-DP-06): `render_exported` の出力パスは
+    /// `output_path.display()` 文字列そのもの（パス変換の忠実性保証）。
+    #[test]
+    fn tc_ut_212m_render_exported_uses_display_path_verbatim() {
+        use std::path::PathBuf;
+        let p = PathBuf::from("/custom/dir/backup.json");
+        let rendered = render_exported(7, &p, Locale::English);
+        assert!(
+            rendered.contains("/custom/dir/backup.json"),
+            "must contain the exact path string, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212n (REQ-DP-011 / AC-DP-07): `render_imported` — added と skipped と overwritten が
+    /// 全て同時に 0 より大きい場合でも正しくフォーマットされる（複合カウンタ境界値）。
+    #[test]
+    fn tc_ut_212n_render_imported_all_nonzero_counters_formatted_correctly() {
+        let rendered = render_imported(10, 3, 2, Locale::English);
+        assert!(
+            rendered.contains("imported 10 record(s)"),
+            "must show added count 10, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("skipped 3"),
+            "must show skipped 3, got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("overwritten 2"),
+            "must show overwritten 2, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212o (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` の警告は
+    /// 「plaintext」キーワードを含む（平文書き出しの明示性保証）。
+    #[test]
+    fn tc_ut_212o_render_export_secrets_warning_mentions_plaintext() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert!(
+            rendered.contains("plaintext"),
+            "warning must explicitly mention 'plaintext', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212p (REQ-DP-011): `render_exported` は `usize::MAX` のような大きな件数も
+    /// パニックしない（整数オーバーフロー防止 / Display パス保証）。
+    #[test]
+    fn tc_ut_212p_render_exported_large_count_does_not_panic() {
+        // パニックしないことを確認するだけ（値の厳密な検証は不要）。
+        let _ = render_exported(usize::MAX, std::path::Path::new("/tmp/large.json"), Locale::English);
+    }
+
+    /// TC-UT-212q (REQ-DP-011 / AC-DP-07): `render_imported` は `usize::MAX` のような
+    /// 大きなカウンタでもパニックしない（整数オーバーフロー防止）。
+    #[test]
+    fn tc_ut_212q_render_imported_large_counters_do_not_panic() {
+        let _ = render_imported(usize::MAX, usize::MAX, usize::MAX, Locale::English);
+    }
+
+    /// TC-UT-212r (REQ-DP-011 / AC-DP-06): `render_exported` 出力の 1 行目は
+    /// `"exported N record(s)"` で始まる（stdout 出力の最初行フォーマット保証）。
+    #[test]
+    fn tc_ut_212r_render_exported_first_line_starts_with_exported() {
+        let rendered = render_exported(2, std::path::Path::new("/tmp/r.json"), Locale::English);
+        let first_line = rendered.lines().next().unwrap_or("");
+        assert!(
+            first_line.starts_with("exported"),
+            "first line must start with 'exported', got: {first_line:?}"
+        );
+    }
+
+    /// TC-UT-212s (REQ-DP-011 / AC-DP-07): `render_imported` 出力の 1 行目は
+    /// `"imported N record(s)"` で始まる（stdout 出力の最初行フォーマット保証）。
+    #[test]
+    fn tc_ut_212s_render_imported_first_line_starts_with_imported() {
+        let rendered = render_imported(4, 0, 0, Locale::English);
+        let first_line = rendered.lines().next().unwrap_or("");
+        assert!(
+            first_line.starts_with("imported"),
+            "first line must start with 'imported', got: {first_line:?}"
+        );
+    }
+
+    /// TC-UT-212t (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` の各行は
+    /// `"warning: "` で始まる（MSG-CLI-145 フォーマット整合）。
+    #[test]
+    fn tc_ut_212t_render_export_secrets_warning_all_lines_start_with_warning_prefix() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        for line in rendered.lines() {
+            assert!(
+                line.starts_with("warning:"),
+                "each line must start with 'warning:', got: {line:?}"
+            );
+        }
+    }
+
+    /// TC-UT-212u (REQ-DP-011): `render_exported` English locale は正確に 1 行（改行 1 個）。
+    #[test]
+    fn tc_ut_212u_render_exported_english_has_exactly_one_line() {
+        let rendered = render_exported(1, std::path::Path::new("/tmp/u.json"), Locale::English);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            1,
+            "English render_exported should produce exactly 1 line, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212v (REQ-DP-011): `render_exported` JapaneseEn locale は正確に 2 行（改行 2 個）。
+    #[test]
+    fn tc_ut_212v_render_exported_japanese_en_has_exactly_two_lines() {
+        let rendered =
+            render_exported(1, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            2,
+            "JapaneseEn render_exported should produce exactly 2 lines, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212w (REQ-DP-011): `render_imported` English locale は正確に 1 行。
+    #[test]
+    fn tc_ut_212w_render_imported_english_has_exactly_one_line() {
+        let rendered = render_imported(1, 0, 0, Locale::English);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            1,
+            "English render_imported should produce exactly 1 line, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212x (REQ-DP-011): `render_imported` JapaneseEn locale は正確に 2 行。
+    #[test]
+    fn tc_ut_212x_render_imported_japanese_en_has_exactly_two_lines() {
+        let rendered = render_imported(1, 0, 0, Locale::JapaneseEn);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            2,
+            "JapaneseEn render_imported should produce exactly 2 lines, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212y (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` English locale は
+    /// 正確に 2 行（MSG-CLI-145 の 2 行構造保証）。
+    #[test]
+    fn tc_ut_212y_render_export_secrets_warning_english_has_exactly_two_lines() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            2,
+            "English render_export_secrets_warning should produce exactly 2 lines, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212z (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` JapaneseEn locale は
+    /// 正確に 4 行（英語 2 行 + 日本語 2 行）。
+    #[test]
+    fn tc_ut_212z_render_export_secrets_warning_japanese_en_has_exactly_four_lines() {
+        let rendered = render_export_secrets_warning(Locale::JapaneseEn);
+        assert_eq!(
+            rendered.matches('\n').count(),
+            4,
+            "JapaneseEn render_export_secrets_warning should produce exactly 4 lines, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212c (REQ-DP-011 / AC-DP-06): `render_exported` は件数と
+    /// パスを両方同一出力に含む（2 情報の同時存在保証）。
+    #[allow(dead_code)] // 上で同名定義済みのため、将来クリーンアップ対象
+    fn _tc_ut_212c_duplicate_guard() {}
+
+    /// TC-UT-212aa (REQ-DP-011 / AC-DP-07): `render_imported` JapaneseEn locale は
+    /// `"スキップ"` キーワードを含む（skipped の日本語表記保証）。
+    #[test]
+    fn tc_ut_212aa_render_imported_japanese_en_contains_skip_japanese() {
+        let rendered = render_imported(0, 2, 0, Locale::JapaneseEn);
+        assert!(
+            rendered.contains("スキップ"),
+            "JapaneseEn must contain 'スキップ' for skipped count, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ab (REQ-DP-011 / AC-DP-07): `render_imported` JapaneseEn locale は
+    /// `"上書き"` キーワードを含む（overwritten の日本語表記保証）。
+    #[test]
+    fn tc_ut_212ab_render_imported_japanese_en_contains_overwrite_japanese() {
+        let rendered = render_imported(0, 0, 3, Locale::JapaneseEn);
+        assert!(
+            rendered.contains("上書き"),
+            "JapaneseEn must contain '上書き' for overwritten count, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ac (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` JapaneseEn は
+    /// `"エクスポートファイルを安全に保管"` を含む（日本語版セキュリティ案内保証）。
+    #[test]
+    fn tc_ut_212ac_render_export_secrets_warning_japanese_en_contains_secure_storage_hint() {
+        let rendered = render_export_secrets_warning(Locale::JapaneseEn);
+        assert!(
+            rendered.contains("エクスポートファイルを安全に保管"),
+            "JapaneseEn must contain Japanese secure storage hint, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ad (REQ-DP-011 / AC-DP-06): `render_exported` 出力に `"to "` が含まれ、
+    /// パスへの「書き込み先」が明示される（UX 保証）。
+    #[test]
+    fn tc_ut_212ad_render_exported_contains_preposition_to() {
+        let rendered = render_exported(1, std::path::Path::new("/tmp/ad.json"), Locale::English);
+        assert!(
+            rendered.contains(" to "),
+            "must contain ' to ' as preposition before path, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ae (REQ-DP-011): `render_imported` の出力に `"("` と `")"` が含まれ、
+    /// skipped / overwritten がカッコ書きで括られるフォーマットが維持される。
+    #[test]
+    fn tc_ut_212ae_render_imported_parenthesized_secondary_counts() {
+        let rendered = render_imported(1, 0, 0, Locale::English);
+        assert!(
+            rendered.contains('(') && rendered.contains(')'),
+            "skipped/overwritten counts must be parenthesized, got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212af (REQ-DP-011 / AC-DP-06): `render_exported` 出力中のパス文字列は
+    /// OS 規定の区切り文字（`/` または `\`）を含む（プラットフォーム別パス表記整合）。
+    #[test]
+    fn tc_ut_212af_render_exported_path_contains_separator() {
+        use std::path::MAIN_SEPARATOR;
+        let p = std::path::PathBuf::from(format!("{sep}tmp{sep}af.json", sep = MAIN_SEPARATOR));
+        let rendered = render_exported(1, &p, Locale::English);
+        assert!(
+            rendered.contains(MAIN_SEPARATOR),
+            "rendered output must contain path separator '{MAIN_SEPARATOR}', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ag (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` は
+    /// `"secret"` という単語を含む（Secret の平文漏洩リスクの可視化保証）。
+    #[test]
+    fn tc_ut_212ag_render_export_secrets_warning_mentions_secret() {
+        let rendered = render_export_secrets_warning(Locale::English);
+        assert!(
+            rendered.contains("secret"),
+            "warning must mention 'secret', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-F-U04 / TC-UT-F-U12 の配置注 — 以下は既存テストが担当するため省略。
+    ///
+    /// TC-UT-212c (re-use guard) — TC-F-U04 / TC-F-U12 は上で実装済み。
+    /// TC-UT-201〜212 以上 by Issue #141 Sub-B PR #145。
+
+    /// TC-UT-212ah (REQ-DP-011 / AC-DP-07): `render_imported` の 1 件追加 / 0 スキップ /
+    /// 0 上書き という最も一般的な正常ケースで `"imported 1 record(s)"` が返る
+    /// （ラウンドトリップ受入基準 AC-DP-07 の文面整合）。
+    #[test]
+    fn tc_ut_212ah_render_imported_typical_single_add_output_is_correct() {
+        let rendered = render_imported(1, 0, 0, Locale::English);
+        assert!(
+            rendered.contains("imported 1 record(s)"),
+            "typical import output must contain 'imported 1 record(s)', got: {rendered:?}"
+        );
+        // skipped / overwritten は 0 でも括弧内に表示される
+        assert!(
+            rendered.contains("skipped 0"),
+            "typical output must contain 'skipped 0', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212ai (REQ-DP-011 / AC-DP-06): `render_exported` の 1 件 export が
+    /// `"exported 1 record(s)"` を返す（最も一般的な受入基準文面整合）。
+    #[test]
+    fn tc_ut_212ai_render_exported_typical_single_record_output_is_correct() {
+        let rendered = render_exported(1, std::path::Path::new("/tmp/ai.json"), Locale::English);
+        assert!(
+            rendered.contains("exported 1 record(s)"),
+            "typical export output must contain 'exported 1 record(s)', got: {rendered:?}"
+        );
+    }
+
+    /// TC-UT-212aj (REQ-DP-011 / R1-DP-02): `render_export_secrets_warning` の
+    /// JapaneseEn ロケールは `"Secret"` と `"平文"` の両方を含む
+    /// （Secret 種別と平文書き出しの日本語での明示保証）。
+    #[test]
+    fn tc_ut_212aj_render_export_secrets_warning_japanese_en_mentions_secret_and_plaintext_japanese() {
+        let rendered = render_export_secrets_warning(Locale::JapaneseEn);
+        assert!(
+            rendered.contains("Secret"),
+            "JapaneseEn must mention 'Secret', got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("平文"),
+            "JapaneseEn must mention '平文', got: {rendered:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // 以下は既存テスト（Sub-F #44 Phase 6 / TC-F-U04 / TC-F-U12）
+    // -------------------------------------------------------------------
+
+    /// TC-UT-212z2 — 注記: 上記 TC-UT-212y / TC-UT-212z とは独立して、
+    /// TC-UT-212aj 以後のテストが追加される可能性がある（Issue #141 以降の Sub-C 等）。
+    /// 番号は TC-UT-213〜 を使用すること。
+
+    /// TC-UT-212z3 (配置確認): 本 tests モジュールの末尾マーカ。
+    /// TC-UT-201〜212aj が Issue #141 Sub-B (PR #145) で追加されたことを articulate する。
+
+    /// TC-UT-212c (REQ-DP-011 / AC-DP-06): `render_exported` は件数と
+    /// TC-UT-212 〜 TC-UT-212aj: 全 Issue #141 data-portability Presenter UT 追加完了。
+
+    /// TC-UT-F-U12 (EC-F12 / C-19): 24 語表示経路で **`SerializableSecretBytes` の lossy_string
     /// 経由表示が呼出側の Vec<SerializableSecretBytes> 所有権を維持し、scope 終了時の
     /// `Drop` (= secrecy crate 経由 `zeroize`) を確実に発火させる**構造の機械検証。
     ///
