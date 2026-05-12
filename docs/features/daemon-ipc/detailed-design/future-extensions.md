@@ -31,7 +31,7 @@ CLI の外部 I/F は `cli-vault-commands` の `future-extensions.md` で既に�
 |-------|---------|------|------|
 | Phase 1 | daemon プロセス骨格 / IPC プロトコル定義 / `--ipc list` 透過 / `IpcVaultRepository::list_summaries` | Issue #26 / PR #29 | ✅ 完了 |
 | Phase 1.5 | `--ipc add` / `--ipc edit` / `--ipc remove` 透過 / `IpcVaultRepository::{add_record, edit_record, remove_record}` 専用メソッド追加 / runtime reject 経路撤去 / `IpcVaultRepository` の `VaultRepository` trait 非実装方針確定 | **Issue #30（本 PR）** | 🚧 設計中 |
-| Phase 2 | `--ipc` 既定化（または `--no-ipc` 反転） / daemon 自動起動 | 後続 Issue（未起票） | 後続 |
+| Phase 2 | `--ipc` 既定化（`--no-ipc` 反転） / daemon 自動起動 | Issue #125（親）/ Sub-A Issue #126（CLI 既定化）/ Sub-B Issue #127（OS 自動起動）| 🚧 設計中（Sub-A） |
 
 **Phase 1.5 で消化される旧設計の負債**:
 - 案 C（シャドウ差分）の廃止 → 案 D（trait 非実装 + 専用メソッド + `RepositoryHandle` enum）の採用
@@ -49,7 +49,7 @@ CLI の外部 I/F は `cli-vault-commands` の `future-extensions.md` で既に�
 | **暗号化 vault 操作**（`daemon-vault-encryption`、未起票） | `IpcRequest` に `Unlock { master_password: SerializableSecretBytes }` / `Lock` / `ChangeMasterPassword { old, new }` / `Rekey` 等を追加 | `IpcRequest` バリアント 4+ + daemon 内 `VaultUnlocker` ステート管理（`secrecy::SecretBox<[u8; 32]>` で VEK キャッシュ）+ アイドルタイムアウト + スクリーンロック連動。`IpcResponse::Error(EncryptionUnsupported)` の写像対象が**実機能に変わる** | 後続 |
 | **セッショントークン認証**（`daemon-session-token`、未起票） | `IpcProtocolVersion::V2` 追加 + `IpcRequest::Handshake { client_version, session_token: SerializableSecretBytes }` への非破壊拡張。`#[non_exhaustive] enum` の効能 | プロトコル `V1` ↔ `V2` の互換性検証必須。daemon 起動時に 32 byte CSPRNG 生成 → `0700` ファイルに保存 → CLI 側 `IpcVaultRepository::connect` で読み込んで送信 | 後続 |
 | **GUI クライアント**（`shikomi-gui`、未起票） | `IpcVaultRepository` を `shikomi-gui` から再利用、または別 crate（`shikomi-ipc-client` 仮）へ切出 | `shikomi-cli::io::ipc_vault_repository` が `pub` で公開済みのため、`shikomi-gui` の `Cargo.toml` で `shikomi-cli = { workspace = true }` 経由で利用可能（ただし bin crate 依存の clean さに留意、別 crate 切出が長期的に妥当） | 後続 |
-| **`--ipc` 既定化（Phase 2 全面切替）** | `shikomi-cli` の clap で `args.ipc` のデフォルトを `true` に変更、または `--no-ipc` フラグ反転 | OS 自動起動（`process-model.md` §4.1 ルール 3）/ ホットキー / 暗号化が揃った時点で実施。本 feature の Phase 1 経路（`SqliteVaultRepository` 直結）はバックアップとして残す | 後続 |
+| **`--ipc` 既定化（Phase 2 全面切替）** | `shikomi-cli` の clap で `args.ipc` のデフォルトを `true` に変更、または `--no-ipc` フラグ反転 | OS 自動起動（`process-model.md` §4.1 ルール 3）/ ホットキー / 暗号化が揃った時点で実施。本 feature の Phase 1 経路（`SqliteVaultRepository` 直結）はバックアップとして残す | **Issue #126（Sub-A）で実装中**。設計書: `docs/features/daemon-default-mode/cli/` |
 | **daemon 内 vault 自動初期化**（`add` 初回時に空 vault 作成、後続） | 現状 daemon は既存 vault のみ扱う。CLI の `--ipc add` が daemon 側で `IpcResponse::Error(Persistence)` を返す挙動を改善 | `IpcRequest::CreateVault { protection_mode }` バリアント追加 or daemon 起動時 `--init` フラグでオプトイン | 後続 |
 | **List フィルタリング** | `IpcRequest::ListRecords` に `Option<ListFilter>` フィールドを追加（`#[serde(default)]` で `Option` の場合は非破壊変更扱い、`./basic-design/ipc-protocol.md §バージョニングルール` の例外運用） | フィールド追加が `Option<T>` + `serde(default)` なら旧クライアントが受信 `None` で動作可能。本 feature の保守的扱いでは `V2` バリアントとして安全側で実装 | 後続 |
 | **ログ レベル動的変更** | `IpcRequest::SetLogLevel { level }` バリアント追加 + `tracing_subscriber::reload` で hot reload | reload handle を IpcServer 構築時に注入 | 後続 |
