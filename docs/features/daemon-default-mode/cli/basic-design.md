@@ -106,11 +106,7 @@
 
 ## セキュリティ考慮（Sub-A スコープ）
 
-| 項目 | 内容 |
-|------|------|
-| `--no-ipc` による vault.db 直接アクセス | Phase 1 と同等の権限モデル（`verify_dir` / `VaultLock`）を継承。新たなリスクなし |
-| `MSG-CLI-051` 廃止による情報漏洩リスク | なし（警告削除のみ）|
-| `MSG-CLI-110` 文面変更 | socket パス `{path}` は引き続き非シークレット扱い（Phase 1 と同じ）|
+→ `cli/security.md` 参照。本 sub-feature のセキュリティ設計（脅威モデル / OWASP Top 10 / CI 監査ゲート）はすべて `cli/security.md` に一元化している。`basic-design.md` にインライン記述すると `security.md` との二重管理・矛盾が生じるため、ここには記述しない。
 
 ## テスト戦略（テスト設計 Issue で詳細化）
 

@@ -14,7 +14,7 @@
 | ファイル | 変更種別 | 変更内容 |
 |---------|---------|---------|
 | `crates/shikomi-cli/src/cli.rs` | 編集 | `CliArgs::ipc: bool` 削除 → `CliArgs::no_ipc: bool` 追加 |
-| `crates/shikomi-cli/src/lib.rs` | 編集 | `build_handle` の分岐反転 / `MSG-CLI-051` 出力コード削除 |
+| `crates/shikomi-cli/src/lib.rs` | 編集 | `build_handle` の分岐反転 / `MSG-CLI-051` 出力コード削除 / `--no-ipc` 時の `tracing::warn!` 追加 / vault dispatch ブロックへの MSG-CLI-052 出力追加 |
 | `crates/shikomi-cli/src/presenter/warning.rs` | 編集 | `render_ipc_opt_in_notice` 関数削除（`MSG-CLI-051` 廃止）|
 | `crates/shikomi-cli/src/presenter/error.rs` | 編集 | `MSG-CLI-110` hint 文面更新（`--ipc` 言及削除）|
 | `CHANGELOG.md` | 編集 | Phase 2 移行ガイド追記（`--ipc` → `--no-ipc` 変更の破壊的変更告知）|
@@ -86,6 +86,7 @@ fn build_handle(args: &CliArgs, locale: Locale, quiet: bool) -> Result<Repositor
 ```
 fn build_handle(args: &CliArgs, _locale: Locale, _quiet: bool) -> Result<RepositoryHandle, CliError> {
     if args.no_ipc {
+        tracing::warn!(target: "shikomi_cli::composition_root", "--no-ipc: direct SQLite access");
         let path = match args.vault_dir.as_deref() { ... };
         let repo = SqliteVaultRepository::from_directory(&path)?;
         Ok(RepositoryHandle::Sqlite(repo))
@@ -101,9 +102,12 @@ fn build_handle(args: &CliArgs, _locale: Locale, _quiet: bool) -> Result<Reposit
 1. `args.ipc` 参照を `args.no_ipc` 参照に変更（true/false の意味が反転）
 2. IPC 経路が `else`（既定）、Sqlite 経路が `if args.no_ipc`（明示時のみ）に入れ替え
 3. `MSG-CLI-051` 出力コード（`render_ipc_opt_in_notice` 呼出 + `eprint_stderr` 呼出）を削除
-4. `locale` / `quiet` 引数が未使用になる場合は `_` プレフィックスを付ける（後述の `presenter/error.rs` で locale を使い続ける可能性があるため、実装者が判断する）
+4. **`--no-ipc` 採用直後に `tracing::warn!(target: "shikomi_cli::composition_root", "--no-ipc: direct SQLite access")` を追加**（服部平次指摘：A09 監査証跡 / `security.md §脅威モデル「緊急復旧時の監査証跡欠落」`）
+5. `locale` / `quiet` 引数が未使用になる場合は `_` プレフィックスを付ける（後述の `presenter/error.rs` で locale を使い続ける可能性があるため、実装者が判断する）
 
 **設計判断**:
+- `tracing::warn!` は `quiet` フラグの影響を受けない（`quiet` は stdout 成功出力の抑止のみ。tracing ログは独立した監査チャネル）。`--no-ipc` 使用の事実は `--quiet` で隠蔽しない
+- `tracing::warn!` の target は `"shikomi_cli::composition_root"`（`cli-vault-commands` の target 規約に準拠）
 - `MSG-CLI-051` の削除は 1 行（`if !quiet { ... }`）の丸ごと削除。関連する `quiet` 引数自体は `emit_error_and_exit` 等で引き続き使われるため `build_handle` シグネチャから削除しない
 - `connect_vault_ipc`（vault サブコマンド用 IPC 構築）は変更しない（vault 経路は `--no-ipc` に影響されない）
 
@@ -305,7 +309,7 @@ grep -n "no_ipc" crates/shikomi-cli/src/lib.rs
 | `shikomi list` のパース（引数なし）| `args.no_ipc == false` |
 | `shikomi --ipc list` のパース | clap error（認識不能フラグ）|
 | `build_handle(no_ipc = false)` | `RepositoryHandle::Ipc(_)` を返す（daemon mock 使用）|
-| `build_handle(no_ipc = true)` | `RepositoryHandle::Sqlite(_)` を返す |
+| `build_handle(no_ipc = true)` | `RepositoryHandle::Sqlite(_)` を返す + `tracing::warn!` が `target: "shikomi_cli::composition_root"` で 1 件発火すること（`tracing-test` crate で検証）|
 | IPC 接続失敗時 | `CliError::DaemonNotRunning` → exit 1 |
 
 ### E2E 観点（AC-DDM-01 〜 06 に対応）
