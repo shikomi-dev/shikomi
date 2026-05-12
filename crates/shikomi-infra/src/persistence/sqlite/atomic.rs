@@ -769,6 +769,236 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // Phase 8 (Issue #73) — AtomicWriteSession / RetryPolicy 追加テスト群
+    // -------------------------------------------------------------------
+
+    /// TC-U-Drop — `finalize` を呼ばずに drop された場合、`Drop` impl が
+    /// `AtomicWriter::cleanup_new` を best-effort 呼出して `.new` を削除する。
+    ///
+    /// `new_path` が `Some` のまま drop される経路（panic / early-return 等）で
+    /// `.new` の残存を防ぐ Drop safety 設計を確認する。
+    /// 対応設計書: `./classes.md` §3.1 Drop safety
+    #[test]
+    fn tc_u_drop_without_finalize_removes_new_file() {
+        let dir = TempDir::new().unwrap();
+        let paths = VaultPaths::new_unchecked(dir.path().to_path_buf());
+        crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
+
+        let vault = plaintext_vault("drop-guard", "test-value");
+        let session = AtomicWriteSession::new(&paths, &vault).unwrap();
+
+        assert!(
+            paths.vault_db_new().exists(),
+            "AtomicWriteSession::new 後に .new ファイルが存在しない"
+        );
+
+        // finalize を呼ばずに drop → Drop impl が cleanup_new を呼ぶ
+        drop(session);
+
+        assert!(
+            !paths.vault_db_new().exists(),
+            "drop 後も .new が残存している — Drop guard が AtomicWriter::cleanup_new を呼んでいない"
+        );
+    }
+
+    /// TC-U-NoSleep-1 — `NoSleepRetryPolicy::sleep_duration` は常に `Duration::ZERO` を返す。
+    ///
+    /// CI 高速化のための sleep-free 設計が正しく実装されていることを確認。
+    /// 対応設計書: `./classes.md` §3.4 `NoSleepRetryPolicy`
+    #[test]
+    fn tc_u_no_sleep_retry_policy_sleep_is_zero() {
+        use std::time::Duration;
+        let policy = NoSleepRetryPolicy { max_attempts: 5 };
+        for attempt in 1..=5u32 {
+            assert_eq!(
+                policy.sleep_duration(attempt),
+                Duration::ZERO,
+                "attempt {attempt}: sleep_duration が Duration::ZERO でない"
+            );
+        }
+    }
+
+    /// TC-U-NoSleep-2 — `NoSleepRetryPolicy::max_attempts` は構築時に指定した値を返す。
+    ///
+    /// 対応設計書: `./classes.md` §3.4 `NoSleepRetryPolicy`
+    #[test]
+    fn tc_u_no_sleep_retry_policy_max_attempts() {
+        let policy3 = NoSleepRetryPolicy { max_attempts: 3 };
+        assert_eq!(policy3.max_attempts(), 3);
+        let policy5 = NoSleepRetryPolicy { max_attempts: 5 };
+        assert_eq!(policy5.max_attempts(), 5);
+    }
+
+    /// TC-U-NoSleep-3 (non-Windows) — 非 Windows では `should_retry` は常に `false`。
+    ///
+    /// Unix は rename が即 fail fast（retry なし）のため、エラーコードに関係なく
+    /// retry しないことを確認する。
+    /// 対応設計書: `./classes.md` §3.4 `NoSleepRetryPolicy`
+    #[cfg(not(windows))]
+    #[test]
+    fn tc_u_no_sleep_retry_policy_should_not_retry_non_windows() {
+        let policy = NoSleepRetryPolicy { max_attempts: 5 };
+        // Unix では Windows エラーコード相当でも retry しない
+        assert!(!policy.should_retry(5)); // ERROR_ACCESS_DENIED 相当
+        assert!(!policy.should_retry(32)); // ERROR_SHARING_VIOLATION 相当
+        assert!(!policy.should_retry(33)); // ERROR_LOCK_VIOLATION 相当
+        assert!(!policy.should_retry(0));
+        assert!(!policy.should_retry(2));
+    }
+
+    /// TC-U-NoSleep-3 (Windows) — Windows では `should_retry(5/32/33)` は `true`、
+    /// それ以外は `false`。
+    ///
+    /// `ERROR_ACCESS_DENIED (5)` / `ERROR_SHARING_VIOLATION (32)` /
+    /// `ERROR_LOCK_VIOLATION (33)` が retry 対象として正しく判定されることを確認する。
+    /// 対応設計書: `./classes.md` §3.4 `NoSleepRetryPolicy`
+    #[cfg(windows)]
+    #[test]
+    fn tc_u_no_sleep_retry_policy_should_retry_windows() {
+        let policy = NoSleepRetryPolicy { max_attempts: 5 };
+        // retry 対象（一過性 file lock エラー）
+        assert!(policy.should_retry(5)); // ERROR_ACCESS_DENIED
+        assert!(policy.should_retry(32)); // ERROR_SHARING_VIOLATION
+        assert!(policy.should_retry(33)); // ERROR_LOCK_VIOLATION
+                                          // retry 非対象
+        assert!(!policy.should_retry(0));
+        assert!(!policy.should_retry(2)); // ERROR_FILE_NOT_FOUND
+        assert!(!policy.should_retry(6)); // ERROR_INVALID_HANDLE
+    }
+
+    /// TC-U-FinalizeFail (Unix) — `finalize` が FsyncTemp ステップで失敗した場合に
+    /// `.new` ファイルが best-effort 削除される。
+    ///
+    /// `finalize` は冒頭で `new_path.take()` により Drop への cleanup 委譲を切り离し、
+    /// 各失敗ステップで `AtomicWriter::cleanup_new` を明示呼出する設計を確認する。
+    ///
+    /// 注入方法: `.new` を chmod 0o400（書き込み不可）にして
+    /// `FsyncTemp` の `.write(true).open()` を `PermissionDenied` で失敗させる。
+    /// 親ディレクトリは 0o700 のまま維持するため `cleanup_new` の `remove_file` は成功する。
+    ///
+    /// 対応設計書: `./classes.md` §3.2 finalize § cleanup_new 明示呼出
+    #[cfg(unix)]
+    #[test]
+    fn tc_u_finalize_failure_cleans_new_on_fsync_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let paths = VaultPaths::new_unchecked(dir.path().to_path_buf());
+        crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
+
+        let vault = plaintext_vault("finalize-fail", "test-value");
+        let session = AtomicWriteSession::new(&paths, &vault).unwrap();
+        assert!(paths.vault_db_new().exists(), ".new が作成されていない");
+
+        // .new を書き込み不可（0o400）に変更 → FsyncTemp が open(.write(true)) で失敗。
+        // 親ディレクトリは 0o700 のまま → cleanup_new の remove_file は成功する。
+        std::fs::set_permissions(paths.vault_db_new(), std::fs::Permissions::from_mode(0o400))
+            .unwrap();
+
+        let result = session.finalize(&ExponentialBackoffRetryPolicy);
+
+        // FsyncTemp で AtomicWriteFailed が返ること
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::AtomicWriteFailed {
+                    stage: AtomicWriteStage::FsyncTemp,
+                    ..
+                })
+            ),
+            "AtomicWriteFailed {{ stage: FsyncTemp }} を期待したが: {:?}",
+            result.err()
+        );
+
+        // finalize 失敗後でも .new が cleanup されている
+        assert!(
+            !paths.vault_db_new().exists(),
+            ".new が残存している — finalize 失敗時の明示的 cleanup_new が機能していない"
+        );
+    }
+
+    /// TC-U-WinNoSleep (Windows) — `NoSleepRetryPolicy` を使うと retry が即座に全敗し、
+    /// `AtomicWriteFailed { stage: Rename }` が返り `.new` が cleanup される。
+    ///
+    /// `NoSleepRetryPolicy` が sleep 0ms のため、`vault.db` を長時間 `FILE_SHARE_NONE`
+    /// で保持している間に finalize を呼ぶと 5 回の retry が一瞬で全て失敗する。これにより:
+    ///
+    /// 1. retry ループが実際に発火することを確認
+    /// 2. 全敗時に `.new` が cleanup されることを確認
+    ///
+    /// 対応設計書: `./classes.md` §3.4 `NoSleepRetryPolicy` / `./classes.md` §3.2 finalize
+    /// AC-19 (Issue #65 retry 補強) 対応。
+    #[cfg(windows)]
+    #[test]
+    fn tc_u_windows_no_sleep_retry_exhausts_on_held_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let dir = TempDir::new().unwrap();
+        let paths = VaultPaths::new_unchecked(dir.path().to_path_buf());
+        crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
+
+        // 初期 vault.db を作成
+        let vault1 = plaintext_vault("v1", "initial");
+        let session1 = AtomicWriteSession::new(&paths, &vault1).unwrap();
+        session1
+            .finalize(&ExponentialBackoffRetryPolicy)
+            .expect("初期 vault 作成失敗");
+
+        // 更新用 session を新規作成
+        let vault2 = plaintext_vault("v2", "updated");
+        let session2 = AtomicWriteSession::new(&paths, &vault2).unwrap();
+        assert!(
+            paths.vault_db_new().exists(),
+            "session2 作成後 .new が存在しない"
+        );
+
+        // 補助スレッドが vault.db を FILE_SHARE_NONE で保持する。
+        // NoSleepRetryPolicy は sleep 0ms のため 5 回の即時 retry が完了するより長く保持する。
+        const FILE_SHARE_NONE: u32 = 0;
+        const HOLD_MS: u64 = 500; // 5 回即時 retry (~数十μs) より十分長い
+        let vault_db = paths.vault_db().to_path_buf();
+        let (ready_tx, ready_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_NONE)
+                .open(&vault_db)
+                .expect("vault.db の排他オープン失敗");
+            ready_tx.send(()).unwrap();
+            thread::sleep(Duration::from_millis(HOLD_MS));
+            drop(f);
+        });
+        ready_rx.recv().unwrap();
+
+        // NoSleepRetryPolicy で finalize → 5 回即時 retry が全て失敗
+        let policy = NoSleepRetryPolicy { max_attempts: 5 };
+        let result = session2.finalize(&policy);
+        handle.join().unwrap();
+
+        // AtomicWriteFailed { stage: Rename } が返る（retry 全敗 + fail fast）
+        assert!(
+            matches!(
+                result,
+                Err(PersistenceError::AtomicWriteFailed {
+                    stage: AtomicWriteStage::Rename,
+                    ..
+                })
+            ),
+            "AtomicWriteFailed {{ stage: Rename }} を期待したが: {:?}",
+            result.err()
+        );
+
+        // .new が cleanup されている（finalize 全敗時の明示的 cleanup_new）
+        assert!(
+            !paths.vault_db_new().exists(),
+            ".new が残存している — retry 全敗時の cleanup_new が機能していない"
+        );
+    }
+
+    // -------------------------------------------------------------------
     // TC-I29-D (unit) — Win retry 中 TOCTOU 再検証ユニットテスト群
     // -------------------------------------------------------------------
     //
