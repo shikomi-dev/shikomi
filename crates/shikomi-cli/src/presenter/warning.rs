@@ -1,4 +1,4 @@
-//! 警告メッセージ（stderr）。MSG-CLI-050 / MSG-CLI-051。
+//! 警告・通知メッセージ（stderr）。MSG-CLI-050 / MSG-CLI-052。
 
 use super::Locale;
 
@@ -16,24 +16,17 @@ pub fn render_shell_history_warning(locale: Locale) -> String {
     out
 }
 
-/// `--ipc` opt-in 起動時に MSG-CLI-051 を返す。
+/// `--no-ipc vault *` 実行時に vault サブコマンドが IPC 強制されることを通知する（MSG-CLI-052）。
 ///
-/// `--ipc` は preview 機能で、Phase 1.5 で list/add/edit/remove の 4 操作を支える。
-/// 文面は **「daemon 経由経路（preview）であること」+「既定経路は引き続き
-/// SQLite 直結であること」** を必ず併記する（ユーザに「`--ipc` を外せば安定
-/// 経路に戻れる」逃げ道を提示する UX 規約）。`--quiet` 指定時を除き必ず stderr
-/// に出す。
+/// `--no-ipc` フラグを指定しても vault サブコマンドは IPC 経路で動作することをユーザに通知する。
+/// `run_vault` 呼び出し前に出力し、daemon 未起動の場合でも note が表示されるようにする。
 ///
-/// 設計根拠: docs/features/daemon-ipc/requirements.md §MSG-CLI-051
+/// 設計根拠: docs/features/daemon-default-mode/cli/detailed-design.md §MSG-CLI-052
 #[must_use]
-pub fn render_ipc_opt_in_notice(locale: Locale) -> String {
-    let mut out = String::from(
-        "warning: --ipc routes operations through shikomi-daemon (preview); default path remains direct SQLite\n",
-    );
+pub fn render_vault_ipc_forced_note(locale: Locale) -> String {
+    let mut out = String::from("note: vault commands always use IPC; --no-ipc does not apply\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(
-            "警告: --ipc は shikomi-daemon 経由経路（プレビュー）。既定経路は引き続き SQLite 直結です\n",
-        );
+        out.push_str("注: vault サブコマンドは常に IPC 経由です。--no-ipc は適用されません\n");
     }
     out
 }
@@ -57,29 +50,31 @@ mod tests {
     }
 
     #[test]
-    fn test_render_ipc_opt_in_notice_english_matches_spec_wording() {
-        // 設計書 docs/features/daemon-ipc/requirements.md §MSG-CLI-051 と
+    fn test_render_vault_ipc_forced_note_english_matches_spec_wording() {
+        // 設計書 docs/features/daemon-default-mode/cli/detailed-design.md §MSG-CLI-052 と
         // 完全一致する英文行を保持する契約。
-        let rendered = render_ipc_opt_in_notice(Locale::English);
-        assert!(rendered.contains(
-            "warning: --ipc routes operations through shikomi-daemon (preview); default path remains direct SQLite"
-        ));
-        // 「逃げ道（default path remains direct SQLite）」の文言が落ちていない
-        // ことの個別保証——preview 警告の核 UX 規約
-        assert!(rendered.contains("default path remains direct SQLite"));
+        let rendered = render_vault_ipc_forced_note(Locale::English);
+        assert!(
+            rendered.contains("note: vault commands always use IPC; --no-ipc does not apply"),
+            "MSG-CLI-052 英文が仕様と一致すること: {rendered:?}"
+        );
         // 英ロケールでは日本語行を出さない
-        assert!(!rendered.contains("警告"));
+        assert!(!rendered.contains("注:"));
     }
 
     #[test]
-    fn test_render_ipc_opt_in_notice_japanese_en_contains_both_spec_wordings() {
-        let rendered = render_ipc_opt_in_notice(Locale::JapaneseEn);
+    fn test_render_vault_ipc_forced_note_japanese_en_contains_both_lines() {
+        let rendered = render_vault_ipc_forced_note(Locale::JapaneseEn);
         // 英文行（先頭に出る）
-        assert!(rendered.contains("default path remains direct SQLite"));
-        // 日本語行（既定経路の逃げ道明示）
-        assert!(rendered.contains(
-            "警告: --ipc は shikomi-daemon 経由経路（プレビュー）。既定経路は引き続き SQLite 直結です"
-        ));
-        assert!(rendered.contains("既定経路は引き続き SQLite 直結"));
+        assert!(
+            rendered.contains("note: vault commands always use IPC; --no-ipc does not apply"),
+            "英文行が含まれること: {rendered:?}"
+        );
+        // 日本語行
+        assert!(
+            rendered
+                .contains("注: vault サブコマンドは常に IPC 経由です。--no-ipc は適用されません"),
+            "日本語行が含まれること: {rendered:?}"
+        );
     }
 }

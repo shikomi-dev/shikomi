@@ -17,6 +17,7 @@ fn shikomi(dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("shikomi").expect("cargo_bin");
     cmd.env_remove("SHIKOMI_VAULT_DIR")
         .env_remove("LANG")
+        .arg("--no-ipc")
         .arg("--vault-dir")
         .arg(dir);
     cmd
@@ -132,7 +133,12 @@ fn tc_e2e_101_scn_b_non_interactive_removal_is_refused_with_japanese_hint() {
     let mut cmd = Command::cargo_bin("shikomi").unwrap();
     cmd.env_remove("SHIKOMI_VAULT_DIR")
         .env("LANG", "ja_JP.UTF-8")
-        .args(["--vault-dir", dir.path().to_str().unwrap(), "list"])
+        .args([
+            "--no-ipc",
+            "--vault-dir",
+            dir.path().to_str().unwrap(),
+            "list",
+        ])
         .assert()
         .success();
 
@@ -142,6 +148,7 @@ fn tc_e2e_101_scn_b_non_interactive_removal_is_refused_with_japanese_hint() {
         .env_remove("SHIKOMI_VAULT_DIR")
         .env("LANG", "ja_JP.UTF-8")
         .args([
+            "--no-ipc",
             "--vault-dir",
             dir.path().to_str().unwrap(),
             "remove",

@@ -21,6 +21,7 @@ fn shikomi(dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("shikomi").expect("cargo_bin");
     cmd.env_remove("SHIKOMI_VAULT_DIR")
         .env_remove("LANG")
+        .arg("--no-ipc")
         .arg("--vault-dir")
         .arg(dir);
     cmd

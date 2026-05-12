@@ -38,13 +38,10 @@ pub struct CliArgs {
     #[arg(long, short, global = true)]
     pub verbose: bool,
 
-    /// Use the running shikomi-daemon over IPC instead of opening the vault file directly.
-    /// Currently supported only with the `list` subcommand; requires shikomi-daemon to be running.
-    // NOTE: 内部メモ — daemon-ipc feature (Issue #26) で追加。`add`/`edit`/`remove` の IPC 経路は
-    // Sub-F 移行 PR で完成させるため、本フラグは現状 `list` 限定の opt-in。
-    // ユーザ向けには上記 doc comment のみ露出する（`--help` 内部用語汚染を避けるため）。
-    #[arg(long, global = true)]
-    pub ipc: bool,
+    /// Use direct SQLite access instead of the daemon (escape hatch; use when daemon is unavailable).
+    /// By default, shikomi routes all operations through shikomi-daemon over IPC.
+    #[arg(long = "no-ipc", global = true)]
+    pub no_ipc: bool,
 
     #[command(subcommand)]
     pub subcommand: Subcommand,

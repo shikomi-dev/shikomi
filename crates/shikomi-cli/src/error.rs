@@ -56,7 +56,7 @@ pub enum CliError {
     #[error("this vault is encrypted; encryption is not yet supported in this CLI version")]
     EncryptionUnsupported,
 
-    /// `--ipc` 指定で daemon に接続できない（daemon 未起動）
+    /// daemon に接続できない（daemon 未起動）
     #[error("shikomi-daemon is not running (socket {0} unreachable)")]
     DaemonNotRunning(PathBuf),
 

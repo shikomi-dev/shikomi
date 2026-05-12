@@ -28,6 +28,7 @@ fn add_one(dir: &std::path::Path, label: &str, value: &str) -> String {
         .env_remove("SHIKOMI_VAULT_DIR")
         .env_remove("LANG")
         .args([
+            "--no-ipc",
             "--vault-dir",
             dir.to_str().unwrap(),
             "add",
@@ -65,7 +66,12 @@ fn tc_e2e_060_flag_overrides_env_var() {
     let mut cmd = Command::cargo_bin("shikomi").unwrap();
     cmd.env("SHIKOMI_VAULT_DIR", dir_b.path())
         .env_remove("LANG")
-        .args(["--vault-dir", dir_a.path().to_str().unwrap(), "list"])
+        .args([
+            "--no-ipc",
+            "--vault-dir",
+            dir_a.path().to_str().unwrap(),
+            "list",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("A_LABEL"));
@@ -84,7 +90,7 @@ fn tc_e2e_061_env_var_is_consumed_when_flag_absent() {
     let mut cmd = Command::cargo_bin("shikomi").unwrap();
     cmd.env("SHIKOMI_VAULT_DIR", dir_a.path())
         .env_remove("LANG")
-        .arg("list")
+        .args(["--no-ipc", "list"])
         .assert()
         .success()
         .stdout(predicate::str::contains("E_LABEL"));
@@ -109,7 +115,7 @@ fn tc_e2e_062_os_default_resolution_does_not_crash() {
         .env_remove("LANG")
         .env("HOME", home.path())
         .env("XDG_DATA_HOME", &xdg_data_home)
-        .arg("list")
+        .args(["--no-ipc", "list"])
         .assert();
 
     // 期待: exit 1（vault 未初期化）または exit 0（空 vault）
