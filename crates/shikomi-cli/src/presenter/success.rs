@@ -884,10 +884,10 @@ mod tests {
         );
     }
 
-    /// TC-UT-F-U04 / TC-UT-F-U12 の配置注 — 以下は既存テストが担当するため省略。
-    ///
-    /// TC-UT-212c (re-use guard) — TC-F-U04 / TC-F-U12 は上で実装済み。
-    /// TC-UT-201〜212 以上 by Issue #141 Sub-B PR #145。
+    // TC-UT-F-U04 / TC-UT-F-U12 の配置注 — 以下は既存テストが担当するため省略。
+    //
+    // TC-UT-212c (re-use guard) — TC-F-U04 / TC-F-U12 は上で実装済み。
+    // TC-UT-201〜212 以上 by Issue #141 Sub-B PR #145。
 
     /// TC-UT-212ah (REQ-DP-011 / AC-DP-07): `render_imported` の 1 件追加 / 0 スキップ /
     /// 0 上書き という最も一般的な正常ケースで `"imported 1 record(s)"` が返る
@@ -938,15 +938,15 @@ mod tests {
     // 以下は既存テスト（Sub-F #44 Phase 6 / TC-F-U04 / TC-F-U12）
     // -------------------------------------------------------------------
 
-    /// TC-UT-212z2 — 注記: 上記 TC-UT-212y / TC-UT-212z とは独立して、
-    /// TC-UT-212aj 以後のテストが追加される可能性がある（Issue #141 以降の Sub-C 等）。
-    /// 番号は TC-UT-213〜 を使用すること。
+    // TC-UT-212z2 — 注記: 上記 TC-UT-212y / TC-UT-212z とは独立して、
+    // TC-UT-212aj 以後のテストが追加される可能性がある（Issue #141 以降の Sub-C 等）。
+    // 番号は TC-UT-213〜 を使用すること。
 
-    /// TC-UT-212z3 (配置確認): 本 tests モジュールの末尾マーカ。
-    /// TC-UT-201〜212aj が Issue #141 Sub-B (PR #145) で追加されたことを articulate する。
+    // TC-UT-212z3 (配置確認): 本 tests モジュールの末尾マーカ。
+    // TC-UT-201〜212aj が Issue #141 Sub-B (PR #145) で追加されたことを articulate する。
 
-    /// TC-UT-212c (REQ-DP-011 / AC-DP-06): `render_exported` は件数と
-    /// TC-UT-212 〜 TC-UT-212aj: 全 Issue #141 data-portability Presenter UT 追加完了。
+    // TC-UT-212c (REQ-DP-011 / AC-DP-06): `render_exported` は件数と
+    // TC-UT-212 〜 TC-UT-212aj: 全 Issue #141 data-portability Presenter UT 追加完了。
 
     /// TC-UT-F-U12 (EC-F12 / C-19): 24 語表示経路で **`SerializableSecretBytes` の lossy_string
     /// 経由表示が呼出側の Vec<SerializableSecretBytes> 所有権を維持し、scope 終了時の

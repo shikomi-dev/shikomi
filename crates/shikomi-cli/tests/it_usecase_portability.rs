@@ -1,9 +1,9 @@
 //! 結合テスト — `usecase::portability::export_records` / `import_records`
 //!
 //! 対応 REQ: REQ-DP-008 / REQ-DP-009 / REQ-DP-010
-//! 対応 TC: TC-IT-DP-001〜004
+//! 対応 TC: TC-IT-DP-001〜005
 //! 設計書: `docs/features/data-portability/cli/test-design.md §5.2`
-//! 対応 Issue: #141
+//! 対応 Issue: #141 / #146
 
 mod common;
 
@@ -169,5 +169,71 @@ fn tc_it_dp_004_import_records_hotkey_is_restored() {
         hotkey_str,
         Some("ctrl+2".to_owned()),
         "hotkey should be restored as 'ctrl+2'"
+    );
+}
+
+// -------------------------------------------------------------------
+// TC-IT-DP-005: import_records — SQLITE_BUSY busy_timeout 超過 → CliError::ImportVaultBusy
+// -------------------------------------------------------------------
+
+/// TC-IT-DP-005 (REQ-DP-009 / Issue #146 §SQLITE_BUSY 設計判断):
+/// `busy_timeout(2000ms)` 超過後に `CliError::ImportVaultBusy` が返る。
+///
+/// 別 `rusqlite::Connection` で `BEGIN EXCLUSIVE` を保持して vault.db をロックした状態で
+/// `import_records` を呼ぶと、2 秒後に `CliError::ImportVaultBusy` が返ることを検証する。
+///
+/// 逆シナリオ（ロック競合なし）は TC-IT-DP-001〜004 の `fresh_repo()` ベーステストが担保。
+///
+/// # 実行時間
+/// 実時間 ~2 秒の待機が発生するため `cargo test` ではデフォルトでスキップされる。
+/// `cargo test -- --include-ignored` で実行可能。
+#[test]
+#[ignore = "slow: waits ~2s for SQLITE_BUSY busy_timeout to expire"]
+fn tc_it_dp_005_import_records_sqlite_busy_timeout_returns_vault_busy() {
+    use shikomi_infra::persistence::SqliteVaultRepository;
+    use std::time::Duration;
+
+    // 1. vault.db を初期化（Text レコード 1 件を保存して vault.db ファイルを作成）
+    let (dir, _repo) = fresh_repo();
+    common::init_vault_with_one_text_record(dir.path(), "busy-label", "busy-value");
+
+    // 2. 別接続で BEGIN EXCLUSIVE → vault.db をロック
+    let vault_db = dir.path().join("vault.db");
+    let lock_conn = rusqlite::Connection::open(&vault_db).expect("open lock_conn");
+    lock_conn
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("BEGIN EXCLUSIVE");
+
+    // 3. busy_timeout(2000ms) 設定の SqliteVaultRepository を取得
+    //    （`lib.rs::run_import` と同等の設定。usecase.md §busy_timeout 設定 参照）
+    let repo = SqliteVaultRepository::from_directory_with_busy_timeout(
+        dir.path(),
+        Duration::from_millis(2000),
+    )
+    .expect("from_directory_with_busy_timeout");
+
+    // 4. 空の valid ImportPayload JSON を書き出す
+    let import_json = dir.path().join("busy_import.json");
+    std::fs::write(
+        &import_json,
+        r#"{"format_version":1,"vault_name":"test","exported_at":"1970-01-01T00:00:00Z","records":[]}"#,
+    )
+    .expect("write import json");
+
+    let args = ImportArgs {
+        input: import_json,
+        on_conflict: OnConflictArg::Error,
+    };
+
+    // 5. import_records を呼出（lock_conn が EXCLUSIVE 保持中 → ~2 秒後に SQLITE_BUSY）
+    //    lock_conn を明示的に保持して import_records のロック待機中に drop されないよう保証する
+    let result = import_records(&repo, &args, fixed_time());
+
+    drop(lock_conn); // EXCLUSIVE ロック解放（result 取得後）
+
+    // 6. CliError::ImportVaultBusy を検証
+    assert!(
+        matches!(result, Err(CliError::ImportVaultBusy)),
+        "expected Err(CliError::ImportVaultBusy) after busy_timeout(2000ms) expired, got: {result:?}"
     );
 }

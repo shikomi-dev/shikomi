@@ -720,4 +720,32 @@ mod tests {
         // 経路 (本 TC は `ExitCode::Success as u8 == 0` の SSoT 1 行を担保)。
         assert_eq!(ExitCode::Success as u8, 0, "SSoT exit 0 (Success)");
     }
+
+    // -------------------------------------------------------------------
+    // Issue #146: SQLITE_BUSY UT — TC-UT-209
+    // 設計根拠: docs/features/data-portability/cli/test-design/ut.md §TC-UT-209
+    // -------------------------------------------------------------------
+
+    /// TC-UT-209 (REQ-DP-010): `DataPortabilityError::VaultBusy` が
+    /// `CliError::ImportVaultBusy` に変換され、`ExitCode::UserError`（exit 1）に写像される。
+    ///
+    /// `From<DataPortabilityError> for CliError` の `VaultBusy → ImportVaultBusy` マッピングと
+    /// `ExitCode` SSoT の局所検証（Issue #146 設計内部保証）。
+    #[test]
+    fn tc_ut_209_data_portability_vault_busy_maps_to_import_vault_busy_with_exit_1() {
+        use crate::usecase::portability::error::DataPortabilityError;
+
+        let dp_err = DataPortabilityError::VaultBusy;
+        let cli_err = CliError::from(dp_err);
+
+        assert!(
+            matches!(cli_err, CliError::ImportVaultBusy),
+            "DataPortabilityError::VaultBusy should map to CliError::ImportVaultBusy, got: {cli_err:?}"
+        );
+        assert_eq!(
+            ExitCode::from(&cli_err) as u8,
+            1,
+            "CliError::ImportVaultBusy should map to ExitCode::UserError (exit 1)"
+        );
+    }
 }

@@ -267,21 +267,20 @@ impl SqliteVaultRepository {
             self.paths.vault_db(),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        .map_err(PersistenceError::from)?;
 
         // Issue #146: busy_timeout が設定されている場合（`from_directory_with_busy_timeout`
         // 経由での構築時）、コネクションに適用する。SQLITE_BUSY 発生時に SQLite が
         // `timeout` 時間リトライし、タイムアウト後も解消しない場合は
         // `PersistenceError::DatabaseBusy` を返す（`From<rusqlite::Error>` が型検査）。
         if let Some(timeout) = self.busy_timeout {
-            conn.busy_timeout(timeout)
-                .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            conn.busy_timeout(timeout).map_err(PersistenceError::from)?;
         }
 
         // Step 8: application_id 確認
         let app_id: u32 = conn
             .query_row(SchemaSql::PRAGMA_APPLICATION_ID_GET, [], |row| row.get(0))
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         if app_id != SchemaSql::APPLICATION_ID {
             return Err(PersistenceError::SchemaMismatch {
                 expected_application_id: SchemaSql::APPLICATION_ID,
@@ -295,7 +294,7 @@ impl SqliteVaultRepository {
         // Step 9: user_version 確認
         let user_version: u32 = conn
             .query_row(SchemaSql::PRAGMA_USER_VERSION_GET, [], |row| row.get(0))
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         if !(SchemaSql::USER_VERSION_SUPPORTED_MIN..=SchemaSql::USER_VERSION_SUPPORTED_MAX)
             .contains(&user_version)
         {
@@ -343,14 +342,12 @@ impl SqliteVaultRepository {
     ) -> Result<shikomi_core::VaultHeader, PersistenceError> {
         let mut stmt = conn
             .prepare(SchemaSql::SELECT_VAULT_HEADER)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
+        let mut rows = stmt.query([]).map_err(PersistenceError::from)?;
 
         let row = rows
             .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
+            .map_err(PersistenceError::from)?
             .ok_or_else(|| PersistenceError::Corrupted {
                 table: "vault_header",
                 row_key: None,
@@ -360,11 +357,7 @@ impl SqliteVaultRepository {
         let header = Mapping::row_to_vault_header(row)?;
 
         // CHECK(id=1) 制約があるため複数行は存在しないはずだが防衛的確認
-        if rows
-            .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
-            .is_some()
-        {
+        if rows.next().map_err(PersistenceError::from)?.is_some() {
             return Err(PersistenceError::Corrupted {
                 table: "vault_header",
                 row_key: None,
@@ -394,18 +387,11 @@ impl SqliteVaultRepository {
             (SchemaSql::SELECT_RECORDS_ORDERED, false)
         };
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let mut stmt = conn.prepare(sql).map_err(PersistenceError::from)?;
+        let mut rows = stmt.query([]).map_err(PersistenceError::from)?;
 
         let mut records = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
-        {
+        while let Some(row) = rows.next().map_err(PersistenceError::from)? {
             let record = if use_v1 {
                 Mapping::row_to_record_v1(row)?
             } else {

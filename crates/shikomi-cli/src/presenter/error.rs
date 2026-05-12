@@ -692,4 +692,34 @@ mod tests {
             "MSG-CLI-110 JapaneseEn must contain Japanese autostart hint: {rendered:?}"
         );
     }
+
+    // -------------------------------------------------------------------
+    // Issue #146: SQLITE_BUSY Presenter UT — TC-UT-210
+    // 設計根拠: docs/features/data-portability/cli/test-design/ut.md §TC-UT-210
+    // -------------------------------------------------------------------
+
+    /// TC-UT-210 (REQ-DP-010/011 / Issue #146 MSG-CLI-146 文面保証):
+    /// `render_error(&CliError::ImportVaultBusy, Locale::English)` が
+    /// MSG-CLI-146 の 3 要素を全て含む文字列を返す。
+    ///
+    /// 検証対象: `"vault is in use by shikomi-daemon"` (error 行) /
+    /// `"stop shikomi-daemon"` (hint 行) / `"shikomi daemon uninstall"` (hint 行末尾)。
+    #[test]
+    fn tc_ut_210_render_error_import_vault_busy_returns_msg_cli_146() {
+        let err = CliError::ImportVaultBusy;
+        let out = render_error(&err, Locale::English);
+
+        assert!(
+            out.contains("vault is in use by shikomi-daemon"),
+            "MSG-CLI-146 must contain 'vault is in use by shikomi-daemon', got: {out:?}"
+        );
+        assert!(
+            out.contains("stop shikomi-daemon"),
+            "MSG-CLI-146 must contain 'stop shikomi-daemon', got: {out:?}"
+        );
+        assert!(
+            out.contains("shikomi daemon uninstall"),
+            "MSG-CLI-146 must contain 'shikomi daemon uninstall', got: {out:?}"
+        );
+    }
 }
