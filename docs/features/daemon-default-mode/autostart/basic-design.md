@@ -140,7 +140,7 @@
 
 | ID | 変更内容 |
 |----|---------|
-| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: `"hint: or enable autostart: shikomi daemon install"` を追加（別 PR）|
+| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: `"hint: or enable autostart: shikomi daemon install"` を追加（Issue #134 で実装予定）|
 
 ## セキュリティ考慮
 
@@ -152,6 +152,7 @@
 |-------------|------|
 | UT | `AutostartBackend::detect()` が正しい実装を返すこと（`cfg` attribute mock）|
 | UT | plist / unit ファイル / desktop エントリのテンプレート展開が正しいこと |
+| UT | **Issue #134（工程4）**: `render_daemon_not_running()` の出力に `"shikomi daemon install"` が含まれることをアサートする TC を追加すること（TC-UT-158 拡張 または 新規 TC）。現在の TC-UT-158 は「`--ipc` 不含」「`shikomi-daemon` 含む」「`not running` 含む」のみで、新 hint 行の存在を保証しない |
 | IT | `LaunchdBackend` / `SystemdBackend` / `XdgAutostartBackend` の install / uninstall のファイル I/O（実ファイルシステム）|
 | IT | `WindowsTaskSchedulerBackend` は Windows CI のみ（`#[cfg(target_os = "windows")]`）|
 | E2E | AC-DDM-07〜10（`../feature-spec.md §5` に追記）|
