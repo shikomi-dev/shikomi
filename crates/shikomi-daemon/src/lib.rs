@@ -171,8 +171,22 @@ pub async fn run() -> ExitCode {
     });
 
     // Sub-E §C-24: アイドル 15min タイムアウトで自動 lock する `IdleTimer` を spawn
+    // C-40: debug build でのみ env seam を読んで閾値を短縮する（テスト専用 idle 加速）。
+    // release build では env 読込を行わず DEFAULT_THRESHOLD / DEFAULT_POLL_INTERVAL 固定。
+    #[cfg(debug_assertions)]
+    let debug_thresholds = read_debug_env_seam();
+    #[cfg(not(debug_assertions))]
+    let debug_thresholds: Option<(u64, u64)> = None;
+
     let idle_timer_task = {
-        let timer = IdleTimer::new(cache.clone());
+        let timer = match debug_thresholds {
+            Some((threshold_secs, poll_secs)) => IdleTimer::with_thresholds(
+                cache.clone(),
+                std::time::Duration::from_secs(threshold_secs),
+                std::time::Duration::from_secs(poll_secs),
+            ),
+            None => IdleTimer::new(cache.clone()),
+        };
         let rx = shutdown_rx.clone();
         tokio::spawn(timer.run(rx))
     };
@@ -277,6 +291,48 @@ fn single_instance_exit_code(err: &lifecycle::single_instance::SingleInstanceErr
     match err {
         SingleInstanceError::AlreadyRunning { .. } => DaemonExit::SingleInstanceUnavailable,
         _ => DaemonExit::SystemError,
+    }
+}
+
+/// C-40: `#[cfg(debug_assertions)]` 限定 env seam。
+///
+/// `SHIKOMI_DAEMON_*` で始まる環境変数を allowlist（下記 3 定数 + `SHIKOMI_DAEMON_LOG`）で
+/// 検証し、未知 env を発見したら `panic!` で即終了する（攻撃面拡大防止 / TC-F-S06）。
+///
+/// release build にはコンパイルされないため本番バイナリへの env seam 漏洩はない（TC-F-S05(a)）。
+///
+/// # Returns
+/// `Some((threshold_secs, poll_secs))` — カスタム閾値が指定された場合。
+/// `None` — env 未指定。`IdleTimer::new()`（デフォルト 15min）を使う。
+#[cfg(debug_assertions)]
+fn read_debug_env_seam() -> Option<(u64, u64)> {
+    /// C-40 allowlist: 許可する `SHIKOMI_DAEMON_*` 環境変数（TC-F-S06(a)）。
+    const ALLOWLIST: &[&str] = &[
+        "SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS",
+        "SHIKOMI_DAEMON_POLL_INTERVAL_SECS",
+        "SHIKOMI_DAEMON_FORCE_RELOCK_FAIL",
+        "SHIKOMI_DAEMON_LOG",
+    ];
+
+    for (key, _) in std::env::vars() {
+        if key.starts_with("SHIKOMI_DAEMON_") && !ALLOWLIST.contains(&key.as_str()) {
+            // 未知 env は攻撃面拡大防止のため即終了（TC-F-S06(b)）。
+            panic!("unknown SHIKOMI_DAEMON_* env var rejected: {key} (C-40 allowlist)");
+        }
+    }
+
+    let threshold = std::env::var("SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    let poll = std::env::var("SHIKOMI_DAEMON_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    match (threshold, poll) {
+        (None, None) => None,
+        (t, p) => Some((
+            t.unwrap_or(IdleTimer::DEFAULT_THRESHOLD.as_secs()),
+            p.unwrap_or(IdleTimer::DEFAULT_POLL_INTERVAL.as_secs()),
+        )),
     }
 }
 
