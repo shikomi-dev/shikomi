@@ -124,9 +124,9 @@ echo "[smoke] GUI alive for ${GUI_WAIT_SECS}s — startup stable"
 # IPC 接続確認
 # 設計根拠: e2e.md §6.7 — shikomi list が exit 0 = IPC 接続証明
 # ---------------------------------------------------------------------------
-echo "[smoke] Checking IPC connection via 'shikomi list --ipc' ..."
-if ! "$CLI_BIN" list --ipc; then
-    echo "[smoke] FAIL: IPC connection check failed (shikomi list --ipc returned non-zero)"
+echo "[smoke] Checking IPC connection via 'shikomi list' ..."
+if ! "$CLI_BIN" list; then
+    echo "[smoke] FAIL: IPC connection check failed (shikomi list returned non-zero)"
     exit 1
 fi
 echo "[smoke] IPC connection OK"

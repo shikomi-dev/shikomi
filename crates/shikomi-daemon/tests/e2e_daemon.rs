@@ -267,7 +267,8 @@ fn tc_e2e_030_sigterm_triggers_graceful_shutdown() {
 }
 
 // -------------------------------------------------------------------
-// TC-E2E-080 / SCN-A 部分: shikomi --ipc list が実 daemon 経由で動く
+// TC-E2E-080 / SCN-A 部分: shikomi list が実 daemon 経由（IPC 既定）で動く
+// Phase 2 (Issue #126): --ipc フラグは廃止。IPC が既定経路。
 // -------------------------------------------------------------------
 #[test]
 fn tc_e2e_080_shikomi_cli_ipc_list_end_to_end() {
@@ -276,12 +277,12 @@ fn tc_e2e_080_shikomi_cli_ipc_list_end_to_end() {
     seed_empty_vault(vault_dir.path());
     let mut guard = DaemonGuard::spawn(xdg.path(), vault_dir.path());
 
-    // shikomi --ipc list を実行（cross-crate binary は assert_cmd で解決）
+    // shikomi list を実行（IPC 既定、--ipc フラグは Phase 2 で廃止）
     let shikomi_bin = assert_cmd::cargo::cargo_bin("shikomi");
     let output = Command::new(shikomi_bin)
         .env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--ipc", "list"])
+        .args(["list"])
         .output()
         .expect("spawn shikomi cli");
 
@@ -290,7 +291,7 @@ fn tc_e2e_080_shikomi_cli_ipc_list_end_to_end() {
     // 空 vault でも exit 0 が期待される（list は 0 件でも成功）
     assert!(
         output.status.success(),
-        "shikomi --ipc list should succeed: exit={:?} stdout={stdout} stderr={stderr}",
+        "shikomi list should succeed: exit={:?} stdout={stdout} stderr={stderr}",
         output.status.code()
     );
     // stderr に SECRET_TEST_VALUE が出ない（horizontal assertion）
@@ -303,7 +304,8 @@ fn tc_e2e_080_shikomi_cli_ipc_list_end_to_end() {
 }
 
 // -------------------------------------------------------------------
-// TC-E2E-SCN-C (部分): shikomi --ipc list が daemon 未起動なら exit 1 + MSG-CLI-110 系
+// TC-E2E-SCN-C (部分): shikomi list（IPC 既定）が daemon 未起動なら exit 1 + MSG-CLI-110 系
+// Phase 2 (Issue #126): --ipc フラグは廃止。IPC が既定経路のため --ipc なしで検証。
 // -------------------------------------------------------------------
 #[test]
 fn tc_e2e_scnc_daemon_not_running_shows_error_and_exits_nonzero() {
@@ -315,7 +317,7 @@ fn tc_e2e_scnc_daemon_not_running_shows_error_and_exits_nonzero() {
     let output = Command::new(shikomi_bin)
         .env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--ipc", "list"])
+        .args(["list"])
         .output()
         .expect("spawn shikomi cli");
 

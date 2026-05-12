@@ -171,7 +171,6 @@ fn tc_e2e_016_pr29_runtime_reject_removed_for_ipc_add() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -215,7 +214,6 @@ fn tc_e2e_011_ipc_add_text_then_list_shows_record() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -234,7 +232,7 @@ fn tc_e2e_011_ipc_add_text_then_list_shows_record() {
 
     // 反映確認：--ipc list で新 id が出る（ラウンドトリップ検証）
     let (list_stdout, list_stderr, list_code) =
-        run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+        run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert_eq!(
         list_code,
         Some(0),
@@ -274,7 +272,6 @@ fn tc_e2e_012_ipc_add_secret_stdin_never_echoes_marker() {
         .env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
         .args([
-            "--ipc",
             "add",
             "--kind",
             "secret",
@@ -331,7 +328,6 @@ fn tc_e2e_013_ipc_edit_label_then_list_shows_new_label() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -347,7 +343,7 @@ fn tc_e2e_013_ipc_edit_label_then_list_shows_new_label() {
     let (edit_stdout, edit_stderr, edit_code) = run_shikomi(
         xdg.path(),
         vault_dir.path(),
-        &["--ipc", "edit", "--id", &id, "--label", "tc013-new"],
+        &["edit", "--id", &id, "--label", "tc013-new"],
     );
     assert_eq!(
         edit_code,
@@ -360,7 +356,7 @@ fn tc_e2e_013_ipc_edit_label_then_list_shows_new_label() {
     );
 
     // 反映確認
-    let (list_stdout, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+    let (list_stdout, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert!(
         list_stdout.contains("tc013-new"),
         "list should show the new label: {list_stdout}"
@@ -386,7 +382,6 @@ fn tc_e2e_014_ipc_remove_yes_then_list_shows_no_record() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -399,14 +394,14 @@ fn tc_e2e_014_ipc_remove_yes_then_list_shows_no_record() {
     let id = extract_uuid_after("added: ", &add_stdout);
 
     // 削除前 list で存在確認
-    let (list_before, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+    let (list_before, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert!(list_before.contains(&id));
 
     // remove --yes
     let (rm_stdout, rm_stderr, rm_code) = run_shikomi(
         xdg.path(),
         vault_dir.path(),
-        &["--ipc", "remove", "--id", &id, "--yes"],
+        &["remove", "--id", &id, "--yes"],
     );
     assert_eq!(
         rm_code,
@@ -419,7 +414,7 @@ fn tc_e2e_014_ipc_remove_yes_then_list_shows_no_record() {
     );
 
     // 削除後 list から消えている
-    let (list_after, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+    let (list_after, _, _) = run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert!(
         !list_after.contains(&id),
         "list should not contain removed id: {list_after}"
@@ -444,7 +439,6 @@ fn tc_e2e_015_ipc_edit_nonexistent_id_returns_user_error() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "edit",
             // 全 0 の UUID v7 — vault に存在しない
             "--id",
@@ -502,7 +496,6 @@ fn tc_e2e_018_ipc_edit_stdin_pipe_no_leak_and_value_reflects() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -522,7 +515,7 @@ fn tc_e2e_018_ipc_edit_stdin_pipe_no_leak_and_value_reflects() {
     let mut child = Command::new(bin)
         .env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--ipc", "edit", "--id", &id, "--stdin"])
+        .args(["edit", "--id", &id, "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -572,7 +565,7 @@ fn tc_e2e_018_ipc_edit_stdin_pipe_no_leak_and_value_reflects() {
     );
 
     // ---- 6. ラウンドトリップ: list で id が引き続き存在 ---------------------
-    let (list_stdout, _, list_code) = run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+    let (list_stdout, _, list_code) = run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert_eq!(list_code, Some(0));
     assert!(
         list_stdout.contains(&id),

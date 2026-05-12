@@ -116,9 +116,9 @@ fn panic_hook(_info: &std::panic::PanicInfo<'_>) {
 // 設計意図（composition-root.md §`Box` 不要、stack 配置）に沿う。
 #[allow(clippy::large_enum_variant)]
 enum RepositoryHandle {
-    /// 既定の SQLite 直接アクセス経路。
+    /// `--no-ipc` 指定時のみ使用する SQLite 直接アクセス経路。
     Sqlite(SqliteVaultRepository),
-    /// `--ipc` opt-in の daemon 経由経路。
+    /// 既定の daemon 経由経路（IPC）。`--no-ipc` 指定時は使用しない。
     Ipc(IpcVaultRepository),
 }
 
@@ -156,7 +156,7 @@ pub enum RepositoryHandleDiscriminant {
 /// 2. Locale 決定 + `LOCALE_CACHE` 格納
 /// 3. clap パース（失敗時は clap エラー扱い）
 /// 4. `tracing_subscriber` 初期化
-/// 5. `RepositoryHandle` 構築（`args.ipc` で `Sqlite` / `Ipc` を分岐）
+/// 5. `RepositoryHandle` 構築（`args.no_ipc` で `Ipc`（既定）/ `Sqlite`（`--no-ipc`）を分岐）
 /// 6. サブコマンド分岐 → `run_*` 関数 → `Result<(), CliError>`
 /// 7. `Err` は `render_error` で stderr 出力 + `ExitCode::from(&err)` 写像
 #[must_use]
@@ -190,8 +190,14 @@ pub fn run() -> ExitCode {
     // Sub-F (#44) Phase 2: vault サブコマンドは daemon IPC 経路に**強制**する。
     // V1 の `RepositoryHandle::Sqlite` 経路は vault に直接触らない契約 (Phase 2 規定、
     // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
-    // dispatch を分岐させる。`--ipc` フラグ未指定でも vault 経路は IPC 強制。
+    // dispatch を分岐させる。`--no-ipc` 指定時も vault 経路は IPC 強制。
     if let Subcommand::Vault(vault) = &args.subcommand {
+        // MSG-CLI-052 (Issue #126): `--no-ipc` 指定時に vault サブコマンドが IPC 強制されることを通知する。
+        // `run_vault` 呼び出し前に出力し、daemon 未起動時でも note が表示されるようにする。
+        if args.no_ipc && !quiet {
+            let note = presenter::warning::render_vault_ipc_forced_note(locale);
+            eprint_stderr(&note);
+        }
         // Issue #75 Bug-F-007: `--vault-dir <DIR>` を daemon socket 解決の最優先 hint
         // として渡す（`<DIR>/shikomi.sock` 最優先 + 失敗時 default fallback、
         // `cli-subcommands.md` §Bug-F-007 SSoT）。
@@ -231,7 +237,7 @@ pub fn run() -> ExitCode {
 /// vault サブコマンド経路（IPC 強制）の dispatch。
 ///
 /// daemon socket 解決 → `IpcVaultRepository::connect_with_vault_dir` → handshake (V2) →
-/// 7 サブコマンドの usecase 呼出。`--ipc` フラグの有無によらず IPC 経路で動作する
+/// 7 サブコマンドの usecase 呼出。`--no-ipc` フラグ指定時も IPC 経路で動作する
 /// （vault 管理は daemon の責務、Phase 2 規定）。
 ///
 /// Issue #75 Bug-F-007: `vault_dir` が `Some(<DIR>)` の場合、`<DIR>/shikomi.sock`（Unix）
@@ -261,8 +267,7 @@ fn run_vault(
 
 /// vault サブコマンド経路の `IpcVaultRepository` 構築（IPC 強制 + opt-in 警告省略）。
 ///
-/// vault 管理は IPC 専用の責務領域であり、`build_handle` が出力する
-/// `MSG-CLI-051` (opt-in 警告) は文脈不一致のため省略する。
+/// vault 管理は IPC 専用の責務領域であり、`build_handle` 経路を経由しない。
 ///
 /// Issue #75 Bug-F-007: `vault_dir` を `IpcVaultRepository::connect_with_vault_dir` に渡し、
 /// `<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-{H}`（Windows、`<H>` 純関数）を
@@ -281,26 +286,31 @@ fn connect_vault_ipc(
 // 補助関数 — Repository 構築 / clap / tracing / 出力
 // -------------------------------------------------------------------
 
-/// `args.ipc` フラグから `RepositoryHandle` を構築する。
+/// `args.no_ipc` フラグから `RepositoryHandle` を構築する。
 ///
-/// IPC 経路では `MSG-CLI-051`（opt-in 警告）を `quiet` 抑止下を除き先に出力した上で、
-/// daemon に接続してハンドシェイクまで完了させる。
-fn build_handle(args: &CliArgs, locale: Locale, quiet: bool) -> Result<RepositoryHandle, CliError> {
-    if args.ipc {
-        if !quiet {
-            let notice = presenter::warning::render_ipc_opt_in_notice(locale);
-            eprint_stderr(&notice);
-        }
-        let socket_path = IpcVaultRepository::default_socket_path()?;
-        let ipc = IpcVaultRepository::connect(&socket_path)?;
-        Ok(RepositoryHandle::Ipc(ipc))
-    } else {
+/// 既定（`no_ipc == false`）は IPC 経路。daemon 未起動時は `MSG-CLI-110` で Fail Fast。
+/// `--no-ipc` 指定時のみ SQLite 直結経路（Phase 1 相当）を使用する。
+fn build_handle(
+    args: &CliArgs,
+    _locale: Locale,
+    _quiet: bool,
+) -> Result<RepositoryHandle, CliError> {
+    if args.no_ipc {
+        // A09 監査ログ: `--no-ipc` 使用を `quiet` 抑止外の warn チャネルへ記録する。
+        tracing::warn!(
+            target: "shikomi_cli::composition_root",
+            "--no-ipc: direct SQLite access"
+        );
         let path = match args.vault_dir.as_deref() {
             Some(p) => p.to_path_buf(),
             None => io::paths::resolve_os_default_vault_dir()?,
         };
         let repo = SqliteVaultRepository::from_directory(&path)?;
         Ok(RepositoryHandle::Sqlite(repo))
+    } else {
+        let socket_path = IpcVaultRepository::default_socket_path()?;
+        let ipc = IpcVaultRepository::connect(&socket_path)?;
+        Ok(RepositoryHandle::Ipc(ipc))
     }
 }
 
@@ -364,6 +374,13 @@ pub fn eprint_stderr(s: &str) {
     let mut err = std::io::stderr().lock();
     let _ = err.write_all(s.as_bytes());
 }
+
+// -------------------------------------------------------------------
+// テスト（src/tests.rs に分離: ペガサス 500 行ルール、audit TC-CI-026 unsafe 境界）
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests;
 
 /// `shikomi-gui` バイナリをサブプロセスとして起動する（R1-GUI-01）。
 ///

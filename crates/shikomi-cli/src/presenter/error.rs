@@ -380,4 +380,30 @@ mod tests {
             "English render_error should be ASCII-only, got: {out:?}"
         );
     }
+
+    /// TC-UT-158 (REQ-DDM-004 / AC-DDM-03): MSG-CLI-110 の hint 文面に `--ipc` が含まれない。
+    /// Phase 2 で `--ipc` フラグが廃止されたため、hint で案内しない。
+    #[test]
+    fn tc_ut_158_daemon_not_running_hint_does_not_contain_ipc_flag() {
+        use std::path::PathBuf;
+
+        for locale in [Locale::English, Locale::JapaneseEn] {
+            let err = CliError::DaemonNotRunning(PathBuf::from("/tmp/test.sock"));
+            let rendered = render_error(&err, locale);
+            assert!(
+                !rendered.contains("--ipc"),
+                "MSG-CLI-110 hint must not mention '--ipc' (廃止済み) for locale {locale:?}: {rendered:?}"
+            );
+            // hint 行に daemon 起動コマンドが含まれる
+            assert!(
+                rendered.contains("shikomi-daemon"),
+                "MSG-CLI-110 hint must mention 'shikomi-daemon' for locale {locale:?}: {rendered:?}"
+            );
+            // エラー行にソケットパスが含まれる
+            assert!(
+                rendered.contains("not running"),
+                "MSG-CLI-110 must contain 'not running' for locale {locale:?}: {rendered:?}"
+            );
+        }
+    }
 }
