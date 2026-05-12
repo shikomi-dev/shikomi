@@ -21,10 +21,10 @@
 | ファイル | 内容 | 主要 TC-ID |
 |----------|------|-----------|
 | `index.md`（本書） | 概要、レベル戦略、トレーサビリティマトリクス、モック方針、カバレッジ基準 | — |
-| `e2e.md` | E2E テスト設計（`assert_cmd` + `tempfile`）と証跡 | TC-E2E-001〜102 |
+| `e2e.md` | E2E テスト設計（`assert_cmd` + `tempfile`）と証跡 / §13 Sub-F 田中ペルソナ E2E（`bash tests/e2e/sub-f-tanaka-persona.sh`、Linux only）| TC-E2E-001〜102 / TC-F-E01 |
 | `integration.md` | UseCase 単位 結合テスト（実 SQLite + `tempfile`）/ §10 Sub-F vault サブコマンド 結合テスト（CLI→IPC V2、`DaemonSpawn` + `expectrl` PTY）/ §10.4.8 インジェクション境界値 | TC-IT-001〜050 / TC-F-I01〜I12（I11a/I11b 含む）|
 | `unit.md` | pure function ユニットテスト + 実装担当への引き継ぎ事項 | TC-UT-001〜091 |
-| `ci.md` | CI 検証ケース、ファイル配置、証跡提出方針、実行コマンド | TC-CI-001〜015 |
+| `ci.md` | CI 検証ケース、ファイル配置、証跡提出方針、実行コマンド / §8 Sub-F 静的検査（`bash tests/docs/sub-f-static-checks.sh`、grep gate 6 件）| TC-CI-001〜015 / TC-F-S01〜S06 |
 
 ---
 

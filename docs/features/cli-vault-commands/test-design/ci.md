@@ -350,3 +350,64 @@ cli-vault-commands feature の §1 / §2 / §5 SSoT は当初から `cargo test 
 | Bug-F-007 `--vault-dir` + エラー文言訂正 | `sub-f-cli-subcommands/issue-75-verification.md §15.16.6` |
 
 **reviewer 照合 SSoT**: 工程5 レビュー時、ペテルギウス・ペガサス・服部は **§15.16 各項目の `[ ]` チェックリスト埋め込み状況**と**本書 §7.3 必須 check ポリシー表** の双方を SSoT として照合する。`[ ]` 未埋めのまま PR 提出は **却下対象**（テスト担当の検証責務不履行、Bug-G-005 偶発 PASS 誤認の Boy Scout 規律と同型）。
+
+---
+
+## 8. Sub-F 静的検査（TC-F-S01〜S06）
+
+> Issue #79 / #74-E。  
+> SSoT: `vault-encryption/test-design/sub-f-cli-subcommands/index.md §15.9`（Rev1）
+
+### 8.1 概要
+
+Sub-D Rev3 / Rev4 / Sub-E TC-E-S01..S09 で確立した「**実装直読 SSoT + grep gate による設計書-実装一致機械検証**」原則を Sub-F に継承。6 件の grep gate を `tests/docs/sub-f-static-checks.sh` に実装し、`cargo test` を介さず `bash` 単体で実行可能にする（OS 非依存、CI 実行時間最小）。
+
+**CI 組み込み方針**: 既存 `test-cli` CI job（`.github/workflows/test-cli.yml`）の最終ステップに `bash tests/docs/sub-f-static-checks.sh` を追加する（専用 job は設けない。静的検査は軽量であり `shikomi-cli` の実装直読を行うため同一 context が適切）。
+
+### 8.2 TC-F-S01〜S06 詳細（SSoT §15.9 1:1 対応）
+
+| TC-ID | 検証対象 | grep ロジック | 失敗時 |
+|---|---|---|---|
+| TC-F-S01 | EC-F8 / `VaultSubcommand` **7 variant** 集合整合（Rev1 recovery-show 廃止反映）| `awk` で `pub enum VaultSubcommand { ... }` から variant 名抽出 → `Encrypt` / `Decrypt` / `Unlock` / `Lock` / `ChangePassword` / `Rekey` / `RotateRecovery` の 7 件と完全一致比較（`RecoveryShow` が含まれないことも assert）| FAIL + 集合 diff |
+| TC-F-S02 | C-37 `mode_banner::display` 必須呼出経路（Rev1 ペテルギウス指摘7 再設計）| (a) `crates/shikomi-cli/src/usecase/list.rs` から `presenter::mode_banner::display` への呼出が cross-crate grep で 1 件以上検出、(b) `presenter::list::display` 関数 signature に `protection_mode: ProtectionModeBanner` 必須引数が含まれる、(c) 隠蔽オプション `--no-mode-banner` / `--hide-banner` 等が CLI コードに存在しない | FAIL + 必須経路欠落 / 隠蔽フラグ検出 |
+| TC-F-S03 | EC-F11 i18n 辞書 MSG キー全網羅 | `crates/shikomi-cli/src/i18n/locales/{ja-JP,en-US}/messages.toml` を `awk` で解析し MSG-S01..S20 + S07_completed_records_count 等のキーを抽出して期待集合と一致比較 | FAIL + 不足キー列挙 |
+| TC-F-S04 | EC-F12 `recovery_disclosure::display` signature 整合 | (a) 関数 signature が `display(words: Vec<SerializableSecretBytes>, target: OutputTarget)` で所有権消費形（`&` 借用ではない）、(b) `[String; 24]` 等の旧型が登場しない、(c) 関数本体に `mem::replace` または `drop(words)` 等の zeroize 強制経路が存在 | FAIL + signature mismatch / 旧型残存 / zeroize 経路欠落 |
+| TC-F-S05 | C-40 / C-41 env seam debug 限定 + core dump 抑制 | (a) `crates/shikomi-daemon/src/bin/shikomi_daemon.rs` 内の env 読込ブロックが `#[cfg(debug_assertions)]` で囲まれている、(b) `crates/shikomi-cli/src/process_hardening/` に Linux `prctl(PR_SET_DUMPABLE` / macOS `setrlimit` / Windows `SetErrorMode` の 3 OS 分岐コードが存在 | FAIL + 不在経路 / debug 外への seam 漏洩 |
+| TC-F-S06 | C-40 daemon env allowlist sanity check（Rev1 服部指摘6 + ペテルギウス致命3 解消）| (a) allowlist 定数（`SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS` / `SHIKOMI_DAEMON_POLL_INTERVAL_SECS` / `SHIKOMI_DAEMON_FORCE_RELOCK_FAIL` のみ）が grep で確認可能、(b) 未知 env 検出時の `panic!` または `std::process::exit` 経路が存在、(c) allowlist が `#[cfg(debug_assertions)]` で囲まれて release では env 読込を行わない | FAIL + allowlist 不在 / 未知 env 受容経路 |
+
+### 8.3 `sub-f-static-checks.sh` ファイル構成
+
+```
+tests/docs/
+├── sub-f-static-checks.sh   # TC-F-S01〜S06（本節で設計）
+├── sub-a-static-checks.sh   # Sub-A 既存
+├── sub-b-static-checks.sh   # Sub-B 既存
+├── sub-c-static-checks.sh   # Sub-C 既存
+├── sub-d-static-checks.sh   # Sub-D 既存
+└── sub-e-static-checks.sh   # Sub-E 既存
+```
+
+スクリプト共通方針:
+- 各 TC を独立した bash 関数として実装し、PASS / FAIL を stdout に出力
+- 1 件でも FAIL が発生した場合は `exit 1`（CI job を fail させる）
+- TC-ID とチェック内容を関数名のコメントに必ず記載（`# TC-F-S01: VaultSubcommand 7 variant`）
+- 実行に `cargo` / `rustup` は不要（grep / awk / find のみ依存）
+
+### 8.4 失敗時の報告方針
+
+静的検査失敗は「コードが設計書から逸脱した証拠」であるため、通常のバグと同様に以下で扱う:
+
+- 失敗 TC-ID と diff（期待集合 vs 実測集合）を CI ログに出力
+- レビュアーは `tests/docs/sub-f-static-checks.sh` の出力ログを照合 SSoT として使用
+- 静的検査 FAIL の場合、実装 PR のマージは**ブロック**（§7.3 必須 check ポリシー準拠）
+
+### 8.5 カバレッジ対象
+
+| 受入基準 / 契約 | カバー TC |
+|---|---|
+| EC-F8 `VaultSubcommand` 7 variant 整合（recovery-show 廃止確認）| TC-F-S01 |
+| C-37 `mode_banner::display` 必須呼出経路（Cross-crate 依存方向保証）| TC-F-S02 |
+| EC-F11 i18n 辞書 MSG-S01..S20 全キー存在（欠落 key = 実行時 fallback 不能）| TC-F-S03 |
+| EC-F12 `recovery_disclosure` zeroize 強制経路（所有権消費 + drop）| TC-F-S04 |
+| C-40/C-41 env seam debug 限定 + core dump 抑制（release builds への seam 漏洩防止）| TC-F-S05 |
+| C-40 daemon env allowlist 整合（未知 env 受容 = 攻撃面拡大 防止）| TC-F-S06 |
