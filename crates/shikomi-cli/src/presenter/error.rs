@@ -445,4 +445,39 @@ mod tests {
             );
         }
     }
+
+    /// TC-UT-158b (Issue #134 / MSG-CLI-110): `render_daemon_not_running()` の出力に
+    /// `"shikomi daemon install"` autostart hint が含まれること。
+    ///
+    /// 英語・JapaneseEn 両ロケールで検証する。
+    /// 設計根拠: basic-design.md §Sub-B完了後に更新するメッセージ / §テスト戦略 TC-UT-158 拡張
+    #[test]
+    fn tc_ut_158b_daemon_not_running_contains_autostart_hint_for_english_locale() {
+        use std::path::PathBuf;
+        let err = CliError::DaemonNotRunning(PathBuf::from("/tmp/test.sock"));
+        let rendered = render_error(&err, Locale::English);
+        assert!(
+            rendered.contains("shikomi daemon install"),
+            "MSG-CLI-110 English must contain autostart hint 'shikomi daemon install': {rendered:?}"
+        );
+    }
+
+    /// TC-UT-158c (Issue #134 / MSG-CLI-110): JapaneseEn ロケールで
+    /// `"shikomi daemon install"` と日本語 hint 行の両方が含まれること。
+    ///
+    /// 設計根拠: basic-design.md §Sub-B完了後に更新するメッセージ / §テスト戦略 TC-UT-158 拡張
+    #[test]
+    fn tc_ut_158c_daemon_not_running_contains_autostart_hint_for_japanese_en_locale() {
+        use std::path::PathBuf;
+        let err = CliError::DaemonNotRunning(PathBuf::from("/tmp/test.sock"));
+        let rendered = render_error(&err, Locale::JapaneseEn);
+        assert!(
+            rendered.contains("shikomi daemon install"),
+            "MSG-CLI-110 JapaneseEn must contain 'shikomi daemon install': {rendered:?}"
+        );
+        assert!(
+            rendered.contains("または自動起動を有効にする場合"),
+            "MSG-CLI-110 JapaneseEn must contain Japanese autostart hint: {rendered:?}"
+        );
+    }
 }
