@@ -389,7 +389,7 @@ TC-F-I10a〜d のうち Windows で skip するものおよび TC-F-I11b も同�
 
 ---
 
-## 11. Sub-F vault アクセシビリティ出力 結合テスト（TC-F-A01〜A05）
+## 11. Sub-F vault アクセシビリティ出力 結合テスト（TC-F-A01〜A06）
 
 > Issue #78 / #74-D。  
 > SSoT: `vault-encryption/test-design/sub-f-cli-subcommands/index.md §15.7`（Rev1）
@@ -438,7 +438,7 @@ TC-F-I10a〜d のうち Windows で skip するものおよび TC-F-I11b も同�
  unlock condition: implementation guarantees print/braille fallback when TTS unavailable, or fake TTS registered in CI)"
 ```
 
-### 11.4 テストケース一覧（TC-F-A01〜A05 / SSoT §15.7 1:1 対応）
+### 11.4 テストケース一覧（TC-F-A01〜A06 / SSoT §15.7 1:1 対応）
 
 > **共通前提条件**: `DaemonSpawn::new()` によるセキュリティ契約（socket 親 `0700` + stat fail fast）が全 TC に適用される（§10.4 冒頭と同一）。
 

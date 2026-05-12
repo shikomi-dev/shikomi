@@ -22,7 +22,7 @@
 |----------|------|-----------|
 | `index.md`（本書） | 概要、レベル戦略、トレーサビリティマトリクス、モック方針、カバレッジ基準 | — |
 | `e2e.md` | E2E テスト設計（`assert_cmd` + `tempfile`）と証跡 | TC-E2E-001〜102 |
-| `integration.md` | UseCase 単位 結合テスト（実 SQLite + `tempfile`）/ §10 Sub-F vault サブコマンド 結合テスト（CLI→IPC V2、`DaemonSpawn` + `expectrl` PTY）/ §10.4.8 インジェクション境界値 / §11 Sub-F アクセシビリティ出力 結合テスト（PDF / BRF / Audio、`#![cfg(unix)]`）| TC-IT-001〜050 / TC-F-I01〜I12（I11a/I11b 含む）/ TC-F-A01〜A05 |
+| `integration.md` | UseCase 単位 結合テスト（実 SQLite + `tempfile`）/ §10 Sub-F vault サブコマンド 結合テスト（CLI→IPC V2、`DaemonSpawn` + `expectrl` PTY）/ §10.4.8 インジェクション境界値 / §11 Sub-F アクセシビリティ出力 結合テスト（PDF / BRF / Audio、`#![cfg(unix)]`）| TC-IT-001〜050 / TC-F-I01〜I12（I11a/I11b 含む）/ TC-F-A01〜A06 |
 | `unit.md` | pure function ユニットテスト + 実装担当への引き継ぎ事項 | TC-UT-001〜091 |
 | `ci.md` | CI 検証ケース、ファイル配置、証跡提出方針、実行コマンド | TC-CI-001〜015 |
 
