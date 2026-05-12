@@ -63,11 +63,27 @@ classDiagram
         +verify_file(path) Result
     }
 
+    class AtomicWriteSession {
+        -conn Connection
+        -new_path PathBuf
+        +new(paths, vault) Result_Self
+        +finalize(self, retry_policy) Result
+    }
+
     class AtomicWriter {
         +detect_orphan(new_path) Result
-        +write_new(new_path, vault) Result
-        +fsync_and_rename(new_path, final_path) Result
         +cleanup_new(new_path) Result
+    }
+
+    class RetryPolicy {
+        <<trait>>
+        +max_attempts() u32
+        +sleep_duration(attempt) Duration
+        +should_retry(raw_os_error) bool
+    }
+
+    class ExponentialBackoffRetryPolicy {
+        +default() Self
     }
 
     class SchemaSql {
@@ -156,7 +172,8 @@ classDiagram
     SqliteVaultRepository ..> VaultLock : acquire on load/save
     SqliteVaultRepository ..> Audit : emits events
     SqliteVaultRepository ..> PermissionGuard : uses
-    SqliteVaultRepository ..> AtomicWriter : uses
+    SqliteVaultRepository ..> AtomicWriter : detect_orphan / cleanup_new
+    SqliteVaultRepository ..> AtomicWriteSession : write + finalize (save)
     SqliteVaultRepository ..> Mapping : uses
     SqliteVaultRepository ..> SchemaSql : uses
     SqliteVaultRepository ..> PersistenceError
@@ -165,10 +182,13 @@ classDiagram
     VaultLock ..> VaultPaths : uses lock path
     VaultLock ..> PersistenceError : Locked
     Audit ..> PersistenceError : read only
-    AtomicWriter ..> Mapping
-    AtomicWriter ..> SchemaSql
-    AtomicWriter ..> PermissionGuard : set 0600
-    AtomicWriter ..> AtomicWriteStage
+    AtomicWriteSession ..> Mapping
+    AtomicWriteSession ..> SchemaSql
+    AtomicWriteSession ..> PermissionGuard : ensure_file(.new / sidecars)
+    AtomicWriteSession ..> AtomicWriteStage
+    AtomicWriteSession ..> PersistenceError
+    AtomicWriteSession ..> RetryPolicy : cfg(windows) rename retry
+    ExponentialBackoffRetryPolicy ..|> RetryPolicy
     AtomicWriter ..> PersistenceError
     Mapping ..> Vault_core
     Mapping ..> VaultHeader_core
@@ -187,7 +207,10 @@ classDiagram
 
 **2. なぜ `VaultPaths` は不変の値オブジェクトにするか**: `dir` から `vault.db` / `vault.db.new` / `vault.db.lock` のパスを派生させるロジックを**1 箇所**に閉じ込めるため。文字列結合を各所で書くと typo（`vault.dbnew` 等）の温床になる（DRY）。不変にすることで save 中の状態変化を防ぐ（Fail Fast）。`new` は 7 段階バリデーション（`../basic-design/security.md` §vault ディレクトリ検証）を通す公開 API。`new_unchecked` は `pub(crate)` の内部 API で `with_dir` 専用（検証スキップ、明示名で危険性を可視化）。
 
-**3. なぜ `AtomicWriter` を別クラスに分離するか**: atomic write は「`.new` への書き込み」「fsync」「rename」「cleanup」の 4 段階があり、各段階で失敗時の責務が異なる。`SqliteVaultRepository::save` に直接書くと関数が 100 行超えになり SRP 違反。`AtomicWriter` は**状態を持たない**（メソッドはいずれも引数の `&VaultPaths` と `&Vault` から計算）、`impl AtomicWriter` の関連関数のみで構成（実質 modulized namespace）。
+**3. `AtomicWriter` / `AtomicWriteSession` の分離設計（Phase 8 完了）**: atomic write は「`.new` への SQLite 書込」「クローズ順序固定 + サイドカー解放」「fsync」「rename（Win: retry）」「cleanup」の 5 段階があり、各段階で失敗時の責務が異なる。`SqliteVaultRepository::save` に直接書くと関数が 100 行超えになり SRP 違反。Phase 8 リファクタで旧 `AtomicWriter` ZST + 静的メソッドを次の 2 型に分解した:
+
+- **`AtomicWriteSession { conn, new_path }`**: SQLite 書込中の状態（開いた `Connection` + `.new` のパス）を保持するセッション型。`new(paths, vault)` でセッション開始、`finalize(self, retry_policy)` の所有権消費で全工程（クローズ → サイドカー DACL → fsync → rename）を順序固定で完結（Tell, Don't Ask、型レベルでクローズ順序を強制）
+- **`AtomicWriter`（ZST 残存）**: `detect_orphan` / `cleanup_new` / `#[cfg(test)] write_new_only` の 3 静的メソッドの名前空間として機能。`write_new` は `AtomicWriteSession::new` に昇格した
 
 **3.1 `AtomicWriter` のクローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `write_new` 内で SQLite `Connection` を扱う際、以下の順序を**契約**として固定する。順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast し、本契約は型では強制できないため doc コメント（`atomic.rs`）と本設計書 SSoT で二重管理する（`./flows.md` §`save` step 6.10〜6.13 と整合）:
 
@@ -203,9 +226,53 @@ classDiagram
 - `PRAGMA wal_checkpoint(TRUNCATE)` / `journal_mode = DELETE` を省く（`-wal` / `-shm` / `-journal` サイドカー残存で Win Indexer が触りに行き rename 競合の温床）
 - `cfg(windows)` rename retry を「根本対策なし」で挿入する（`./flows.md` §`save` step 7.3 / `../basic-design/error.md` §Windows rename PermissionDenied 行で禁止）
 
-**3.2 `AtomicWriteSession` への構造体化リファクタは Phase 8 別 PR に分離**: 上記クローズ順序契約は理想的には `AtomicWriteSession { conn, paths, new_path }` のようなセッション型を作り、`finalize(self) -> Result<()>` の所有権消費メソッドに集約することで**型レベル強制**できる（Tell, Don't Ask）。本 Issue では既存 `AtomicWriter` ZST + 静的メソッド連鎖の構造を維持し、本 PR スコープを「Issue #65 バグ修正 + 契約 SSoT 化」に絞る（KISS、本 PR 肥大化回避）。構造体化は Phase 8 リファクタ専用 PR で実施する（外部レビューでキャプテン決定、合意済）。
+**3.2 `AtomicWriteSession` 構造体化（Phase 8 実装済）**: クローズ順序契約（§3.1）を型レベルで強制するため、`AtomicWriteSession { conn: rusqlite::Connection, new_path: PathBuf }` セッション型を実装した。`paths: &VaultPaths` は参照として `new` / `finalize` に渡す（所有権を持たない）。
 
-**3.3 `permission/windows/*.rs` DACL 適用順序の再点検は本 PR スコープ外（deferred 判断）**: Issue #65 本文と現行 `atomic.rs:177-188` のコメントは「rename 後に DACL 適用」と明記し、test failure（`vault_migration_integration` 5 件）は **rename 段で発火**しているため DACL 適用順序とは独立した経路（DB ハンドル / サイドカー / Win file-handle semantics 由来）と切り分けられる。本 PR の rename retry 補強と DACL 適用順序の再評価は**論点が独立**しており、本 PR で同時に弄ると変更原因が混在しレビュー不能になる。**結論**: DACL 適用順序の再点検は本 PR では行わず、Phase 8 リファクタ PR（`AtomicWriteSession` 構造体化）と同タイミングで「rename 前 DACL 設定 + rename 後の所有者保持検証」を再評価するスコープに含める。本判断を SSoT として本箇所に記録し、レビュー時の沈黙を「Boy Scout 違反」と誤認されないよう明文化する（ペテルギウス工程1指摘 §4 への応答）。
+- `AtomicWriteSession::new(paths: &VaultPaths, vault: &Vault) -> Result<AtomicWriteSession>`: `.new` 作成 → パーミッション設定 → `Connection::open` → PRAGMA/DDL → `vault_header` + `records` を 1 トランザクションで INSERT → `COMMIT` までを実行し、**`conn` を保持したまま** `AtomicWriteSession` を返す
+- `AtomicWriteSession::finalize(self, retry_policy: &dyn RetryPolicy) -> Result<()>`: 所有権を消費する形で以下を順序固定で実行する
+  1. `execute("PRAGMA wal_checkpoint(TRUNCATE)")` — WAL サイドカー物理空化
+  2. `execute("PRAGMA journal_mode = DELETE")` — close 時サイドカー物理消去契約の再強制
+  3. `conn.close()` 明示呼出。失敗時は `PersistenceError::Sqlite` で伝播し `cleanup_new(new_path)` を best-effort 実行
+  4. サイドカー候補（`".new-journal"` / `".new-wal"` / `".new-shm"`）の `PermissionGuard::ensure_file` 適用（存在するもののみ）
+  5. `File::open(new_path)?.sync_all()?` — FsyncTemp
+  6. `File::open(dir)?.sync_all()?` — FsyncDir（Unix のみ、POSIX 2008 rename メタデータ永続化）
+  7. rename（`std::fs::rename`、Win 限定で `retry_policy` に従う指数バックオフ retry + symlink 再検証、§3.4 `RetryPolicy` 参照）
+
+**型レベルの保証**: `AtomicWriteSession` を消費しなければ（= `finalize` を呼ばなければ）その後の処理に進めない。`Drop` 実装で「`finalize` 未呼出のまま drop された場合は `cleanup_new` を best-effort 実行し panic しない」とし、安全な失敗を保証する（Fail Safe）。
+
+**3.3 Windows DACL 適用順序の確定（Phase 8 決定）**: Phase 8 で調査した結果、`MoveFileExW(MOVEFILE_REPLACE_EXISTING)` を**同一ボリューム内**で使用した場合、ソースファイル（`.new`）のファイルオブジェクトが宛先パス（`vault.db`）に移動するため、**ソースのセキュリティ記述子がそのまま保持される**。旧 `vault.db` のファイルオブジェクト（SD を含む）は破棄される。`std::fs::rename`（内部的に `MoveFileExW` へ展開）を採用している本設計において、DACL 適用タイミングの確定判断は以下の通り:
+
+**確定: rename 前に `.new` へ DACL 設定**
+
+- `AtomicWriteSession::new` 内で `PermissionGuard::ensure_file(new_path)` を呼び、owner-only DACL（ACE 1 個・`SE_DACL_PROTECTED`・`ACCESS_ALLOWED_ACE_TYPE`・完全マスク）を設定する（`./flows.md` §`save` step 6.4 と整合）
+- `MoveFileExW` が同一ボリューム内でソース SD を保持するため、rename 後の `vault.db` は `.new` の DACL を引き継ぐ（別ボリューム / ネットワークドライブは vault ディレクトリとして `VaultPaths::new` の `canonicalize` + 保護領域チェックで実用上排除されるため考慮外）
+- `load` 冒頭の `verify_file(vault.db)` が 4 不変条件（`SE_DACL_PROTECTED` / ACE 数 1 / トラスティ SID 一致 / AccessMask 完全一致）を検証し、DACL の保持を確認する（`./flows.md` §`verify_file` 制御フロー）
+- **所有者 SID を touch しない方針は維持**: `ensure_file` の `SetNamedSecurityInfoW` は `OWNER_SECURITY_INFORMATION` を落とし DACL のみ書換（`../basic-design/security.md` §Windows owner-only DACL の適用戦略 と整合）
+
+一次情報出典: Microsoft Learn "MoveFileExW" https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
+
+**3.4 `RetryPolicy` trait の切り出し（Phase 8 実装済）**: Win rename retry の振る舞いを trait に切り出すことで、テスト時に「実際の sleep なし・即時 fail の注入」が可能になる（旧設計は定数 `MAX_RETRIES = 5` / `base_ms = 50` をハードコードしており、CI で retry 発火テストが実際の wait を伴っていた）。
+
+`RetryPolicy` trait の定義:
+
+| メソッド | シグネチャ | 責務 |
+|---------|-----------|------|
+| `max_attempts` | `fn max_attempts(&self) -> u32` | 最大 retry 回数（超えたら `AtomicWriteFailed { stage: Rename }` で return） |
+| `sleep_duration` | `fn sleep_duration(&self, attempt: u32) -> std::time::Duration` | `attempt` 番目（1〜）の retry 前 sleep 量を返す。jitter を内部で生成してよい |
+| `should_retry` | `fn should_retry(&self, raw_os_error: i32) -> bool` | OS エラーコードが一過性エラーか否かを判定。`cfg(windows)` の `ERROR_ACCESS_DENIED (5)` / `ERROR_SHARING_VIOLATION (32)` / `ERROR_LOCK_VIOLATION (33)` → true、その他 → false |
+
+`ExponentialBackoffRetryPolicy` (production default):
+
+- `max_attempts = 5`、`base_ms = 50`、`jitter_ms = 25`（`OsRng` で `±25ms` 一様乱数）
+- `sleep_duration(attempt)` = `50ms × 2^(attempt-1) ± 25ms`（指数バックオフ、`../basic-design/security.md` §jitter テーブルと整合）
+- `should_retry` は上記 3 エラーコードのみ true
+- `Default` impl で構築可（`ExponentialBackoffRetryPolicy::default()`）
+
+**設計判断**:
+
+- `RetryPolicy` は `Send + Sync` 境界を要求しない（`AtomicWriteSession::finalize` の呼出はシングルスレッド内で完結する、`&dyn RetryPolicy` で渡す）
+- `cfg(windows)` のみ `should_retry` が意味を持つ。Unix では `RetryPolicy` を渡しても `sleep_duration` / `should_retry` は呼ばれない（`cfg(unix)` のリネームは即 fail fast、retry なし）
+- テスト用 `NoSleepRetryPolicy { max_attempts: 1 }` を `#[cfg(test)]` で定義し、TC-I29 / TC-I29-B の retry 発火テストで実際の sleep を排除する（CI 高速化、Non-Functional: テスト完了時間の削減）
 
 **4. なぜ `PermissionGuard` を別クラスに分離するか**: OS 別実装（Unix / Windows）を `cfg(unix)` / `cfg(windows)` で切り分けるが、`SqliteVaultRepository` の制御フローを OS 依存にしたくない。`PermissionGuard` が OS 非依存の 4 メソッド（`ensure_dir` / `ensure_file` / `verify_dir` / `verify_file`）を公開し、内部で `cfg_if!` で実装選択（Dependency Inversion の OS レベル適用）。
 

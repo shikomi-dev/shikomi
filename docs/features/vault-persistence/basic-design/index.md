@@ -31,7 +31,7 @@
 | REQ-P02, P03, P04, P05, P11, P12 | `shikomi_infra::persistence::sqlite` | `crates/shikomi-infra/src/persistence/sqlite/mod.rs` | `SqliteVaultRepository` 実装の入口、トランザクション制御 |
 | REQ-P03 | 〃 `::schema` | `crates/shikomi-infra/src/persistence/sqlite/schema.rs` | `CREATE TABLE`・`CHECK` 制約・`PRAGMA` の SQL 定数 |
 | REQ-P03, P09 | 〃 `::mapping` | `crates/shikomi-infra/src/persistence/sqlite/mapping.rs` | ドメイン型 ↔ SQLite 行の写像（シリアライズ / 検証付きデシリアライズ） |
-| REQ-P04, P05 | 〃 `::atomic` | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` | atomic write（`.new` への SQLite 書込 → **DB ハンドル明示クローズ + WAL/journal サイドカー解放** → fsync → rename → Win 限定 rename リトライ補強）、`.new` 残存検出。**ハンドル解放順序は契約**（OS 別 file-handle semantics の差を吸収する責務、`./error.md` §Windows rename PermissionDenied 経路 / `../detailed-design/flows.md` §`save` step 6-7） |
+| REQ-P04, P05 | 〃 `::atomic` | `crates/shikomi-infra/src/persistence/sqlite/atomic.rs` | `AtomicWriteSession { conn, new_path }` セッション型（Phase 8 実装）: `new(paths, vault)` で SQLite 書込 → COMMIT まで実行し `conn` 保持、`finalize(self, retry_policy)` の所有権消費で checkpoint / journal_mode / **DB ハンドル明示クローズ** / サイドカー DACL / fsync / rename（Win retry）を型レベル順序保証で完結。`AtomicWriter` ZST は `detect_orphan` / `cleanup_new` / `write_new_only(#[cfg(test)])` の名前空間として残存。`RetryPolicy` trait + `ExponentialBackoffRetryPolicy` で retry 振る舞いをテスト注入可能（`../detailed-design/classes.md` §3.2 / §3.4）。`.new` 残存検出は `detect_orphan` が担う |
 | REQ-P06, P07 | `shikomi_infra::persistence::permission` | `crates/shikomi-infra/src/persistence/permission/mod.rs` | OS 非依存の検証 API。内部で `cfg_if!` により `unix.rs` / `windows.rs` へ委譲 |
 | REQ-P06 | 〃 `::unix` | `crates/shikomi-infra/src/persistence/permission/unix.rs` | `cfg(unix)` のみ有効。`0o700` / `0o600` 設定・検証 |
 | REQ-P07 | 〃 `::windows` | `crates/shikomi-infra/src/persistence/permission/windows.rs` | `cfg(windows)` のみ有効。NTFS owner-only DACL 設定・検証（`SetNamedSecurityInfoW` / `GetNamedSecurityInfoW`）。**本モジュールは本 Issue で スタブ → 本実装に置換**、関連ヘルパは `pub(super)` で同ファイル内に閉じる。unsafe boundary は**本ファイル内のみ**（`./security.md` §unsafe_code 整合方針 / §Windows owner-only DACL の適用戦略 と詳細設計 `detailed-design/classes.md` §13 を参照） |
@@ -141,11 +141,21 @@ classDiagram
         +rows_to_vault responsibility
     }
 
+    class AtomicWriteSession {
+        +new responsibility
+        +finalize responsibility
+    }
+
     class AtomicWriter {
-        +write_new responsibility
-        +fsync_and_rename responsibility
         +detect_orphan responsibility
         +cleanup_new responsibility
+    }
+
+    class RetryPolicy {
+        <<trait>>
+        +max_attempts responsibility
+        +sleep_duration responsibility
+        +should_retry responsibility
     }
 
     class PermissionGuard {
@@ -164,8 +174,10 @@ classDiagram
     SqliteVaultRepository --> VaultPaths : owns
     SqliteVaultRepository --> Schema : uses
     SqliteVaultRepository --> Mapping : uses
-    SqliteVaultRepository --> AtomicWriter : uses
+    SqliteVaultRepository --> AtomicWriteSession : write + finalize (save)
+    SqliteVaultRepository --> AtomicWriter : detect_orphan / cleanup_new
     SqliteVaultRepository --> PermissionGuard : uses
+    AtomicWriteSession --> RetryPolicy : cfg(windows) rename retry
     SqliteVaultRepository ..> VaultLock : acquire on load/save
     SqliteVaultRepository ..> Audit : emits events
     SqliteVaultRepository ..> Vault_core : load returns / save receives
@@ -217,23 +229,25 @@ classDiagram
 ### REQ-P01 / REQ-P02 / REQ-P04 / REQ-P11 / REQ-P13 / REQ-P14: `SqliteVaultRepository::save(vault)`
 
 1. `audit::entry_save(&self.paths, vault.record_count())` を発行（REQ-P14、開始ログ）
-2. `vault.protection_mode()` が `Encrypted` なら **`UnsupportedYet` を即 return**（REQ-P11、Fail Fast）
+2. **（Sub-D Rev で削除）** 旧: `protection_mode == Encrypted` で `UnsupportedYet` 即 return。新: 暗号化モードも通常経路で進行
 3. `PermissionGuard::ensure_dir(paths.dir)` でディレクトリ作成（既存なら `0o700` を強制、Windows は ACL 強制）
 4. **`VaultLock::acquire_exclusive(&self.paths)?`** で排他ロック取得（REQ-P13）。別プロセスが排他/共有ロックを保持中なら `Locked` で即 return（非ブロッキング、待機・再試行しない）。取得した `VaultLock` は step 7 までスコープに生存し、drop 時に自動解放（RAII）
 5. `AtomicWriter::detect_orphan(paths.vault_db_new)` で `.new` 残存検出（残っていれば `OrphanNewFile` を返し中断、ユーザ明示操作を待つ、AC-14 の save 側検証）
-6. `AtomicWriter::write_new(paths.vault_db_new)` のスコープで一時 SQLite DB を作成:
+6. `let session = AtomicWriteSession::new(&self.paths, &vault)?` で一時 SQLite DB を作成しセッションを開く（`../detailed-design/classes.md` §3.2 参照）:
    - `Connection::open_with_flags(OpenFlags::SQLITE_OPEN_CREATE \| SQLITE_OPEN_READ_WRITE \| SQLITE_OPEN_NO_MUTEX)`
-   - **作成直後**にファイルパーミッションを `0o600` に設定（Unix） / 所有者 ACL 設定（Windows）
-   - `PRAGMA application_id = 0x73686B6D`、`PRAGMA user_version = 1`、`PRAGMA journal_mode = DELETE` を発行
+   - `PermissionGuard::ensure_file(new_path)` で `0o600` 設定（Unix） / owner-only DACL 設定（Windows、**rename 前 DACL 適用戦略確定**、`../detailed-design/classes.md` §3.3）
+   - `PRAGMA application_id`、`PRAGMA user_version`、`PRAGMA journal_mode = DELETE` を発行
    - `Schema::CREATE_VAULT_HEADER` / `Schema::CREATE_RECORDS` で DDL 適用
    - **単一トランザクション**で `vault_header` に 1 行 insert、`records` に全レコード insert（`tx.execute_batch` ではなく `params!` バインドで個別 insert）
-   - COMMIT
-   - `Connection` drop（SQLite 内部 flush）
-7. `AtomicWriter::fsync_and_rename`:
-   - `.new` を再 open し `File::sync_all()`
-   - 親ディレクトリを open し `File::sync_all()`（Unix で rename メタデータの永続化に必要、POSIX 2008）
-   - `std::fs::rename(paths.vault_db_new, paths.vault_db)`（Unix）または `windows::Win32::Storage::FileSystem::ReplaceFileW`（Windows）
-   - rename 失敗時は `.new` を削除し `AtomicWriteFailed { stage: Rename, ... }` を返す
+   - COMMIT。`conn` は `AtomicWriteSession` が保持し続ける
+7. `session.finalize(&ExponentialBackoffRetryPolicy::default())?` — `AtomicWriteSession` を所有権消費し以下を順序固定で実行（`../detailed-design/classes.md` §3.2 参照）:
+   - `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA journal_mode = DELETE` でサイドカー物理消去契約を固定
+   - `conn.close()` 明示呼出（`Drop` 任せ禁止）。失敗時は `Sqlite` エラーで return + `.new` best-effort 削除
+   - サイドカー候補（`.new-journal` / `.new-wal` / `.new-shm`）に `ensure_file` を適用（存在するもののみ）
+   - `.new` を再 open し `File::sync_all()`（FsyncTemp）
+   - 親ディレクトリを open し `File::sync_all()`（FsyncDir、Unix のみ。POSIX 2008 rename メタデータ永続化）
+   - `std::fs::rename`（Unix / Windows 共通。**`ReplaceFileW` 直接呼出は不採用**、`../detailed-design/flows.md` §`save` step 7.7 参照）。Win 限定で `ExponentialBackoffRetryPolicy` に従う指数バックオフ retry + symlink 再検証
+   - rename 失敗時は `.new` を best-effort 削除し `AtomicWriteFailed { stage: Rename, ... }` を返す
 8. `audit::exit_ok_save(record_count, bytes_written, elapsed_ms)` を発行（REQ-P14、成功ログ）
 9. `VaultLock` が drop され排他ロックが自動解放される
 10. `Ok(())`

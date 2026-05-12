@@ -105,13 +105,41 @@ RetryOutcome
 - `fn verify_dir(path: &Path) -> Result<()>` — 既存ディレクトリの mode / ACL を検証
 - `fn verify_file(path: &Path) -> Result<()>` — 既存ファイルの mode / ACL を検証
 
-### `AtomicWriter`（`pub(crate)`、関連関数の集合、状態なし）
+### `AtomicWriteSession`（`pub(crate)`、セッション型、Phase 8 新設）
 
-- `fn detect_orphan(new_path: &Path) -> Result<()>` — `.new` が存在したら `Err(OrphanNewFile)`
-- `fn write_new(paths: &VaultPaths, vault: &Vault) -> Result<()>` — `.new` 作成 → PRAGMA → DDL → Tx 内 insert → COMMIT → close。OS パーミッション設定を作成直後に行う
-- `#[cfg(test)] fn write_new_only(paths: &VaultPaths, vault: &Vault) -> Result<()>` — **テスト専用フック**（AC-06 対応）。`write_new` と同一だが、`fsync_and_rename` を呼ばずに `.new` を残したまま return する。atomic write の中断状態を決定的に再現するため
-- `fn fsync_and_rename(paths: &VaultPaths) -> Result<()>` — `.new` を open し `sync_all`、親ディレクトリを open し `sync_all`、rename / ReplaceFileW
-- `fn cleanup_new(new_path: &Path) -> Result<()>` — best-effort 削除。失敗時は `tracing::warn!` でログ、上位には伝播しない（呼出側のエラーを上書きしない）
+SQLite 書込中の `rusqlite::Connection` を保持するセッション型。`finalize(self, ...)` の所有権消費でクローズ順序契約を型レベルで強制する（`./classes.md` §3.1 / §3.2 参照）。
+
+- `pub(crate) fn new(paths: &VaultPaths, vault: &Vault) -> Result<AtomicWriteSession>` — `.new` 作成 → OS パーミッション設定 → `Connection::open` → PRAGMA / DDL → 単一 Tx 内 insert → COMMIT までを実行し `conn` を保持したセッションを返す
+- `pub(crate) fn finalize(self, retry_policy: &dyn RetryPolicy) -> Result<()>` — 所有権を消費して以下を順序固定で実行: `PRAGMA wal_checkpoint(TRUNCATE)` → `PRAGMA journal_mode = DELETE` → `conn.close()`（失敗時は `Sqlite` エラー + best-effort `.new` 削除）→ サイドカー DACL 適用 → FsyncTemp → FsyncDir（Unix） → rename（Win: `retry_policy` に従う retry + symlink 再検証）
+- `Drop` 実装: `finalize` 未呼出のまま drop された場合は `AtomicWriter::cleanup_new` を best-effort 実行し panic しない（Fail Safe）
+
+### `AtomicWriter`（`pub(crate)`、ZST 名前空間、静的ヘルパのみ）
+
+`write_new` / `fsync_and_rename` は `AtomicWriteSession` に昇格。残存する静的メソッドのみ:
+
+- `pub(crate) fn detect_orphan(new_path: &Path) -> Result<()>` — `.new` が存在したら `Err(OrphanNewFile)`
+- `pub(crate) fn cleanup_new(new_path: &Path) -> Result<()>` — best-effort 削除。失敗時は `tracing::warn!` でログ、上位には伝播しない（呼出側のエラーを上書きしない）
+- `#[cfg(test)] pub(crate) fn write_new_only(paths: &VaultPaths, vault: &Vault) -> Result<()>` — **テスト専用フック**（AC-06 対応）。`AtomicWriteSession::new` と同一ロジックで `.new` を書き込むが `finalize` を呼ばずに return し `.new` を残す。atomic write 中断状態を決定的に再現するため
+
+### `RetryPolicy`（`pub(crate)` trait）
+
+Win rename retry の振る舞いを抽象化し、テスト注入を可能にする（`./classes.md` §3.4 参照）。
+
+| メソッド | シグネチャ | 責務 |
+|---------|-----------|------|
+| `max_attempts` | `fn max_attempts(&self) -> u32` | 最大 retry 回数 |
+| `sleep_duration` | `fn sleep_duration(&self, attempt: u32) -> std::time::Duration` | attempt 番目の sleep 量（jitter 込み）|
+| `should_retry` | `fn should_retry(&self, raw_os_error: i32) -> bool` | OS エラーが一過性か否かを判定 |
+
+### `ExponentialBackoffRetryPolicy`（`pub(crate)`、`RetryPolicy` の production default 実装）
+
+- `Default::default()` で構築: `max_attempts = 5`、`base_ms = 50`、`jitter_ms = 25`（`OsRng` `±25ms` 一様乱数）
+- `sleep_duration(attempt)` = `50ms × 2^(attempt-1) ± 25ms`（最悪 ~1675ms / 平均 ~1550ms、`../basic-design/security.md` §jitter テーブルと整合）
+- `should_retry(raw_os_error)`: `cfg(windows)` で `ERROR_ACCESS_DENIED (5)` / `ERROR_SHARING_VIOLATION (32)` / `ERROR_LOCK_VIOLATION (33)` → `true`、他 → `false`。`cfg(not(windows))` では常に `false`（Unix では rename を retry しない）
+
+**テスト用実装**（`#[cfg(test)]` のみ）:
+
+- `NoSleepRetryPolicy { max_attempts: 1 }` — `sleep_duration` は `Duration::ZERO` を返す。TC-I29 / TC-I29-B の retry 発火テストで実際の sleep を排除し CI 高速化
 
 ### `Mapping`（`pub(crate)`、関連関数の集合、状態なし）
 

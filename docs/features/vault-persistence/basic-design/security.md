@@ -132,7 +132,11 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
 
 1. **retry 直前の symlink 再検証**: 各 retry 試行の `sleep` 後、rename 再実行**直前**に `fs::symlink_metadata(vault.db)` と `fs::symlink_metadata(new_path)` を呼び、`is_symlink()` が true なら retry 打ち切り、`InvalidVaultDir { reason: SymlinkNotAllowed }` で fail fast
 2. **junction（NTFS reparse point）検出**: Windows では `is_symlink()` だけでなく `MetadataExt::file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0` も検査（`std::os::windows::fs::MetadataExt`、Microsoft Learn "File Attributes" https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants）。`mklink /J` で作られた junction も拒否
-3. **dir-fd 化（次段）**: 完全な TOCTOU 排除には親ディレクトリを open しっぱなしにして相対パスで操作する dir-fd パターンが望ましいが、Windows の `O_DIRECTORY` 相当は `FILE_FLAG_BACKUP_SEMANTICS` 経由で煩雑。本 Issue では symlink 再検証で実用的に絞り、dir-fd 化は **Phase 8 リファクタ PR**（`AtomicWriteSession` 構造体化と同時）で再評価する
+3. **dir-fd 化（Phase 8 決定: 不採用）**: 完全な TOCTOU 排除には親ディレクトリを open しっぱなしにして相対パスで操作する dir-fd パターンが望ましいが、Phase 8 で再評価した結果**不採用**とする。採否根拠:
+   - `AtomicWriteSession.finalize(self)` の所有権消費パターンにより Connection クローズとサイドカー解放が型レベルで強制され、書込操作の構造的安全性が確立された
+   - Unix: `VaultPaths::new` の 7 段階バリデーション（シンボリックリンク全面禁止 + `canonicalize` + 保護領域チェック）+ retry 直前の symlink 再検証で TOCTOU の攻撃面は実用的に十分絞られている
+   - Windows: `FILE_FLAG_BACKUP_SEMANTICS` 経由の dir-fd 相当 API（`NtCreateFile` 等）は公開ドキュメントが乏しく undocumented 依存のリスクがある
+   - YAGNI: 現行の多層防御（パス検証 + DACL設定 + symlink再検証 + atomic rename）で要件を満たしており、dir-fd 追加による実用的な攻撃面縮小は限定的
 
 #### retry 監査ログ（A09）
 
@@ -167,7 +171,7 @@ Unix `0600` / `0700` に相当する「所有者のみ read/write」を NTFS で
    - **線形 50ms × 5 では Defender / Search Indexer (~250ms+ 保持) を吸収不可**（Bug-G-001 §3 CI 観測）
    - **Defender 解放までの待機を attempt 3 (~350ms 累積) で完了**でき、典型 race を救う
    - 攻撃者制御の長期 lock（>1675ms）に対しては `outcome=exhausted` で fail fast し DoS 兆候を上位通報（責務分離、KISS）
-   - Phase 8 リファクタで envelope encryption / I/O 統計連携が入る時に retry policy も `RetryPolicy` trait に切り出す予定（YAGNI、本 Issue では定数 + 指数固定で十分）
+   - **Phase 8 で `RetryPolicy` trait を実装済み**: retry 振る舞い（`max_attempts` / `sleep_duration(attempt)` / `should_retry(raw_os_error)`）を `RetryPolicy` trait に切り出し、`AtomicWriteSession::finalize(self, retry_policy: &dyn RetryPolicy)` でテスト注入可能にした（`../detailed-design/classes.md` §3.4 参照）。production default は `ExponentialBackoffRetryPolicy`、CI テスト用に `NoSleepRetryPolicy` を `#[cfg(test)]` で提供
 
 #### `Connection::close()` 失敗時の `.new` クリーンアップ
 
