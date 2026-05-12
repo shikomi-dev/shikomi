@@ -54,10 +54,10 @@
 | OS | hint 行（英語） |
 |----|--------------|
 | Linux / macOS 基本 | `hint: start the daemon with: shikomi-daemon &` |
-| macOS launchd（Sub-B 完了後追記予定）| `hint: or enable autostart: shikomi daemon enable-autostart` |
 | Windows | `hint: start the daemon with: Start-Process -NoNewWindow shikomi-daemon` |
+| 全 OS 共通（Sub-B 完了 — Issue #127 / #134）| `hint: or enable autostart: shikomi daemon install` |
 
-**Phase 2 過渡期（Sub-B 未完了）**: Sub-B（Issue #127）完了まで、autostart hint は出力しない。3 OS の手動起動コマンドのみ案内する。Sub-B 完了後に hint 文面を更新する別 PR を立てる。
+**Sub-B 完了（Issue #127）**: `shikomi daemon install` サブコマンドが実装済み。autostart hint は Issue #134 で `render_daemon_not_running()` に追加済み。確定文面は `daemon-ipc/basic-design/error.md §MSG-CLI-110 確定文面` を参照。
 
 ### REQ-DDM-005: vault サブコマンドの IPC 強制を `--no-ipc` から保護
 

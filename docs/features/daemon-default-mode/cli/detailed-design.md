@@ -184,10 +184,10 @@ hint: start the daemon first: shikomi-daemon &   (Linux/macOS)
 hint: start the daemon first: Start-Process -NoNewWindow shikomi-daemon   (Windows)
 ```
 
-**Sub-B 移行後（Issue #127 完了後に別 PR で追記）**:
+**Sub-B 完了（Issue #127 / #134 で実装済み）**:
 
 ```
-hint: or enable autostart: shikomi daemon enable-autostart
+hint: or enable autostart: shikomi daemon install
 ```
 
 **設計判断**:

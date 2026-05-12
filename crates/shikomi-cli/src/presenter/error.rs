@@ -83,6 +83,12 @@ fn render_daemon_not_running(path: &std::path::Path, locale: Locale) -> String {
             "hint: または --vault-dir <DIR> で vault.db の所在ディレクトリを指定してください（同ディレクトリの shikomi.sock が daemon socket として使われます）\n",
         );
     }
+    // Issue #134 (MSG-CLI-110): Sub-B 完了後の autostart hint 追加
+    // (basic-design.md §Sub-B完了後に更新するメッセージ)
+    out.push_str("hint: or enable autostart: shikomi daemon install\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str("hint: または自動起動を有効にする場合: shikomi daemon install\n");
+    }
     out
 }
 
@@ -438,5 +444,40 @@ mod tests {
                 "MSG-CLI-110 must contain 'not running' for locale {locale:?}: {rendered:?}"
             );
         }
+    }
+
+    /// TC-UT-158b (Issue #134 / MSG-CLI-110): `render_daemon_not_running()` の出力に
+    /// `"shikomi daemon install"` autostart hint が含まれること。
+    ///
+    /// 英語・JapaneseEn 両ロケールで検証する。
+    /// 設計根拠: basic-design.md §Sub-B完了後に更新するメッセージ / §テスト戦略 TC-UT-158 拡張
+    #[test]
+    fn tc_ut_158b_daemon_not_running_contains_autostart_hint_for_english_locale() {
+        use std::path::PathBuf;
+        let err = CliError::DaemonNotRunning(PathBuf::from("/tmp/test.sock"));
+        let rendered = render_error(&err, Locale::English);
+        assert!(
+            rendered.contains("shikomi daemon install"),
+            "MSG-CLI-110 English must contain autostart hint 'shikomi daemon install': {rendered:?}"
+        );
+    }
+
+    /// TC-UT-158c (Issue #134 / MSG-CLI-110): JapaneseEn ロケールで
+    /// `"shikomi daemon install"` と日本語 hint 行の両方が含まれること。
+    ///
+    /// 設計根拠: basic-design.md §Sub-B完了後に更新するメッセージ / §テスト戦略 TC-UT-158 拡張
+    #[test]
+    fn tc_ut_158c_daemon_not_running_contains_autostart_hint_for_japanese_en_locale() {
+        use std::path::PathBuf;
+        let err = CliError::DaemonNotRunning(PathBuf::from("/tmp/test.sock"));
+        let rendered = render_error(&err, Locale::JapaneseEn);
+        assert!(
+            rendered.contains("shikomi daemon install"),
+            "MSG-CLI-110 JapaneseEn must contain 'shikomi daemon install': {rendered:?}"
+        );
+        assert!(
+            rendered.contains("または自動起動を有効にする場合"),
+            "MSG-CLI-110 JapaneseEn must contain Japanese autostart hint: {rendered:?}"
+        );
     }
 }
