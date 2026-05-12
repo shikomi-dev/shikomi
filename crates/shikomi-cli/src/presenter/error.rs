@@ -83,6 +83,12 @@ fn render_daemon_not_running(path: &std::path::Path, locale: Locale) -> String {
             "hint: または --vault-dir <DIR> で vault.db の所在ディレクトリを指定してください（同ディレクトリの shikomi.sock が daemon socket として使われます）\n",
         );
     }
+    // Issue #134 (MSG-CLI-110): Sub-B 完了後の autostart hint 追加
+    // (basic-design.md §Sub-B完了後に更新するメッセージ)
+    out.push_str("hint: or enable autostart: shikomi daemon install\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str("hint: または自動起動を有効にする場合: shikomi daemon install\n");
+    }
     out
 }
 
