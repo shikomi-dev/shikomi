@@ -34,6 +34,7 @@ use super::error::DataPortabilityError;
 // -------------------------------------------------------------------
 
 /// `import_records` の正常系戻り値。
+#[derive(Debug)]
 pub struct ImportSummary {
     /// 新規追加したレコード件数。
     pub added: usize,

@@ -532,6 +532,122 @@ mod tests {
         }
     }
 
+    // -------------------------------------------------------------------
+    // Issue #141: data-portability Presenter / ExitCode UT — TC-UT-205〜208
+    // 設計根拠: docs/features/data-portability/cli/test-design.md §5.3
+    // -------------------------------------------------------------------
+
+    /// TC-UT-205 (REQ-DP-010): data-portability 新バリアント 5 種が全て
+    /// `ExitCode::UserError`（exit 1）に写像される（SSoT 拡張の局所検証）。
+    ///
+    /// `tc_f_u15` の全体 SSoT 網羅マトリクスと直交し、本 TC は Issue #141 由来の
+    /// 5 バリアントだけに絞った焦点検証として機能する。
+    #[test]
+    fn tc_ut_205_data_portability_error_variants_all_map_to_exit_1() {
+        use crate::error::ExitCode;
+
+        let cases: Vec<(&str, CliError)> = vec![
+            ("ExportImportVaultLocked", CliError::ExportImportVaultLocked),
+            (
+                "ExportOutputFileExists",
+                CliError::ExportOutputFileExists {
+                    path: std::path::PathBuf::from("/tmp/out.json"),
+                },
+            ),
+            (
+                "ImportConflict(empty)",
+                CliError::ImportConflict { ids: vec![] },
+            ),
+            (
+                "ImportDeserializationFailed",
+                CliError::ImportDeserializationFailed {
+                    reason: "reason".to_owned(),
+                },
+            ),
+            (
+                "ImportValidationFailed(UnknownFormatVersion)",
+                CliError::ImportValidationFailed(
+                    shikomi_core::portability::ImportValidationError::UnknownFormatVersion {
+                        found: 999,
+                    },
+                ),
+            ),
+        ];
+        for (name, err) in cases {
+            assert_eq!(
+                ExitCode::from(&err),
+                ExitCode::UserError,
+                "TC-UT-205: {name} should map to ExitCode::UserError (exit 1)"
+            );
+        }
+    }
+
+    /// TC-UT-206 (REQ-DP-011 / AC-DP-10): `format_conflict_ids` — 4 件以下は
+    /// 全 ID をそのままカンマ区切りで返す（省略なし境界値）。
+    #[test]
+    fn tc_ut_206_format_conflict_ids_four_or_fewer_returns_all_ids() {
+        let ids: Vec<String> = vec![
+            "id-1".to_owned(),
+            "id-2".to_owned(),
+            "id-3".to_owned(),
+            "id-4".to_owned(),
+        ];
+        let result = format_conflict_ids(&ids);
+        assert_eq!(
+            result, "id-1, id-2, id-3, id-4",
+            "4 IDs must be joined without ellipsis"
+        );
+    }
+
+    /// TC-UT-207 (REQ-DP-011 / AC-DP-10): `format_conflict_ids` — 5 件以上は
+    /// 先頭 4 件 + `... (N more)` 形式で省略される（terminal 溢れ防止境界値）。
+    #[test]
+    fn tc_ut_207_format_conflict_ids_five_or_more_shows_ellipsis() {
+        let ids: Vec<String> = vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned(),
+            "d".to_owned(),
+            "e".to_owned(),
+            "f".to_owned(),
+        ];
+        let result = format_conflict_ids(&ids);
+        assert!(
+            result.contains("a, b, c, d"),
+            "must contain first 4 IDs 'a, b, c, d', got: {result:?}"
+        );
+        assert!(
+            result.contains("... (2 more)"),
+            "must contain '... (2 more)' for 6 total IDs, got: {result:?}"
+        );
+    }
+
+    /// TC-UT-208 (REQ-DP-010/011 / AC-DP-08): `render_error` —
+    /// `ImportValidationFailed(RedactedPayload)` → MSG-CLI-144 文面が出力される。
+    ///
+    /// `render_error` → `render_import_validation_redacted` dispatch の検証。
+    #[test]
+    fn tc_ut_208_render_error_import_validation_redacted_returns_msg_cli_144() {
+        let err = CliError::ImportValidationFailed(
+            shikomi_core::portability::ImportValidationError::RedactedPayload {
+                id: "test-id-xyz".to_owned(),
+            },
+        );
+        let out = render_error(&err, Locale::English);
+        assert!(
+            out.contains("cannot import record test-id-xyz"),
+            "must contain 'cannot import record test-id-xyz', got: {out:?}"
+        );
+        assert!(
+            out.contains("payload is redacted"),
+            "must contain 'payload is redacted', got: {out:?}"
+        );
+        assert!(
+            out.contains("re-export"),
+            "must contain 're-export' hint, got: {out:?}"
+        );
+    }
+
     /// TC-UT-158b (Issue #134 / MSG-CLI-110): `render_daemon_not_running()` の出力に
     /// `"shikomi daemon install"` autostart hint が含まれること。
     ///
