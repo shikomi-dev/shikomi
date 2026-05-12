@@ -14,7 +14,7 @@
 | テストレベル | システムテスト（subprocess 起動によるブラックボックス。E2E の一歩手前。IT / UT より粗粒度）|
 | 実行環境 | CI 3 OS matrix（Linux / macOS / Windows）|
 | テストフレームワーク | `assert_cmd` + `predicates`（`shikomi-cli` / `shikomi-daemon` 共に）|
-| 配置 | `crates/shikomi-cli/tests/st_default_mode*.rs`（Sub-A）/ Sub-B は別 PR で追加 |
+| 配置 | `crates/shikomi-cli/tests/st_default_mode*.rs`（Sub-A）/ Sub-B は Issue #127 / PR #133 で追加済み |
 
 ## 2. 対応受入基準
 
