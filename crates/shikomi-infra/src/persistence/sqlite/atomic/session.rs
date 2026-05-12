@@ -48,6 +48,7 @@ impl AtomicWriteSession {
     /// - ファイル作成失敗: `PersistenceError::AtomicWriteFailed { stage: PrepareNew }`
     /// - パーミッション設定失敗: `PersistenceError::InvalidPermission` / `PersistenceError::Io`
     /// - `SQLite` エラー（PRAGMA / DDL / TX / COMMIT）: `PersistenceError::Sqlite`
+    ///
     /// `busy_timeout` は `from_directory_with_busy_timeout` 経由で構築した
     /// `SqliteVaultRepository` の場合のみ `Some`。`vault.db.new` は新規ファイルのため
     /// 他コネクションとの競合は起きないが、将来の WAL 移行等も見据えて全接続に適用する

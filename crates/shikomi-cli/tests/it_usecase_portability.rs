@@ -1,7 +1,7 @@
 //! 結合テスト — `usecase::portability::export_records` / `import_records`
 //!
 //! 対応 REQ: REQ-DP-008 / REQ-DP-009 / REQ-DP-010
-//! 対応 TC: TC-IT-DP-001〜005
+//! 対応 TC: TC-IT-DP-001〜006
 //! 設計書: `docs/features/data-portability/cli/test-design.md §5.2`
 //! 対応 Issue: #141 / #146
 
@@ -233,5 +233,77 @@ fn tc_it_dp_005_import_records_sqlite_busy_timeout_returns_vault_busy() {
     assert!(
         matches!(result, Err(CliError::ImportVaultBusy)),
         "expected Err(CliError::ImportVaultBusy) after busy_timeout(2000ms) expired, got: {result:?}"
+    );
+}
+
+// -------------------------------------------------------------------
+// TC-IT-DP-006: import_records — from_directory_with_busy_timeout repo で
+//               save() 経路が正常完了する（AtomicWriteSession busy_timeout 伝搬リグレッション確認）
+// -------------------------------------------------------------------
+
+/// TC-IT-DP-006 (REQ-DP-009 / Issue #146 服部平次指摘対応):
+/// `from_directory_with_busy_timeout` 経由の repo を使用して import_records が
+/// 正常完了する（load + save 両経路を通じたリグレッション確認）。
+///
+/// `AtomicWriteSession::new` に `busy_timeout=Some(2s)` が伝搬されても
+/// 通常 save が壊れないことを検証する。
+/// TC-IT-DP-005 が `load()` 経路の SQLITE_BUSY を検証するのに対し、
+/// 本テストは `save()` 経路のリグレッションを確認する。
+#[test]
+fn tc_it_dp_006_import_records_save_path_succeeds_with_busy_timeout_repo() {
+    use shikomi_core::{Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString};
+    use shikomi_infra::persistence::{SqliteVaultRepository, VaultRepository};
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    // vault A — Text レコード 1 件を保存
+    let (dir_a, repo_a) = fresh_repo();
+    let now = fixed_time();
+    {
+        use shikomi_core::{Vault, VaultHeader, VaultVersion};
+        let record = Record::new(
+            RecordId::new(Uuid::now_v7()).unwrap(),
+            RecordKind::Text,
+            RecordLabel::try_new("save-path-label".to_owned()).unwrap(),
+            RecordPayload::Plaintext(SecretString::from_string("save-path-value".to_owned())),
+            now,
+        );
+        let header = VaultHeader::new_plaintext(VaultVersion::CURRENT, now).unwrap();
+        let mut vault_a = shikomi_core::Vault::new(header);
+        vault_a.add_record(record).unwrap();
+        repo_a.save(&vault_a).unwrap();
+    }
+
+    // vault A を export
+    let export_json = dir_a.path().join("save_path_export.json");
+    let export_args = ExportArgs {
+        output: export_json.clone(),
+        export_secrets: false,
+        force: false,
+    };
+    export_records(&repo_a, &export_args, dir_a.path(), now).expect("export should succeed");
+
+    // vault B — from_directory_with_busy_timeout（ロック競合なし）で import
+    // AtomicWriteSession::new に busy_timeout=Some(2s) が伝搬される経路を通す
+    let dir_b = tempfile::TempDir::new().expect("tempdir for vault B");
+    common::tighten_perms_unix(dir_b.path()); // PermissionGuard::verify_dir が 0700 を要求
+    let repo_b = SqliteVaultRepository::from_directory_with_busy_timeout(
+        dir_b.path(),
+        Duration::from_secs(2),
+    )
+    .expect("from_directory_with_busy_timeout");
+
+    let import_args = ImportArgs {
+        input: export_json,
+        on_conflict: OnConflictArg::Error,
+    };
+    let summary = import_records(&repo_b, &import_args, now)
+        .expect("import should succeed: save() path with busy_timeout must not regress");
+
+    // save() 経路（AtomicWriteSession::new(busy_timeout=Some(2s)) → finalize）が
+    // 正常完了し、レコードが 1 件追加されたことを確認する
+    assert_eq!(
+        summary.added, 1,
+        "expected 1 record added via save() path with busy_timeout repo, got: {summary:?}"
     );
 }
