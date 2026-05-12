@@ -157,6 +157,13 @@ jobs:
       # gh release create に必要。最小権限原則: このジョブのみ write を付与
       contents: write
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
+
+      - name: install Rust stable
+        # SBOM 生成（cargo-cyclonedx）のために Rust が必要。tauri-cli・Node.js は不要のため
+        # tauri-build-setup ではなく rust-toolchain アクションを直接使用（依存最小化）
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable as of 2026-05-11
+
       - name: download linux artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4 as of 2026-05-11
         with:
@@ -175,8 +182,17 @@ jobs:
           name: shikomi-installer-${{ github.ref_name }}-windows
           path: dist
 
+      - name: install cargo-cyclonedx
+        # 設計根拠: tech-stack.md §2.2（SBOM 行）— CycloneDX 1.5 形式をリリースに添付
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: generate SBOM (CycloneDX 1.5)
+        # ワークスペース全体の依存グラフを bom.json として出力（供給チェーン透明性 / OWASP A08）
+        run: cargo cyclonedx --format json --all
+
       - name: create draft release
         # draft 経由: artifact アタッチ完了前に空の Release が外部公開されることを防ぐ（設計根拠: §2.2.1）
+        # --generate-notes: タグ間コミット・PR タイトルを GitHub が自動列挙（設計根拠: §2.2.1 リリースノート生成戦略）
         run: |
           gh release create "${{ github.ref_name }}" \
             --draft \
@@ -187,6 +203,8 @@ jobs:
 
       - name: generate SHA256SUMS
         # OWASP A08: ダウンロード後の整合性検証手段を提供（threat-model.md A08 対応）
+        # sed 's|.*/||' でパスを basename のみに正規化——ユーザが同一ディレクトリで
+        # sha256sum -c SHA256SUMS.txt を実行できるようにする（パス不一致による検証失敗を防ぐ）
         run: |
           cd dist
           find . -type f \( \
@@ -196,9 +214,11 @@ jobs:
             -o -name "*.dmg" \
             -o -name "*.msi" \
             -o -name "*.exe" \
-          \) | sort | xargs sha256sum > SHA256SUMS.txt
+          \) | sort | \
+            while IFS= read -r f; do sha256sum "$f" | sed 's|.*/||'; done \
+          > SHA256SUMS.txt
 
-      - name: upload artifacts and checksums to release
+      - name: upload artifacts, checksums, and SBOM to release
         run: |
           find dist -type f \( \
             -name "*.deb" \
@@ -209,6 +229,7 @@ jobs:
             -o -name "*.exe" \
           \) | sort | xargs gh release upload "${{ github.ref_name }}"
           gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt
+          gh release upload "${{ github.ref_name }}" bom.json
         env:
           GH_TOKEN: ${{ github.token }}
 
