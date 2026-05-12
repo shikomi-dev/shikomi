@@ -208,7 +208,7 @@ fn tc_f_a03_vault_encrypt_output_audio_spawns_tts_with_pid() {
     );
     // pid: 以降が整数であることを確認
     if let Some(pid_part) = stdout.split("pid:").nth(1) {
-        let pid_str = pid_part.trim().split_whitespace().next().unwrap_or("");
+        let pid_str = pid_part.split_whitespace().next().unwrap_or("");
         assert!(
             pid_str.parse::<u32>().is_ok(),
             "pid value after 'pid:' must be a valid integer: {:?}",
