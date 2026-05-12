@@ -76,6 +76,51 @@ impl SqliteVaultRepository {
         PermissionGuard::ensure_dir(self.paths.dir())
     }
 
+    /// vault を読み込む。`vault.db` が存在しない場合は空の plaintext vault を**永続化して**返す。
+    ///
+    /// daemon コンポジションルートから呼び出す（REQ-DAEMON-028）。`load_or_create` との
+    /// 違いは、NotFound 時に空 vault を `save` で永続化し、`shikomi_daemon::init` ターゲットへ
+    /// 2 行のログを出力する点にある。
+    ///
+    /// - vault.db が存在する → `load()` の結果をそのまま返す（ログ出力なし）
+    /// - vault.db が存在しない → 空の plaintext vault を生成・保存してから返す
+    /// - 書き込み不可など NotFound 以外のエラー → 即 `Err` で返す（Fail Fast）
+    ///
+    /// **冪等性**: 生成後に同一パスで再度呼び出すと既存 vault がロードされて返る。
+    ///
+    /// # Errors
+    ///
+    /// - `vault.db` の読み込み失敗（NotFound 以外）: `PersistenceError::Io`
+    /// - 新規生成時の `save` 失敗（書き込み不可 等）: `PersistenceError`
+    pub fn load_or_create_plaintext(&self) -> Result<Vault, PersistenceError> {
+        match self.load() {
+            Ok(v) => Ok(v),
+            Err(PersistenceError::Io { ref source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                let vault = Vault::new(
+                    VaultHeader::new_plaintext(
+                        VaultVersion::CURRENT,
+                        time::OffsetDateTime::now_utc(),
+                    )
+                    .expect("CURRENT version is always valid"),
+                );
+                self.save(&vault)?;
+                tracing::info!(
+                    target: "shikomi_daemon::init",
+                    "vault not found; created new plaintext vault at {}",
+                    self.paths.dir().display()
+                );
+                tracing::info!(
+                    target: "shikomi_daemon::init",
+                    "hint: to enable encryption, run `shikomi vault encrypt` after the daemon has started"
+                );
+                Ok(vault)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// vault を読み込む。`vault.db` が存在しない場合は空の plaintext vault を返す。
     ///
     /// 初回インストール / CI 環境など `vault.db` が未作成の状態で daemon が起動する場合に
