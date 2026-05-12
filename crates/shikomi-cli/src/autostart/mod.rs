@@ -67,6 +67,34 @@ pub enum AutostartError {
 // resolve_daemon_path
 // -------------------------------------------------------------------
 
+/// `exe_dir` を直接受け取って `shikomi-daemon` パスを解決する内部ヘルパー。
+///
+/// `current_exe()` に依存しないため unit test でパス注入が可能。
+/// `resolve_daemon_path()` の実装本体。
+///
+/// 設計根拠: test-design/unit.md §TC-UT-164〜165 実装メモ
+///
+/// # Errors
+/// `shikomi-daemon` バイナリが存在しない場合 `AutostartError::IoError(NotFound)` を返す。
+pub(crate) fn resolve_daemon_path_from(
+    exe_dir: &std::path::Path,
+) -> Result<PathBuf, AutostartError> {
+    let daemon_name = if cfg!(target_os = "windows") {
+        "shikomi-daemon.exe"
+    } else {
+        "shikomi-daemon"
+    };
+    let daemon_path = exe_dir.join(daemon_name);
+    // Fail Fast: バイナリ不在なら即時失敗（backend-trait.md §resolve_daemon_path() Step 6）
+    if !daemon_path.exists() {
+        return Err(AutostartError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "shikomi-daemon binary not found",
+        )));
+    }
+    Ok(daemon_path)
+}
+
 /// `shikomi-daemon` バイナリの絶対パスを解決する共通ヘルパー。
 ///
 /// autostart 登録ファイルに書き込む起動パスを返す。
@@ -91,20 +119,57 @@ pub fn resolve_daemon_path() -> Result<PathBuf, AutostartError> {
             "cannot determine binary directory",
         )
     })?;
-    let daemon_name = if cfg!(target_os = "windows") {
-        "shikomi-daemon.exe"
-    } else {
-        "shikomi-daemon"
-    };
-    let daemon_path = dir.join(daemon_name);
-    // Fail Fast: バイナリ不在なら即時失敗（backend-trait.md §resolve_daemon_path() Step 6）
-    if !daemon_path.exists() {
-        return Err(AutostartError::IoError(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "shikomi-daemon binary not found",
-        )));
+    resolve_daemon_path_from(dir)
+}
+
+// -------------------------------------------------------------------
+// unit tests — TC-UT-164〜165
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    /// TC-UT-164: daemon バイナリ存在時に `Ok(PathBuf)` を返すこと
+    ///
+    /// 対応要件: REQ-DDM-010〜017
+    /// 受入基準: AC-DDM-07
+    /// 設計根拠: test-design/unit.md §5.2 TC-UT-164
+    #[test]
+    fn tc_ut_164_resolve_daemon_path_from_returns_ok_when_binary_exists() {
+        let dir = tempfile::tempdir().expect("tempdir 作成失敗");
+        let daemon_name = if cfg!(target_os = "windows") {
+            "shikomi-daemon.exe"
+        } else {
+            "shikomi-daemon"
+        };
+        std::fs::write(dir.path().join(daemon_name), b"").expect("ダミーバイナリ書き込み失敗");
+
+        let result = resolve_daemon_path_from(dir.path());
+        assert!(result.is_ok(), "daemon 存在時は Ok を返すべき: {result:?}");
+        assert!(
+            result.unwrap().exists(),
+            "返却パスが実際に存在すること"
+        );
     }
-    Ok(daemon_path)
+
+    /// TC-UT-165: daemon バイナリ不在時に `AutostartError::IoError(NotFound)` を返すこと
+    ///
+    /// 対応要件: REQ-DDM-010〜017
+    /// 受入基準: AC-DDM-07
+    /// 設計根拠: test-design/unit.md §5.2 TC-UT-165
+    #[test]
+    fn tc_ut_165_resolve_daemon_path_from_returns_not_found_when_binary_absent() {
+        let dir = tempfile::tempdir().expect("tempdir 作成失敗");
+        // shikomi-daemon を作成しない（空ディレクトリのまま）
+
+        let result = resolve_daemon_path_from(dir.path());
+        assert!(
+            matches!(&result, Err(AutostartError::IoError(e)) if e.kind() == io::ErrorKind::NotFound),
+            "daemon 不在時は AutostartError::IoError(NotFound) を返すべき: {result:?}"
+        );
+    }
 }
 
 // -------------------------------------------------------------------
