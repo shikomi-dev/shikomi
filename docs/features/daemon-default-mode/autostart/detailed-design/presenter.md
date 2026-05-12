@@ -109,6 +109,10 @@ grep -rn "no_ipc" crates/shikomi-cli/src/autostart/
 grep -n "tracing::info!" crates/shikomi-cli/src/lib.rs
 ```
 
+### 既存テストケースの期待値更新（Sub-B 実装時に必須）
+
+**Sub-A の TC-UT-159（`args.no_ipc` 参照件数アサート）の期待値を 2 → 3 に更新すること。** `daemon status` IPC probe 分岐が `lib.rs` に追加されることで `no_ipc` 参照が 2 件（vault dispatch + build_handle）から 3 件（+ daemon status probe）に増加する（TC-UT-176 参照）。この更新を怠ると Sub-B 実装後に TC-UT-159 が FAIL してCI が赤になり、監査ゲートが機能しているように見えて内側の期待値が陳腐化する。
+
 ### コンパイル時 `#[cfg]` 注意事項
 
 - CI matrix（Linux / macOS / Windows）全 OS でコンパイルエラーがないことを確認する

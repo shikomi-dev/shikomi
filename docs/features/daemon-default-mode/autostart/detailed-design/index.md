@@ -185,3 +185,7 @@ fn run_daemon_subcommand(
 - Status は成功・失敗に関わらず `ExitCode::Success` を返す（確認できない状態も結果として出力する）
 - Status には `tracing::info!` を追加しない（副作用なし・読み取り専用操作のため監査対象外）
 - 200ms タイムアウトは `IpcVaultRepository::connect` のタイムアウトオプション（`connect_with_timeout(200ms)` または `set_nonblocking + poll`）で実現する。実装担当が既存 IPC クライアントの timeout API を確認すること
+
+## 実装担当注意事項（Sub-B 実装時に必須）
+
+**Sub-A の TC-UT-159（`args.no_ipc` 参照件数アサート）の期待値を 2 → 3 に更新すること。** `daemon status` IPC probe 分岐が `lib.rs` に追加されることで `no_ipc` 参照が 2 件（vault dispatch + build_handle）から 3 件（+ daemon status probe）に増加する（TC-UT-176 参照）。この更新を怠ると Sub-B 実装後に TC-UT-159 が FAIL し、監査ゲートが機能しているように見えて内側の期待値が陳腐化する。詳細引き継ぎ: `presenter.md §既存テストケースの期待値更新`
