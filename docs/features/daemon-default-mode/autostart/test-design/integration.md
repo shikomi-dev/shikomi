@@ -3,7 +3,7 @@
 <!-- feature: daemon-default-mode / sub-feature: autostart / Issue #127 -->
 <!-- 配置先: docs/features/daemon-default-mode/autostart/test-design/integration.md -->
 <!-- Vモデル対応: 階層 3（basic-design.md §モジュール契約 → 結合テスト）-->
-<!-- 兄弟: unit.md / 親: ../basic-design.md / ../detailed-design.md -->
+<!-- 兄弟: unit.md / 親: ../basic-design.md / ../detailed-design/ -->
 
 ## 1. 設計方針
 

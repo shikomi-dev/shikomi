@@ -176,7 +176,7 @@ AC-DDM-07〜10 (feature-spec.md §5 §Sub-B 受入基準)
 
 - `docs/features/daemon-default-mode/feature-spec.md §5 §Sub-B`（受入基準 AC-DDM-07〜10）
 - `docs/features/daemon-default-mode/autostart/basic-design.md §モジュール契約`（REQ-DDM-010〜017）
-- `docs/features/daemon-default-mode/autostart/detailed-design.md`（変更対象ファイル一覧・実装詳細）
+- `docs/features/daemon-default-mode/autostart/detailed-design/`（変更対象ファイル一覧・実装詳細 — index.md / backend-trait.md / launchd.md / systemd.md / xdg.md / windows.md / presenter.md）
 - `docs/features/daemon-default-mode/system-test-design.md §Sub-B`（ST-DDM-020〜025 システムテスト戦略）
 - `docs/features/daemon-default-mode/autostart/test-design/unit.md`（TC-UT-160〜176 ユニットテスト）
 - `docs/features/daemon-default-mode/autostart/test-design/integration.md`（TC-IT-120〜132 結合テスト）

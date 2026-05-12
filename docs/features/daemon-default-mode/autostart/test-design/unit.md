@@ -3,7 +3,7 @@
 <!-- feature: daemon-default-mode / sub-feature: autostart / Issue #127 -->
 <!-- 配置先: docs/features/daemon-default-mode/autostart/test-design/unit.md -->
 <!-- Vモデル対応: 階層 3（詳細設計 → ユニットテスト）-->
-<!-- 兄弟: integration.md / 親: ../basic-design.md / ../detailed-design.md -->
+<!-- 兄弟: integration.md / 親: ../basic-design.md / ../detailed-design/ -->
 
 ## 1. 設計方針
 
@@ -225,7 +225,7 @@ CI 条件: `#[cfg(target_os = "linux")]`
 | 操作 | 1. `AutostartError::CommandFailed` を構築する（`stderr_excerpt` に 80 文字の文字列を指定） / 2. `format!("{err}")` を実行する |
 | 期待 | フォーマット出力が `"command failed: \`{cmd}\`: {stderr_excerpt}"` の形式であること。`stderr_excerpt` 相当部分が 80 文字以内であること |
 | 検証方法 | 出力文字列を解析して stderr 部分の長さを確認。`assert!(stderr_part.len() <= 80)` |
-| 設計根拠 | `detailed-design.md §AutostartError` / `basic-design.md §MSG-CLI-120 {reason} の制約` |
+| 設計根拠 | `detailed-design/backend-trait.md §AutostartError` / `basic-design.md §MSG-CLI-120 {reason} の制約` |
 
 #### TC-UT-171: `CommandFailed` の Display が 80 文字未満の stderr_excerpt をそのまま出力すること
 
@@ -254,7 +254,7 @@ CI 条件: `#[cfg(target_os = "linux")]`
 | 期待 | `false` を返すこと（D-Bus セッションバス不在のため） |
 | 検証方法 | `assert!(!SystemdBackend::is_available())` |
 | 注意 | 環境変数操作はテストスレッド間で競合する。`#[serial_test::serial]` を付与して直列実行を強制すること |
-| 設計根拠 | `detailed-design.md §SystemdBackend::is_available()` 条件 2 |
+| 設計根拠 | `detailed-design/systemd.md §SystemdBackend::is_available()` 条件 2 |
 
 ---
 
@@ -307,7 +307,7 @@ CI 条件: `#[cfg(target_os = "linux")]`
 | 操作 | `include_str!("lib.rs").matches("no_ipc").count()` で参照件数を確認する（または CI ゲートで `grep -n "no_ipc" crates/shikomi-cli/src/lib.rs` の件数を確認する） |
 | 期待 | `no_ipc` の参照が **3 件のみ**であること。内訳: 1. `build_handle` 内の IPC/SQLite 分岐 / 2. vault サブコマンド dispatch の MSG-CLI-052 出力判定 / 3. `run_daemon_subcommand` 内の daemon status IPC probe 省略分岐 |
 | 検証方法 | `assert_eq!(include_str!("lib.rs").matches("no_ipc").count(), 3)` |
-| 設計根拠 | `detailed-design.md §grep 確認コマンド`。Sub-A（TC-UT-159）の 2 件から daemon status probe 追加で 3 件に増加 |
+| 設計根拠 | `detailed-design/presenter.md §CI 確認コマンド`。Sub-A（TC-UT-159）の 2 件から daemon status probe 追加で 3 件に増加 |
 | 失敗条件 | 2 件以下: daemon status IPC probe 分岐が未実装。4 件以上: `no_ipc` が意図しない箇所に漏れている |
 
 ---

@@ -37,12 +37,14 @@
 | エラー時 | status 自体は exit 0（確認できない状態も結果として出力する）|
 | 設計原則 | 情報提供のみ、副作用なし |
 
+**IPC probe タイムアウト**: `IpcVaultRepository::connect` は **200ms 以内** で Connect 失敗なら `"daemon: not running"` 扱いとする。タイムアウト超過時もユーザーが応答待ちでハングしない（ペガサス指摘③対応）。`--no-ipc` 指定時は IPC probe 自体を省略し `"daemon: unknown (--no-ipc)"` を出力する。
+
 ### REQ-DDM-013: `AutostartBackend` trait — OS 別自動起動抽象
 
 | 項目 | 内容 |
 |------|------|
 | 入力 | `AutostartBackend::detect() -> Box<dyn AutostartBackend>` — OS / 環境を判定して実装を返す |
-| 処理 | (1) `install()` — OS 別の登録処理を実行 / (2) `uninstall()` — OS 別の解除処理を実行 / (3) `is_registered() -> bool` — 登録状態を確認 |
+| 処理 | (1) `install()` — OS 別の登録処理を実行 / (2) `uninstall()` — OS 別の解除処理を実行 / (3) `is_registered() -> bool` — 登録状態を確認 / (4) `name() -> &'static str` — tracing 監査証跡用の識別名を返す |
 | 出力 | `Result<(), AutostartError>` |
 | エラー時 | `AutostartError::CommandFailed { cmd, stderr }` / `AutostartError::IoError(std::io::Error)` / `AutostartError::Unsupported { reason }` |
 | 設計原則 | Strategy パターン（OS 別実装を差し替え可能）/ Composition over Inheritance |
@@ -115,6 +117,17 @@
 ## ユーザー向けメッセージ一覧
 
 ### 新規追加するメッセージ
+
+#### 成功メッセージ（`presenter/success.rs` に追加 / ロケール対応）
+
+| 関数名 | 表示条件 | English 出力 | JapaneseEn 追加行 |
+|--------|---------|------------|-----------------|
+| `render_autostart_installed(locale)` | `install` 成功時（`quiet == false`）| `shikomi-daemon autostart enabled` | `shikomi-daemon の自動起動を有効にしました` |
+| `render_autostart_uninstalled(locale)` | `uninstall` 成功時（`quiet == false`）| `shikomi-daemon autostart disabled` | `shikomi-daemon の自動起動を無効にしました` |
+
+**設計判断**: `render_vault_ipc_forced_note`（`warning.rs`）と同型のロケール対応。`println!` ハードコードではなく `presenter/success.rs` に集約することで、将来の多言語対応・テスト容易性を確保する。
+
+#### エラーメッセージ（`presenter/error.rs` に追加 / stdout ではなく stderr）
 
 | ID | メッセージ（英語） | 表示条件 | 終了コード |
 |----|----------------|---------|---------|
