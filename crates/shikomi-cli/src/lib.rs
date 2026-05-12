@@ -231,12 +231,8 @@ pub fn run() -> ExitCode {
         Subcommand::Remove(a) => record_runners::run_remove(&handle, a, locale, quiet),
         // Issue #141: export / import は常に SQLite 直接アクセスを使用（IPC 経路を使わない）。
         // `IpcVaultRepository` はペイロードを返さないため。
-        Subcommand::Export(a) => {
-            run_export(a, &handle, args.vault_dir.as_deref(), quiet, locale)
-        }
-        Subcommand::Import(a) => {
-            run_import(a, &handle, args.vault_dir.as_deref(), quiet, locale)
-        }
+        Subcommand::Export(a) => run_export(a, &handle, args.vault_dir.as_deref(), quiet, locale),
+        Subcommand::Import(a) => run_import(a, &handle, args.vault_dir.as_deref(), quiet, locale),
         // 上の `if let Subcommand::Vault(_)` early return で処理済（網羅性のため `_` で吸収）。
         Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
         // 上の `if let Subcommand::Gui` early return で処理済（網羅性のため unreachable）。
@@ -344,7 +340,12 @@ fn run_import(
     }
 
     // Step 3: SQLite 直接アクセス（R1-DP-09 atomicity 要件適合）
-    let sqlite_repo = SqliteVaultRepository::from_directory(&resolved_dir)?;
+    // Issue #146: busy_timeout(2000ms) を設定して daemon のロック競合を吸収する。
+    // 2 秒超過後も SQLITE_BUSY が解消しない場合は DatabaseBusy → ImportVaultBusy（MSG-CLI-146）。
+    let sqlite_repo = SqliteVaultRepository::from_directory_with_busy_timeout(
+        &resolved_dir,
+        std::time::Duration::from_millis(2000),
+    )?;
 
     // Step 4: 現在時刻
     let now = time::OffsetDateTime::now_utc();

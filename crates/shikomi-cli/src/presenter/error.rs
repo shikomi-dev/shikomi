@@ -320,6 +320,14 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "verify the file is a valid shikomi export (format_version must be 1)".to_owned(),
             "ファイルが有効な shikomi export ファイルであることを確認してください（format_version は 1 である必要があります）".to_owned(),
         ),
+        // Issue #146: MSG-CLI-146（ImportVaultBusy）— SQLITE_BUSY 超過後の daemon ロック競合
+        // 文面の SSoT: docs/features/data-portability/cli/detailed-design/presenter.md §ImportVaultBusy
+        CliError::ImportVaultBusy => lit(
+            "vault is in use by shikomi-daemon; import aborted after 2 seconds",
+            "vault が shikomi-daemon に使用されています。2 秒待機後に import を中断しました",
+            "stop shikomi-daemon, then retry (to disable autostart: shikomi daemon uninstall)",
+            "shikomi-daemon を停止してから再実行してください（自動起動の無効化: shikomi daemon uninstall）",
+        ),
         // `RedactedPayload` は `render_error` 側の専用 helper で処理済のため、
         // `lines_for` には到達しない契約。万一到達した場合のコンパイル時網羅性のため記述する。
         CliError::ImportValidationFailed(err) => {
@@ -396,7 +404,9 @@ fn format_conflict_ids(ids: &[String]) -> String {
 fn render_import_validation_redacted(id: &str, locale: Locale) -> String {
     let mut out = format!("error: cannot import record {id}: payload is redacted\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!("error: レコード {id} を import できません: ペイロードがリダクトされています\n"));
+        out.push_str(&format!(
+            "error: レコード {id} を import できません: ペイロードがリダクトされています\n"
+        ));
     }
     out.push_str(
         "hint: re-export the source vault with --export-secrets, then import the new file\n",
@@ -680,6 +690,36 @@ mod tests {
         assert!(
             rendered.contains("または自動起動を有効にする場合"),
             "MSG-CLI-110 JapaneseEn must contain Japanese autostart hint: {rendered:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #146: SQLITE_BUSY Presenter UT — TC-UT-210
+    // 設計根拠: docs/features/data-portability/cli/test-design/ut.md §TC-UT-210
+    // -------------------------------------------------------------------
+
+    /// TC-UT-210 (REQ-DP-010/011 / Issue #146 MSG-CLI-146 文面保証):
+    /// `render_error(&CliError::ImportVaultBusy, Locale::English)` が
+    /// MSG-CLI-146 の 3 要素を全て含む文字列を返す。
+    ///
+    /// 検証対象: `"vault is in use by shikomi-daemon"` (error 行) /
+    /// `"stop shikomi-daemon"` (hint 行) / `"shikomi daemon uninstall"` (hint 行末尾)。
+    #[test]
+    fn tc_ut_210_render_error_import_vault_busy_returns_msg_cli_146() {
+        let err = CliError::ImportVaultBusy;
+        let out = render_error(&err, Locale::English);
+
+        assert!(
+            out.contains("vault is in use by shikomi-daemon"),
+            "MSG-CLI-146 must contain 'vault is in use by shikomi-daemon', got: {out:?}"
+        );
+        assert!(
+            out.contains("stop shikomi-daemon"),
+            "MSG-CLI-146 must contain 'stop shikomi-daemon', got: {out:?}"
+        );
+        assert!(
+            out.contains("shikomi daemon uninstall"),
+            "MSG-CLI-146 must contain 'shikomi daemon uninstall', got: {out:?}"
         );
     }
 }

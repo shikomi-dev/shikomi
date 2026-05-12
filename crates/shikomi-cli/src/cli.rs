@@ -102,7 +102,6 @@ pub enum Subcommand {
     Daemon(DaemonSubcommand),
 
     // ---------------- Issue #141: data-portability export / import ----------------
-
     /// vault レコードを JSON ファイルへ export する（Issue #141 Sub-B、REQ-DP-007）。
     ///
     /// 設計根拠: docs/features/data-portability/cli/basic-design.md §REQ-DP-007

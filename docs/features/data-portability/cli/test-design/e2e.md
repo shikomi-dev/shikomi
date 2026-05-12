@@ -1,6 +1,6 @@
 # E2Eテスト設計 — data-portability / cli
 
-<!-- feature: data-portability / sub-feature: cli / Issue #141 -->
+<!-- feature: data-portability / sub-feature: cli / Issue #141 / Issue #146 -->
 <!-- 配置先: docs/features/data-portability/cli/test-design/e2e.md -->
 <!-- 親: ../test-design.md（インデックス）-->
 <!-- Vモデル対応: 階層 2（feature-spec.md AC-DP-06〜10 → E2Eテスト）-->
@@ -178,3 +178,33 @@
 | 前提条件 | Unix 環境。vault に任意レコードが存在する |
 | 操作 | 1. `shikomi export --output <TempDir>/out.json` を実行 / 2. `std::fs::metadata("<TempDir>/out.json").permissions().mode()` でパーミッションを取得する |
 | 期待結果 | (1) exit code 0 / (2) ファイルパーミッションの下位 9 ビットが `0o600`（`rw-------`）と一致する。`#[cfg(unix)]` で実行する |
+
+---
+
+#### TC-E2E-DP-013: vault ロック中（daemon 相当）に import → 2 秒後 MSG-CLI-146 exit 1
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-E2E-DP-013 |
+| 対応要件 | REQ-DP-009 |
+| 対応受入基準 | —（Issue #146 E2E 保証）|
+| 種別 | 異常系 |
+| 前提条件 | `<TempDir>/vault.db` が `rusqlite::Connection` の `BEGIN EXCLUSIVE` で排他ロック済み。ソース vault にレコードが 1 件存在し export.json が用意されている |
+| 操作 | 1. ソース vault に `shikomi add` でレコードを追加し export する / 2. デスト vault の vault.db を `rusqlite::Connection::open` で作成し chmod 0600 / 3. `BEGIN EXCLUSIVE` で排他ロック / 4. `shikomi import --input export.json --vault-dir dest_dir` を実行 |
+| 期待結果 | (1) exit code 1 / (2) stderr に `"vault is in use by shikomi-daemon"` が含まれる（MSG-CLI-146）/ (3) 実行に ~2 秒かかる（busy_timeout 2000ms 相当）|
+| 備考 | `#[ignore = "slow: waits ~2s for SQLITE_BUSY busy_timeout"]` — 通常 CI では `--include-ignored` で実行 |
+
+---
+
+#### TC-E2E-DP-014: 短時間ロック（< 2s）解放後に import が透過的に成功する
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-E2E-DP-014 |
+| 対応要件 | REQ-DP-009 |
+| 対応受入基準 | —（Issue #146 busy_timeout リトライ成功保証）|
+| 種別 | 正常系 |
+| 前提条件 | デスト vault の vault.db が `rusqlite::Connection` の `BEGIN EXCLUSIVE` で排他ロック済み。ソース vault に export.json が用意されている |
+| 操作 | 1. ソース vault に `shikomi add` でレコードを追加し export する / 2. デスト vault を `shikomi add` で初期化（正規スキーマ）/ 3. `BEGIN EXCLUSIVE` で排他ロック / 4. `shikomi import` を `std::process::Command::spawn()` で非ブロッキング起動 / 5. 300ms 後にロック解放（`drop(lock_conn)`）/ 6. `child.wait_with_output()` で完了待機 |
+| 期待結果 | (1) exit code 0 / (2) stdout に `"imported"` が含まれる（busy_timeout(2000ms) 内にリトライ成功）|
+| 備考 | `#[ignore = "slow: holds EXCLUSIVE lock 300ms"]` — 通常 CI では `--include-ignored` で実行 |

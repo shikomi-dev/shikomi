@@ -4,9 +4,9 @@
 //! §`usecase/portability/import.rs` の設計詳細
 //!
 //! # 設計判断: IPC 経路廃止・SQLite 一本化
-//! Import も export と同様に常に `SqliteVaultRepository` を使用する。
+//! Import も export と同様に常に `VaultRepository` を使用する。
 //! IPC per-record `add_record()` は途中クラッシュで vault が半書き込み状態になり
-//! `R1-DP-09` の atomicity 要件に非適合。SQLite `repo.save()` が atomic write を保証する。
+//! `R1-DP-09` の atomicity 要件に非適合。`repo.save()` が atomic write を保証する。
 //!
 //! # セキュリティ考慮
 //! - `serde_json::from_reader` によるストリーミングパース（OOM 防止、threat-model.md §7.5）
@@ -15,12 +15,12 @@
 
 use std::collections::HashSet;
 
-use shikomi_core::portability::{ImportPayload, ImportValidator};
 use shikomi_core::portability::ExportRecordPayload;
+use shikomi_core::portability::{ImportPayload, ImportValidator};
 use shikomi_core::{
     Hotkey, Record, RecordId, RecordLabel, RecordPayload, SecretString, VaultHeader, VaultVersion,
 };
-use shikomi_infra::persistence::VaultRepository;
+use shikomi_infra::persistence::{PersistenceError, VaultRepository};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -75,8 +75,7 @@ pub fn import_records(
     now: OffsetDateTime,
 ) -> Result<ImportSummary, CliError> {
     // Step 1: ファイルを開く
-    let file =
-        std::fs::File::open(&args.input).map_err(DataPortabilityError::IoError)?;
+    let file = std::fs::File::open(&args.input).map_err(DataPortabilityError::IoError)?;
 
     // Step 2: ストリーミングパース（OOM 防止: read_to_string は使用しない、threat-model.md §7.5）
     let payload: ImportPayload = serde_json::from_reader(file).map_err(|e| {
@@ -89,6 +88,10 @@ pub fn import_records(
     let mut vault = if repo.exists()? {
         match repo.load() {
             Ok(v) => v,
+            // Issue #146: SQLITE_BUSY（busy_timeout 2000ms 超過後も未解消）→ VaultBusy
+            Err(PersistenceError::DatabaseBusy) => {
+                return Err(DataPortabilityError::VaultBusy.into());
+            }
             Err(e) => {
                 let cli_err = CliError::from(e);
                 return Err(match cli_err {
@@ -108,9 +111,8 @@ pub fn import_records(
         vault.records().iter().map(|r| r.id().to_string()).collect();
 
     // Step 5: ImportValidator::validate
-    let report = ImportValidator::validate(&payload, &existing_ids).map_err(|err| {
-        CliError::from(DataPortabilityError::ValidationFailed(err))
-    })?;
+    let report = ImportValidator::validate(&payload, &existing_ids)
+        .map_err(|err| CliError::from(DataPortabilityError::ValidationFailed(err)))?;
 
     // Step 6: --on-conflict error で衝突検出
     if args.on_conflict == OnConflictArg::Error && !report.conflicting_ids.is_empty() {
@@ -147,8 +149,14 @@ pub fn import_records(
         }
     }
 
-    // Step 8: atomic write（SqliteVaultRepository::save が tempfile + rename で保証、R1-DP-09 適合）
-    repo.save(&vault)?;
+    // Step 8: atomic write（tempfile + rename で保証、R1-DP-09 適合）
+    // Issue #146: DatabaseBusy は VaultBusy に変換。その他の PersistenceError は従来通り伝播。
+    repo.save(&vault).map_err(|e| -> CliError {
+        match e {
+            PersistenceError::DatabaseBusy => DataPortabilityError::VaultBusy.into(),
+            other => other.into(),
+        }
+    })?;
 
     // Step 9: ImportSummary 返却
     Ok(ImportSummary {
@@ -195,10 +203,11 @@ fn import_record_to_domain(
     })?;
 
     // Step 3: RecordLabel
-    let label =
-        RecordLabel::try_new(r.label.clone()).map_err(|e| CliError::ImportDeserializationFailed {
+    let label = RecordLabel::try_new(r.label.clone()).map_err(|e| {
+        CliError::ImportDeserializationFailed {
             reason: format!("invalid label: {e}"),
-        })?;
+        }
+    })?;
 
     // Step 4: ペイロード変換
     let payload = match &r.payload {
@@ -214,20 +223,18 @@ fn import_record_to_domain(
     };
 
     // Step 5: created_at パース
-    let created_at =
-        OffsetDateTime::parse(&r.created_at, &Rfc3339).map_err(|e| {
-            CliError::ImportDeserializationFailed {
-                reason: format!("invalid created_at '{}': {e}", r.created_at),
-            }
-        })?;
+    let created_at = OffsetDateTime::parse(&r.created_at, &Rfc3339).map_err(|e| {
+        CliError::ImportDeserializationFailed {
+            reason: format!("invalid created_at '{}': {e}", r.created_at),
+        }
+    })?;
 
     // Step 6: updated_at パース
-    let updated_at =
-        OffsetDateTime::parse(&r.updated_at, &Rfc3339).map_err(|e| {
-            CliError::ImportDeserializationFailed {
-                reason: format!("invalid updated_at '{}': {e}", r.updated_at),
-            }
-        })?;
+    let updated_at = OffsetDateTime::parse(&r.updated_at, &Rfc3339).map_err(|e| {
+        CliError::ImportDeserializationFailed {
+            reason: format!("invalid updated_at '{}': {e}", r.updated_at),
+        }
+    })?;
 
     // Step 7: hotkey パース
     let hotkey = r
@@ -240,12 +247,10 @@ fn import_record_to_domain(
         })?;
 
     // Step 8: Record::rehydrate（updated_at < created_at で DomainError::VaultConsistencyError）
-    let record =
-        Record::rehydrate(id, r.kind, label, payload, created_at, updated_at, hotkey).map_err(
-            |e| CliError::ImportDeserializationFailed {
-                reason: e.to_string(),
-            },
-        )?;
+    let record = Record::rehydrate(id, r.kind, label, payload, created_at, updated_at, hotkey)
+        .map_err(|e| CliError::ImportDeserializationFailed {
+            reason: e.to_string(),
+        })?;
 
     Ok(record)
 }

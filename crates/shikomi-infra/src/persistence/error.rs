@@ -332,6 +332,17 @@ pub enum PersistenceError {
         /// 失敗の人間可読理由（固定文言、secret / 絶対パス / PID を含めない）。
         reason: String,
     },
+
+    /// SQLite `SQLITE_BUSY`（エラーコード 5）— `busy_timeout` で設定された時間内に
+    /// ロックを取得できなかった（daemon が vault.db を保持中等）。
+    ///
+    /// `rusqlite::Error::SqliteFailure` の `code.code == ErrorCode::DatabaseBusy` を
+    /// **型検査**で検出する（文字列マッチング禁止）。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §SQLITE_BUSY の検出経路（Issue #146）
+    #[error("database is busy (SQLITE_BUSY): another process holds a lock on vault.db")]
+    DatabaseBusy,
 }
 
 // -------------------------------------------------------------------
@@ -340,6 +351,14 @@ pub enum PersistenceError {
 
 impl From<rusqlite::Error> for PersistenceError {
     fn from(source: rusqlite::Error) -> Self {
+        // Issue #146: SQLITE_BUSY（エラーコード 5）を型安全に検出する。
+        // `rusqlite::Error::SqliteFailure` の `code.code` フィールドを直接比較する。
+        // 文字列マッチング（`source.to_string()` 等）は使用しない。
+        if let rusqlite::Error::SqliteFailure(ref err, _) = source {
+            if err.code == rusqlite::ErrorCode::DatabaseBusy {
+                return Self::DatabaseBusy;
+            }
+        }
         Self::Sqlite { source }
     }
 }

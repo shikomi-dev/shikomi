@@ -1,6 +1,7 @@
 //! `AtomicWriteSession` — SQLite 書込セッション型（Phase 8 新設、Issue #73）。
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rusqlite::OpenFlags;
 use shikomi_core::Vault;
@@ -47,7 +48,16 @@ impl AtomicWriteSession {
     /// - ファイル作成失敗: `PersistenceError::AtomicWriteFailed { stage: PrepareNew }`
     /// - パーミッション設定失敗: `PersistenceError::InvalidPermission` / `PersistenceError::Io`
     /// - `SQLite` エラー（PRAGMA / DDL / TX / COMMIT）: `PersistenceError::Sqlite`
-    pub(crate) fn new(paths: &VaultPaths, vault: &Vault) -> Result<Self, PersistenceError> {
+    ///
+    /// `busy_timeout` は `from_directory_with_busy_timeout` 経由で構築した
+    /// `SqliteVaultRepository` の場合のみ `Some`。`vault.db.new` は新規ファイルのため
+    /// 他コネクションとの競合は起きないが、将来の WAL 移行等も見据えて全接続に適用する
+    /// （Issue #146、服部平次指摘対応）。
+    pub(crate) fn new(
+        paths: &VaultPaths,
+        vault: &Vault,
+        busy_timeout: Option<Duration>,
+    ) -> Result<Self, PersistenceError> {
         let new_path = paths.vault_db_new().to_path_buf();
         let final_path = paths.vault_db().to_path_buf();
         let dir_path = paths.dir().to_path_buf();
@@ -62,34 +72,40 @@ impl AtomicWriteSession {
                 | OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        .map_err(PersistenceError::from)?;
 
         // Step 6.4: ensure_file — SQLite が open 時に mode を変えた場合の再強制。
         // Windows では owner-only DACL を rename 前に設定する（`MoveFileExW` がソース SD を
         // 保持するため rename 後の vault.db へ DACL が引き継がれる、`./classes.md` §3.3 参照）。
         PermissionGuard::ensure_file(&new_path)?;
 
+        // Issue #146: busy_timeout が設定されている場合に適用する。
+        // `vault.db.new` は新規ファイルなので競合は起きないが、全接続統一ポリシー。
+        if let Some(timeout) = busy_timeout {
+            conn.busy_timeout(timeout).map_err(PersistenceError::from)?;
+        }
+
         // Step 6.5: PRAGMA 設定
         conn.execute_batch(SchemaSql::PRAGMA_APPLICATION_ID_SET)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         conn.execute_batch(SchemaSql::PRAGMA_USER_VERSION_SET)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         conn.execute_batch(SchemaSql::PRAGMA_JOURNAL_MODE)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
 
         // Step 6.6: テーブル / インデックス作成
         conn.execute_batch(SchemaSql::CREATE_VAULT_HEADER)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         conn.execute_batch(SchemaSql::CREATE_RECORDS)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         conn.execute_batch(SchemaSql::CREATE_HOTKEY_INDEX)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
 
         // Steps 6.7-6.10: 単一トランザクション内で vault_header + 全レコードを INSERT → COMMIT
         {
             let tx = conn
                 .unchecked_transaction()
-                .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                .map_err(PersistenceError::from)?;
 
             let header_params = Mapping::vault_header_to_params(vault.header())?;
             tx.execute(
@@ -103,7 +119,7 @@ impl AtomicWriteSession {
                     header_params.wrapped_vek_by_recovery,
                 ],
             )
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
 
             for record in vault.records() {
                 let p = Mapping::record_to_params(record)?;
@@ -123,11 +139,10 @@ impl AtomicWriteSession {
                         p.hotkey_combo,
                     ],
                 )
-                .map_err(|e| PersistenceError::Sqlite { source: e })?;
+                .map_err(PersistenceError::from)?;
             }
 
-            tx.commit()
-                .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            tx.commit().map_err(PersistenceError::from)?;
         }
 
         Ok(AtomicWriteSession {
@@ -172,7 +187,7 @@ impl AtomicWriteSession {
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|e| {
                 AtomicWriter::cleanup_new(&path);
-                PersistenceError::Sqlite { source: e }
+                PersistenceError::from(e)
             })?;
 
         // Step 7.2: journal_mode を DELETE に再強制
@@ -181,15 +196,14 @@ impl AtomicWriteSession {
         conn.execute_batch("PRAGMA journal_mode = DELETE;")
             .map_err(|e| {
                 AtomicWriter::cleanup_new(&path);
-                PersistenceError::Sqlite { source: e }
+                PersistenceError::from(e)
             })?;
 
         // Step 7.3: 明示的 close（Drop の sqlite3_close_v2 遅延 semantics を回避）
-        // 失敗時は PersistenceError::Sqlite を直接返す（型情報を失う変換禁止、
-        // `../basic-design/error.md` §禁止事項と整合）。
+        // Issue #146: PersistenceError::from で DatabaseBusy 検出を有効化。
         if let Err((_, e)) = conn.close() {
             AtomicWriter::cleanup_new(&path);
-            return Err(PersistenceError::Sqlite { source: e });
+            return Err(PersistenceError::from(e));
         }
 
         // Step 7.4: サイドカー DACL 適用（best-effort）

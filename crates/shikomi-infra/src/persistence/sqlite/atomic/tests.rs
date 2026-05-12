@@ -37,7 +37,7 @@ fn tc_i06_write_new_only_hook_orphan() {
 
     // 初期 vault を save（vault.db が存在する状態にする）
     let initial_vault = plaintext_vault("initial", "initial-value");
-    let session = AtomicWriteSession::new(&paths, &initial_vault).unwrap();
+    let session = AtomicWriteSession::new(&paths, &initial_vault, None).unwrap();
     session.finalize(&ExponentialBackoffRetryPolicy).unwrap();
 
     // vault.db のバイト列を記録
@@ -88,7 +88,7 @@ fn tc_u_drop_without_finalize_removes_new_file() {
     crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
 
     let vault = plaintext_vault("drop-guard", "test-value");
-    let session = AtomicWriteSession::new(&paths, &vault).unwrap();
+    let session = AtomicWriteSession::new(&paths, &vault, None).unwrap();
 
     assert!(
         paths.vault_db_new().exists(),
@@ -190,7 +190,7 @@ fn tc_u_finalize_failure_cleans_new_on_fsync_error() {
     crate::persistence::permission::PermissionGuard::ensure_dir(dir.path()).unwrap();
 
     let vault = plaintext_vault("finalize-fail", "test-value");
-    let session = AtomicWriteSession::new(&paths, &vault).unwrap();
+    let session = AtomicWriteSession::new(&paths, &vault, None).unwrap();
     assert!(paths.vault_db_new().exists(), ".new が作成されていない");
 
     // .new を書き込み不可（0o400）に変更 → FsyncTemp が open(.write(true)) で失敗。
@@ -246,14 +246,14 @@ fn tc_u_windows_no_sleep_retry_exhausts_on_held_file() {
 
     // 初期 vault.db を作成
     let vault1 = plaintext_vault("v1", "initial");
-    let session1 = AtomicWriteSession::new(&paths, &vault1).unwrap();
+    let session1 = AtomicWriteSession::new(&paths, &vault1, None).unwrap();
     session1
         .finalize(&ExponentialBackoffRetryPolicy)
         .expect("初期 vault 作成失敗");
 
     // 更新用 session を新規作成
     let vault2 = plaintext_vault("v2", "updated");
-    let session2 = AtomicWriteSession::new(&paths, &vault2).unwrap();
+    let session2 = AtomicWriteSession::new(&paths, &vault2, None).unwrap();
     assert!(
         paths.vault_db_new().exists(),
         "session2 作成後 .new が存在しない"

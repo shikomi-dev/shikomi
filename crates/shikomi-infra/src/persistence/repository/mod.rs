@@ -1,7 +1,7 @@
 //! `SqliteVaultRepository` — `VaultRepository` の `SQLite` 実装。
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
 use shikomi_core::{Record, Vault, VaultHeader, VaultVersion};
@@ -27,6 +27,14 @@ use super::{
 /// `SQLite` バックエンドの `VaultRepository` 実装。
 pub struct SqliteVaultRepository {
     paths: VaultPaths,
+    /// SQLite コネクションに設定する `busy_timeout`。
+    ///
+    /// `from_directory_with_busy_timeout` 経由で構築した場合のみ `Some`。
+    /// `from_directory` / `new` 経由では `None`（既存動作を維持）。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §busy_timeout のカプセル化設計（Issue #146）
+    busy_timeout: Option<Duration>,
 }
 
 impl SqliteVaultRepository {
@@ -53,7 +61,42 @@ impl SqliteVaultRepository {
     /// - `fs::canonicalize` 失敗: `PersistenceError::InvalidVaultDir { reason: Canonicalize }`
     pub fn from_directory(path: &Path) -> Result<Self, PersistenceError> {
         let paths = VaultPaths::new(path.to_path_buf())?;
-        Ok(Self { paths })
+        Ok(Self {
+            paths,
+            busy_timeout: None,
+        })
+    }
+
+    /// 明示的な vault ディレクトリと `busy_timeout` を指定して `SqliteVaultRepository` を構築する。
+    ///
+    /// `from_directory` と同じバリデーションを行った上で、SQLite コネクションを開く際に
+    /// `connection.busy_timeout(timeout)` を適用する（Tell, Don't Ask）。
+    ///
+    /// `lib.rs::run_import` のみが呼び出す。他の操作（daemon / export 等）は
+    /// `from_directory` / `new` を使用して既存の挙動を維持する。
+    ///
+    /// # Arguments
+    ///
+    /// - `path` — vault ディレクトリの絶対パス
+    /// - `timeout` — SQLITE_BUSY 発生時に SQLite が待機する最大時間
+    ///
+    /// # Errors
+    ///
+    /// - ディレクトリ検証失敗: `PersistenceError::InvalidVaultDir`
+    ///
+    /// # 設計根拠
+    ///
+    /// docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §busy_timeout のカプセル化設計（Issue #146）
+    pub fn from_directory_with_busy_timeout(
+        path: &Path,
+        timeout: Duration,
+    ) -> Result<Self, PersistenceError> {
+        let paths = VaultPaths::new(path.to_path_buf())?;
+        Ok(Self {
+            paths,
+            busy_timeout: Some(timeout),
+        })
     }
 
     /// vault パス情報への参照を返す。
@@ -224,12 +267,20 @@ impl SqliteVaultRepository {
             self.paths.vault_db(),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        .map_err(PersistenceError::from)?;
+
+        // Issue #146: busy_timeout が設定されている場合（`from_directory_with_busy_timeout`
+        // 経由での構築時）、コネクションに適用する。SQLITE_BUSY 発生時に SQLite が
+        // `timeout` 時間リトライし、タイムアウト後も解消しない場合は
+        // `PersistenceError::DatabaseBusy` を返す（`From<rusqlite::Error>` が型検査）。
+        if let Some(timeout) = self.busy_timeout {
+            conn.busy_timeout(timeout).map_err(PersistenceError::from)?;
+        }
 
         // Step 8: application_id 確認
         let app_id: u32 = conn
             .query_row(SchemaSql::PRAGMA_APPLICATION_ID_GET, [], |row| row.get(0))
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         if app_id != SchemaSql::APPLICATION_ID {
             return Err(PersistenceError::SchemaMismatch {
                 expected_application_id: SchemaSql::APPLICATION_ID,
@@ -243,7 +294,7 @@ impl SqliteVaultRepository {
         // Step 9: user_version 確認
         let user_version: u32 = conn
             .query_row(SchemaSql::PRAGMA_USER_VERSION_GET, [], |row| row.get(0))
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
         if !(SchemaSql::USER_VERSION_SUPPORTED_MIN..=SchemaSql::USER_VERSION_SUPPORTED_MAX)
             .contains(&user_version)
         {
@@ -291,14 +342,12 @@ impl SqliteVaultRepository {
     ) -> Result<shikomi_core::VaultHeader, PersistenceError> {
         let mut stmt = conn
             .prepare(SchemaSql::SELECT_VAULT_HEADER)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+            .map_err(PersistenceError::from)?;
+        let mut rows = stmt.query([]).map_err(PersistenceError::from)?;
 
         let row = rows
             .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
+            .map_err(PersistenceError::from)?
             .ok_or_else(|| PersistenceError::Corrupted {
                 table: "vault_header",
                 row_key: None,
@@ -308,11 +357,7 @@ impl SqliteVaultRepository {
         let header = Mapping::row_to_vault_header(row)?;
 
         // CHECK(id=1) 制約があるため複数行は存在しないはずだが防衛的確認
-        if rows
-            .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
-            .is_some()
-        {
+        if rows.next().map_err(PersistenceError::from)?.is_some() {
             return Err(PersistenceError::Corrupted {
                 table: "vault_header",
                 row_key: None,
@@ -342,18 +387,11 @@ impl SqliteVaultRepository {
             (SchemaSql::SELECT_RECORDS_ORDERED, false)
         };
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        let mut stmt = conn.prepare(sql).map_err(PersistenceError::from)?;
+        let mut rows = stmt.query([]).map_err(PersistenceError::from)?;
 
         let mut records = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .map_err(|e| PersistenceError::Sqlite { source: e })?
-        {
+        while let Some(row) = rows.next().map_err(PersistenceError::from)? {
             let record = if use_v1 {
                 Mapping::row_to_record_v1(row)?
             } else {
@@ -379,7 +417,7 @@ impl SqliteVaultRepository {
         AtomicWriter::detect_orphan(self.paths.vault_db_new())?;
 
         // Step 6: `.new` 作成から SQLite COMMIT まで実行しセッションを取得
-        let session = AtomicWriteSession::new(&self.paths, vault)?;
+        let session = AtomicWriteSession::new(&self.paths, vault, self.busy_timeout)?;
 
         // Step 7: クローズ順序固定 → sidecar DACL → fsync → rename（Win: retry 補強）
         session.finalize(&ExponentialBackoffRetryPolicy)?;

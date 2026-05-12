@@ -1,13 +1,13 @@
 //! E2E テスト — `shikomi export` / `shikomi import`
 //!
 //! 対応 AC: AC-DP-06 / AC-DP-07 / AC-DP-08 / AC-DP-09 / AC-DP-10
-//! 対応 TC: TC-E2E-DP-001〜012
+//! 対応 TC: TC-E2E-DP-001〜014
 //! 設計書: `docs/features/data-portability/cli/test-design.md §5.1`
-//! 対応 Issue: #141
+//! 対応 Issue: #141 / #146
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -40,15 +40,7 @@ fn setup_vault_dir() -> TempDir {
 /// vault に Text レコードを 1 件追加する。成功が前提。
 fn add_text_record(dir: &Path, label: &str, value: &str) {
     shikomi(dir)
-        .args([
-            "add",
-            "--kind",
-            "text",
-            "--label",
-            label,
-            "--value",
-            value,
-        ])
+        .args(["add", "--kind", "text", "--label", label, "--value", value])
         .assert()
         .success();
 }
@@ -57,20 +49,14 @@ fn add_text_record(dir: &Path, label: &str, value: &str) {
 fn add_secret_record(dir: &Path, label: &str, value: &str) {
     shikomi(dir)
         .args([
-            "add",
-            "--kind",
-            "secret",
-            "--label",
-            label,
-            "--value",
-            value,
+            "add", "--kind", "secret", "--label", label, "--value", value,
         ])
         .assert()
         .success();
 }
 
 /// vault から export して JSON ファイルパスを返す。成功が前提。
-fn export_vault(dir: &Path, out_path: &PathBuf) {
+fn export_vault(dir: &Path, out_path: &Path) {
     shikomi(dir)
         .args(["export", "--output", out_path.to_str().unwrap()])
         .assert()
@@ -220,8 +206,7 @@ fn tc_e2e_dp_005_second_import_all_conflict_exits_1_with_msg_cli_142() {
 fn tc_e2e_dp_006_export_on_locked_vault_exits_1_with_msg_cli_140() {
     let dir = setup_vault_dir();
     // 暗号化 vault を作成（ロック済み）
-    common::fixtures::create_encrypted_vault(dir.path())
-        .expect("create_encrypted_vault");
+    common::fixtures::create_encrypted_vault(dir.path()).expect("create_encrypted_vault");
     let out = dir.path().join("out.json");
 
     shikomi(dir.path())
@@ -250,7 +235,9 @@ fn tc_e2e_dp_007_export_existing_file_without_force_exits_1_with_msg_cli_141() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicate::str::contains("export output file already exists"))
+        .stderr(predicate::str::contains(
+            "export output file already exists",
+        ))
         .stderr(predicate::str::contains("--force"));
 }
 
@@ -382,5 +369,124 @@ fn tc_e2e_dp_012_export_file_permission_is_0600_on_unix() {
         mode & 0o777,
         0o600,
         "export file should have 0600 permissions, got {mode:o}"
+    );
+}
+
+// -------------------------------------------------------------------
+// Issue #146: SQLITE_BUSY E2E — TC-E2E-DP-013 / TC-E2E-DP-014
+// 設計根拠: docs/features/data-portability/cli/test-design/e2e.md §TC-E2E-DP-013〜014
+// -------------------------------------------------------------------
+
+/// TC-E2E-DP-013: vault ロック中（daemon 相当）に import → 2 秒後 MSG-CLI-146 exit 1
+///
+/// 別 `rusqlite::Connection` で vault.db に `BEGIN EXCLUSIVE` を保持しながら
+/// `shikomi import` を実行すると、`busy_timeout(2000ms)` 超過後に exit 1 と
+/// `"vault is in use by shikomi-daemon"` が stderr に出力されることを検証する。
+///
+/// # 実行時間
+/// shikomi が ~2 秒待機するため `#[ignore]`。`cargo test -- --include-ignored` で実行可能。
+#[test]
+#[ignore = "slow: waits ~2s for SQLITE_BUSY busy_timeout (daemon lock simulation)"]
+fn tc_e2e_dp_013_import_with_persistent_lock_exits_1_with_msg_cli_146() {
+    // 1. ソース vault: レコード 1 件追加・export
+    let dir_src = setup_vault_dir();
+    add_text_record(dir_src.path(), "locked-src", "src-value");
+    let export_file = dir_src.path().join("export.json");
+    export_vault(dir_src.path(), &export_file);
+
+    // 2. デスト vault: vault.db を rusqlite で作成し EXCLUSIVE ロックを取得する
+    //    shikomi の PermissionGuard は 0600 を要求するため chmod も必要
+    let dir_dest = setup_vault_dir();
+    let vault_db = dir_dest.path().join("vault.db");
+    let lock_conn = rusqlite::Connection::open(&vault_db).expect("open lock_conn");
+    // Unix: PermissionGuard が vault.db に 0600 を要求するため権限を設定する
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut perms = std::fs::metadata(&vault_db)
+            .expect("metadata vault.db")
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&vault_db, perms).expect("chmod 0600 vault.db");
+    }
+    lock_conn
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("BEGIN EXCLUSIVE");
+
+    // 3. shikomi import を実行（lock_conn が EXCLUSIVE を保持中）
+    //    busy_timeout(2000ms) でリトライし、~2 秒後に exit 1 + MSG-CLI-146 を返す
+    shikomi(dir_dest.path())
+        .args(["import", "--input", export_file.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "vault is in use by shikomi-daemon",
+        ));
+
+    // lock_conn を明示的に保持し、assert が完了するまで EXCLUSIVE ロックを維持したことを示す
+    drop(lock_conn);
+}
+
+/// TC-E2E-DP-014: 短時間ロック（< 2s）解放後に import が透過的に成功する
+///
+/// 別 `rusqlite::Connection` で vault.db に 300ms の `BEGIN EXCLUSIVE` を保持し、
+/// その間に起動した `shikomi import` が `busy_timeout(2000ms)` の残余時間内に
+/// ロック解放を検知してリトライ成功（exit 0）することを検証する。
+///
+/// # 実行時間
+/// ロック保持 300ms + shikomi 処理時間が発生するため `#[ignore]`。
+/// `cargo test -- --include-ignored` で実行可能。
+#[test]
+#[ignore = "slow: holds SQLite EXCLUSIVE lock 300ms to verify busy_timeout retry succeeds"]
+fn tc_e2e_dp_014_import_succeeds_when_lock_released_within_busy_timeout() {
+    // 1. ソース vault: レコード 1 件追加・export
+    let dir_src = setup_vault_dir();
+    add_text_record(dir_src.path(), "transient-src", "src-value");
+    let export_file = dir_src.path().join("export.json");
+    export_vault(dir_src.path(), &export_file);
+
+    // 2. デスト vault: shikomi add で vault.db を初期化（proper schema が必要）
+    //    ロック解放後に shikomi が load() → save() を成功させるため正規スキーマが必要
+    let dir_dest = setup_vault_dir();
+    add_text_record(dir_dest.path(), "dest-existing", "dest-value");
+
+    // 3. デスト vault.db を EXCLUSIVE ロック
+    let vault_db = dir_dest.path().join("vault.db");
+    let lock_conn = rusqlite::Connection::open(&vault_db).expect("open lock_conn");
+    lock_conn
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("BEGIN EXCLUSIVE");
+
+    // 4. shikomi import を非ブロッキングで起動（busy_timeout(2000ms) でリトライする）
+    //    assert_cmd::Command は spawn() を持たないため std::process::Command を使う
+    let shikomi_bin = assert_cmd::cargo::cargo_bin("shikomi");
+    let child_handle = std::process::Command::new(&shikomi_bin)
+        .env_remove("SHIKOMI_VAULT_DIR")
+        .env_remove("LANG")
+        .args(["--no-ipc", "--vault-dir"])
+        .arg(dir_dest.path())
+        .args(["import", "--input"])
+        .arg(export_file.as_path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn shikomi import");
+
+    // 5. 300ms 後にロックを解放（2000ms 内なので shikomi はリトライ成功）
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(lock_conn); // BEGIN EXCLUSIVE ロールバック → EXCLUSIVE 解放
+
+    // 6. shikomi import の完了を待ち、成功を検証する
+    let output = child_handle.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "import should succeed after lock released within busy_timeout(2000ms): stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("imported"),
+        "stdout should contain 'imported', got: {stdout:?}"
     );
 }

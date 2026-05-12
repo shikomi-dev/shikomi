@@ -9,10 +9,10 @@
 
 | 種別 | ファイル | TC 数 | 対象 |
 |------|---------|-------|------|
-| E2Eテスト | [test-design/e2e.md](test-design/e2e.md) | 12（TC-E2E-DP-001〜012）| `shikomi export` / `shikomi import` CLIコマンド（AC-DP-06〜10）|
-| 結合テスト | [test-design/it.md](test-design/it.md) | 5（TC-IT-DP-001〜005）| `export_records` / `import_records` UseCase 契約 |
+| E2Eテスト | [test-design/e2e.md](test-design/e2e.md) | 14（TC-E2E-DP-001〜014）| `shikomi export` / `shikomi import` CLIコマンド（AC-DP-06〜10）|
+| 結合テスト | [test-design/it.md](test-design/it.md) | 6（TC-IT-DP-001〜006）| `export_records` / `import_records` UseCase 契約 |
 | ユニットテスト | [test-design/ut.md](test-design/ut.md) | 10（TC-UT-201〜210）| Presenter 純粋関数 / ExitCode マッピング / conflict ID フォーマット |
-| **合計** | | **27** | |
+| **合計** | | **30** | |
 
 ---
 
@@ -77,11 +77,14 @@
 | TC-E2E-DP-010 | REQ-DP-005/009 | —（R1-DP-05）| 異常 | 不正 JSON ファイル → import で `MSG-CLI-143` exit 1 |
 | TC-E2E-DP-011 | REQ-DP-008 | —（R1-DP-01）| 正常 | `--force` 指定 + 出力先ファイル既存 → 上書き成功 |
 | TC-E2E-DP-012 | REQ-DP-008 | —（非機能: `0600`）| 正常 | export ファイルのパーミッションが `0600`（Unix のみ）|
+| TC-E2E-DP-013 | REQ-DP-009 | —（Issue #146 MSG-CLI-146）| 異常 | daemon が保持するロック（EXCLUSIVE 継続）→ import で `MSG-CLI-146` exit 1（~2s 待機）|
+| TC-E2E-DP-014 | REQ-DP-009 | —（Issue #146 透過的成功）| 正常 | 300ms 後にロック解放 → `busy_timeout(2000ms)` 内に import 成功（exit 0）|
 | TC-IT-DP-001 | REQ-DP-008 | AC-DP-06 | 境界値 | `export_records`: vault 空（`records: []`）→ `ExportSummary { record_count: 0 }` |
 | TC-IT-DP-002 | REQ-DP-009 | —（R1-DP-05）| 異常 | `import_records`: JSON パース失敗 → `CliError::ImportDeserializationFailed` |
 | TC-IT-DP-003 | REQ-DP-009/010 | —（R1-DP-05）| 異常 | `import_records`: `format_version: 999` → `CliError::ImportValidationFailed(UnknownFormatVersion)` |
 | TC-IT-DP-004 | REQ-DP-009/010 | AC-DP-07 | 正常 | `import_records`: hotkey フィールドが復元される（R1-DP-10）|
-| TC-IT-DP-005 | REQ-DP-009 | —（Issue #146）| 異常 | `import_records`: SQLITE_BUSY `busy_timeout(2000ms)` 超過 → `CliError::ImportVaultBusy` |
+| TC-IT-DP-005 | REQ-DP-009 | —（Issue #146）| 異常 | `import_records`: `load()` 経路 SQLITE_BUSY `busy_timeout(2000ms)` 超過 → `CliError::ImportVaultBusy` |
+| TC-IT-DP-006 | REQ-DP-009 | —（Issue #146 服部平次指摘: save() リグレッション）| 正常 | `import_records`: `from_directory_with_busy_timeout` repo で load+save 完走 → `ImportSummary { added: 1 }` |
 | TC-UT-201 | REQ-DP-011 | AC-DP-06 | 正常 | `render_exported`: English locale — 件数・パスが含まれる |
 | TC-UT-202 | REQ-DP-011 | AC-DP-06 | 正常 | `render_exported`: JapaneseEn locale — 日本語文が含まれる |
 | TC-UT-203 | REQ-DP-011 | AC-DP-07 | 正常 | `render_imported`: added / skipped / overwritten の各カウンタが文字列に反映される |
@@ -94,7 +97,7 @@
 | TC-UT-210 | REQ-DP-010/011 | —（Issue #146 MSG-CLI-146 文面保証）| 正常 | `render_error(&CliError::ImportVaultBusy, Locale::English)` → MSG-CLI-146 文面（"vault is in use" / "stop shikomi-daemon" / "shikomi daemon uninstall"）が含まれる |
 
 上位トレーサビリティ: `TC-E2E-DP-001〜012` → `AC-DP-06〜10` / `R1-DP-01〜10`（`feature-spec.md §5 Sub-B`）  
-Issue #146 追加分: `TC-IT-DP-005` / `TC-UT-209` / `TC-UT-210` → `basic-design.md §SQLITE_BUSY 設計判断` / `§MSG-CLI-146`  
+Issue #146 追加分: `TC-E2E-DP-013〜014` / `TC-IT-DP-005〜006` / `TC-UT-209` / `TC-UT-210` → `basic-design.md §SQLITE_BUSY 設計判断` / `§MSG-CLI-146` / 服部平次指摘 `AtomicWriteSession busy_timeout 伝搬`  
 下位連結: 本設計書 TC-E2E-* の検証対象 UseCase 実装に対し、`TC-IT-DP-*`・`TC-UT-*` が白箱保証を補完する
 
 ---
@@ -103,10 +106,10 @@ Issue #146 追加分: `TC-IT-DP-005` / `TC-UT-209` / `TC-UT-210` → `basic-desi
 
 | グループ | ファイル | TC 数 |
 |---------|---------|-------|
-| E2E | [test-design/e2e.md](test-design/e2e.md) | 12（TC-E2E-DP-001〜012）|
-| IT | [test-design/it.md](test-design/it.md) | 5（TC-IT-DP-001〜005）|
+| E2E | [test-design/e2e.md](test-design/e2e.md) | 14（TC-E2E-DP-001〜014）|
+| IT | [test-design/it.md](test-design/it.md) | 6（TC-IT-DP-001〜006）|
 | UT | [test-design/ut.md](test-design/ut.md) | 10（TC-UT-201〜210）|
-| **合計** | | **27** |
+| **合計** | | **30** |
 
 **受入テスト（階層 1 横断）**: data-portability feature は他 feature との crossing シナリオが「端末移行（export 元 vault → 別端末 vault）」に相当する。本設計書スコープ外だが、`SC-DDM-001` / `SC-DDM-002` 系の受入テストシナリオとして将来 `docs/acceptance-tests/scenarios/` に追加する。
 

@@ -155,7 +155,6 @@ pub enum CliError {
     GuiLaunchFailed(String),
 
     // ---------------- Issue #141: data-portability export / import ----------------
-
     /// vault がロック済みで export / import を試みた（MSG-CLI-140、exit 1）。
     ///
     /// `CliError::VaultLocked`（exit 3）とは意図的に分離：export / import は
@@ -188,6 +187,12 @@ pub enum CliError {
     /// import バリデーション失敗（MSG-CLI-143 / MSG-CLI-144、exit 1）。
     #[error("import validation failed: {0}")]
     ImportValidationFailed(shikomi_core::portability::ImportValidationError),
+
+    /// import 実行時に SQLITE_BUSY が `busy_timeout 2000ms` 超過後も解消しない
+    /// （MSG-CLI-146、exit 1）。daemon 常駐中に vault.db を直接書き込む経路
+    /// （`import_records`）でのロック競合。
+    #[error("vault is in use by shikomi-daemon; import aborted after 2 seconds")]
+    ImportVaultBusy,
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -268,6 +273,8 @@ impl From<crate::usecase::portability::error::DataPortabilityError> for CliError
                     reason: io_err.to_string(),
                 })
             }
+            // Issue #146: VaultBusy → ImportVaultBusy（MSG-CLI-146、exit 1）
+            DataPortabilityError::VaultBusy => Self::ImportVaultBusy,
         }
     }
 }
@@ -336,7 +343,9 @@ impl From<&CliError> for ExitCode {
             | CliError::ExportOutputFileExists { .. }
             | CliError::ImportConflict { .. }
             | CliError::ImportDeserializationFailed { .. }
-            | CliError::ImportValidationFailed(_) => Self::UserError,
+            | CliError::ImportValidationFailed(_)
+            // Issue #146: SQLITE_BUSY（daemon 常駐中の vault ロック競合、exit 1）
+            | CliError::ImportVaultBusy => Self::UserError,
             // exit 2（SystemError / WrongPassword）: 既存 I/O 系 + Sub-F SSoT パスワード違い
             CliError::Persistence(_)
             | CliError::Domain(_)
@@ -625,6 +634,8 @@ mod tests {
                     },
                 ),
             ),
+            // Issue #146: SQLITE_BUSY（daemon 常駐中の vault ロック競合）→ exit 1
+            ("ImportVaultBusy", CliError::ImportVaultBusy),
         ];
         for (name, err) in user_error_cases {
             assert_eq!(
@@ -708,5 +719,33 @@ mod tests {
         // `Result<(), CliError>` で `Ok` 時に `lib::run` が `ExitCode::Success` を返す
         // 経路 (本 TC は `ExitCode::Success as u8 == 0` の SSoT 1 行を担保)。
         assert_eq!(ExitCode::Success as u8, 0, "SSoT exit 0 (Success)");
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #146: SQLITE_BUSY UT — TC-UT-209
+    // 設計根拠: docs/features/data-portability/cli/test-design/ut.md §TC-UT-209
+    // -------------------------------------------------------------------
+
+    /// TC-UT-209 (REQ-DP-010): `DataPortabilityError::VaultBusy` が
+    /// `CliError::ImportVaultBusy` に変換され、`ExitCode::UserError`（exit 1）に写像される。
+    ///
+    /// `From<DataPortabilityError> for CliError` の `VaultBusy → ImportVaultBusy` マッピングと
+    /// `ExitCode` SSoT の局所検証（Issue #146 設計内部保証）。
+    #[test]
+    fn tc_ut_209_data_portability_vault_busy_maps_to_import_vault_busy_with_exit_1() {
+        use crate::usecase::portability::error::DataPortabilityError;
+
+        let dp_err = DataPortabilityError::VaultBusy;
+        let cli_err = CliError::from(dp_err);
+
+        assert!(
+            matches!(cli_err, CliError::ImportVaultBusy),
+            "DataPortabilityError::VaultBusy should map to CliError::ImportVaultBusy, got: {cli_err:?}"
+        );
+        assert_eq!(
+            ExitCode::from(&cli_err) as u8,
+            1,
+            "CliError::ImportVaultBusy should map to ExitCode::UserError (exit 1)"
+        );
     }
 }
