@@ -140,7 +140,7 @@
 
 | ID | 変更内容 |
 |----|---------|
-| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: `"hint: or enable autostart: shikomi daemon install"` を追加（Issue #134 で実装予定）|
+| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: 英語 `"hint: or enable autostart: shikomi daemon install"` / 日本語 `"hint: または自動起動を有効にする場合: shikomi daemon install"` を追加（Issue #134 で実装予定）。確定文面 SSoT は `daemon-ipc/basic-design/error.md §MSG-CLI-110 確定文面`|
 
 ## セキュリティ考慮
 

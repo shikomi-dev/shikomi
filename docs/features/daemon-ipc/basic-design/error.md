@@ -90,10 +90,12 @@ hint は **3 OS（Linux / macOS / Windows）の起動コマンドを並記した
 ```
 error: shikomi-daemon is not running (socket {path} unreachable)
 hint: start the daemon in a separate terminal by running one of:
-hint:   Linux/macOS: 'shikomi-daemon &'
-hint:   Linux (systemd user):  'systemctl --user start shikomi-daemon'
-hint:   macOS (launchd user):  'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'
-hint:   Windows (PowerShell):  'Start-Process -NoNewWindow shikomi-daemon'
+hint:   Linux/macOS:            'shikomi-daemon &'
+hint:   Linux (systemd user):   'systemctl --user start shikomi-daemon'
+hint:   macOS (launchd user):   'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'
+hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'
+hint: or pass --vault-dir <DIR> to point at the vault.db directory whose shikomi.sock you want to use
+hint: or enable autostart: shikomi daemon install
 ```
 
 **日本語併記（`Locale::JapaneseEn`）**: 英語原文をそのまま出力し、直下に以下の日本語訳を出す:
@@ -105,13 +107,16 @@ hint:   Linux/macOS:            'shikomi-daemon &'
 hint:   Linux (systemd user):   'systemctl --user start shikomi-daemon'
 hint:   macOS (launchd user):   'launchctl kickstart gui/$(id -u)/dev.shikomi.daemon'
 hint:   Windows (PowerShell):   'Start-Process -NoNewWindow shikomi-daemon'
+hint: または --vault-dir <DIR> で vault.db の所在ディレクトリを指定してください（同ディレクトリの shikomi.sock が daemon socket として使われます）
+hint: または自動起動を有効にする場合: shikomi daemon install
 ```
 
 **設計規約**:
 - hint 行は複数行出力（`println!` 相当、`render_error` が `\n` 連結で返す）
 - 3 OS 並記の根拠: ペガサス指摘 ② に対応、受入基準 1 / 13 の 3 OS matrix サポートと整合
 - systemd / launchd の起動コマンドは `process-model.md` §4.1 ルール 3 / 4 の規定と整合（将来 feature でサービス定義ファイルを自動配置するが、本 feature 時点では手動配置 + 手動 `systemctl` / `launchctl` 前提）
-- 「存在しないコマンドへの誘導禁止」: `shikomi daemon start` / `shikomi daemon stop` 等のサブコマンドは本 feature でも将来 Issue でも**追加予定はない**（daemon は独立バイナリとして扱う方針、`process-model.md` §4.1）
+- 「存在しないコマンドへの誘導禁止」: `shikomi daemon start` / `shikomi daemon stop` 等のサブコマンドは本 feature でも将来 Issue でも**追加予定はない**（daemon は独立バイナリとして扱う方針、`process-model.md` §4.1）。`shikomi daemon install` は Sub-B（Issue #127）で実装済みの実在コマンドであり例外
+- `--vault-dir` hint（Issue #75 Bug-F-007 解消）および autostart hint（Issue #134）は上記英日ブロックが SSoT
 
 ### MSG-CLI-111 確定文面（本書が単一真実源）
 
