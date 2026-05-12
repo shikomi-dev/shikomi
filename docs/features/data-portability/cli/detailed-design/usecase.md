@@ -18,7 +18,7 @@
 | `crates/shikomi-cli/src/usecase/portability/mod.rs` | 新規 | `export` / `import` / `error` モジュールの re-export |
 | `crates/shikomi-cli/src/usecase/portability/error.rs` | 新規 | `DataPortabilityError` 型定義 |
 | `crates/shikomi-cli/src/usecase/portability/export.rs` | 新規 | `export_records` 関数 + `ExportSummary` 型 |
-| `crates/shikomi-cli/src/usecase/portability/import.rs` | 新規 | `import_records_sqlite` / `import_records_ipc` 関数 + `ImportSummary` 型 + `import_record_to_domain` helper |
+| `crates/shikomi-cli/src/usecase/portability/import.rs` | 新規 | `import_records` 関数（単一 SQLite 経路）+ `ImportSummary` 型 + `import_record_to_domain` helper |
 
 ---
 
@@ -30,10 +30,10 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 
 | バリアント | フィールド | 発生条件 |
 |-----------|-----------|---------|
-| `VaultLocked` | なし | `SqliteVaultRepository::load()` が `ProtectionMode::Encrypted` を検出 / `IpcVaultRepository::add_record()` が `IpcErrorCode::VaultLocked` を返した |
+| `VaultLocked` | なし | `SqliteVaultRepository::load()` が `ProtectionMode::Encrypted` を検出 |
 | `OutputFileExists` | `path: PathBuf` | export 先ファイルが既に存在し `--force` 未指定 |
 | `ConflictError` | `ids: Vec<String>` | `--on-conflict error` で衝突検出 |
-| `DeserializationFailed` | `reason: String` | `serde_json::from_str` 失敗 |
+| `DeserializationFailed` | `reason: String` | `serde_json::from_reader` 失敗 |
 | `ValidationFailed` | `ImportValidationError` | `ImportValidator::validate` 失敗 |
 | `IoError` | `std::io::Error` | ファイル読み込み / `tempfile` 操作 / `persist` 失敗 |
 
@@ -78,6 +78,8 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 
 ## `usecase/portability/import.rs` の設計詳細
 
+**設計判断（IPC 経路を廃止した根拠）**: Import も export と同様に常に `SqliteVaultRepository` を使用する（`feature-spec.md R1-DP-08` / `basic-design.md §REQ-DP-009`）。IPC per-record `add_record()` は 2 つの根本問題を持つ: (1) 途中クラッシュで vault が半書き込み状態になり `R1-DP-09` の atomicity 要件に非適合、(2) `IpcVaultRepository::add_record()` は `created_at` / `updated_at` を受け付けないためタイムスタンプ保存に IPC プロトコル拡張が必要——YAGNI かつ Sub-B 範囲外。SQLite 直接アクセスなら `repo.save()` が atomic write を保証し、`Record::rehydrate` でタイムスタンプを完全復元できる。
+
 ### `ImportSummary` 型
 
 | フィールド | 型 | 説明 |
@@ -86,14 +88,14 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 | `skipped` | `usize` | 衝突により skip したレコード件数（`--on-conflict skip` 時のみ非ゼロ）|
 | `overwritten` | `usize` | 既存レコードを上書きしたレコード件数（`--on-conflict overwrite` 時のみ非ゼロ）|
 
-### `import_records_sqlite` 関数（SQLite `--no-ipc` 経路）
+### `import_records` 関数（単一 SQLite 経路）
 
-シグネチャ: `pub fn import_records_sqlite(repo: &dyn VaultRepository, args: &ImportArgs, now: OffsetDateTime) -> Result<ImportSummary, CliError>`
+シグネチャ: `pub fn import_records(repo: &dyn VaultRepository, args: &ImportArgs, now: OffsetDateTime) -> Result<ImportSummary, CliError>`
 
 処理順序:
 
-1. `std::fs::read_to_string(&args.input).map_err(DataPortabilityError::IoError)?`
-2. `serde_json::from_str::<ImportPayload>(&contents)` — `Err(e)` → `DataPortabilityError::DeserializationFailed { reason: e.to_string() }.into()`
+1. `std::fs::File::open(&args.input).map_err(DataPortabilityError::IoError)?` でファイルを開く
+2. `serde_json::from_reader::<_, ImportPayload>(file)` でストリーミングパース（OOM 防止：`read_to_string` は使用しない。`threat-model.md §7.5` 準拠）— `Err(e)` → `DataPortabilityError::DeserializationFailed { reason: e.to_string() }.into()`
 3. vault の準備: `repo.exists()?` が true なら `repo.load()?`（`EncryptionUnsupported` → `DataPortabilityError::VaultLocked`）、false なら `Vault::new(VaultHeader::new_plaintext(VaultVersion::CURRENT, now)?)`
 4. `let existing_ids: HashSet<String> = vault.records().iter().map(|r| r.id().to_string()).collect()`
 5. `ImportValidator::validate(&payload, &existing_ids)` — `Err(err)` → `DataPortabilityError::ValidationFailed(err).into()`
@@ -104,28 +106,8 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
    - `domain_record = import_record_to_domain(record)?`（変換失敗 → `ImportDeserializationFailed`）
    - `is_conflicting && on_conflict == Overwrite` → `vault.remove_record(domain_record.id()).map_err(CliError::Domain)?` → `vault.add_record(domain_record).map_err(CliError::Domain)?` → `overwritten += 1`
    - それ以外 → `vault.add_record(domain_record).map_err(CliError::Domain)?` → `added += 1`
-8. `repo.save(&vault)?`
+8. `repo.save(&vault)?`（`SqliteVaultRepository::save` が内部で `tempfile` + rename による atomic write を保証。R1-DP-09 適合）
 9. `Ok(ImportSummary { added, skipped, overwritten })`
-
-### `import_records_ipc` 関数（IPC デフォルト経路）
-
-シグネチャ: `pub fn import_records_ipc(ipc: &IpcVaultRepository, args: &ImportArgs, now: OffsetDateTime) -> Result<ImportSummary, CliError>`
-
-処理順序:
-
-1. ファイル読み込み・パース: `import_records_sqlite` の手順 1〜2 と同じロジック
-2. `ipc.list_summaries()?` で既存レコード ID を収集: `let existing_ids: HashSet<String> = outcome.records.iter().map(|s| s.id.to_string()).collect()`
-3. バリデーション・衝突チェック: `import_records_sqlite` の手順 5〜6 と同じロジック
-4. 各 `record` を `&payload.records` から走査する:
-   - `is_conflicting = report.conflicting_ids.contains(&record.id)`
-   - `is_conflicting && on_conflict == Skip` → `skipped += 1; continue`
-   - `domain_record = import_record_to_domain(record)?`（変換失敗 → `ImportDeserializationFailed`）
-   - `is_conflicting && on_conflict == Overwrite` → `ipc.remove_record(domain_record.id().clone()).map_err(|e| CliError::from(e))?` → `ipc.add_record_for_import(domain_record).map_err(|e| CliError::from(e))?` → `overwritten += 1`
-   - それ以外 → `ipc.add_record_for_import(domain_record).map_err(|e| CliError::from(e))?` → `added += 1`
-   - `IpcErrorCode::VaultLocked` が返った場合 → `ExportImportVaultLocked`（既存 `From<IpcErrorCode> for CliError` 後に `VaultLocked` → `ExportImportVaultLocked` への再写像を追加、または `run_import` 側で変換）
-5. `Ok(ImportSummary { added, skipped, overwritten })`
-
-**設計判断（IPC 経路の `add_record` 使用方法）**: `ipc.add_record()` は既存メソッドで label / kind / value / hotkey を受け付ける。import では `created_at` / `updated_at` の保存も必要なため、IPC プロトコルに `ImportRecord` を丸ごと送る `add_record_for_import` を別途追加するか、既存 `add_record` を流用して `created_at` / `updated_at` は `now` に置き換える（import 時の timestamp 保存を諦める）かを Sub-B 実装時に IPC プロトコル担当と調整する。タイムスタンプ保存の必要性は `feature-spec.md R1-DP-10` に「`hotkey` フィールドを復元する」とあるが `created_at` / `updated_at` の明示的な復元は要件化されていない。SQLite 直接経路でのみタイムスタンプを完全復元し、IPC 経路では `now` を使用するフォールバックを採用する（YAGNI）。
 
 ### `import_record_to_domain` helper 関数
 
@@ -155,5 +137,6 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 |------|------|
 | export ファイルの不正読取 | `0600` パーミッション設定を `tempfile::Builder` で実施（`cfg(unix)`）。Windows は ACL 委譲（`feature-spec.md §4` 通り）|
 | vault ロック済みでの export（`Encrypted` ペイロード変換失敗の伝播）| 手順 4 で `ProtectionMode::Encrypted` を即時検出して early return。手順 6 の `ExportError::VaultLocked` が二重安全網 |
+| import ファイルの OOM | `serde_json::from_reader` によるストリーミングパース。`read_to_string` は使用しない（`threat-model.md §7.5`）|
+| import の部分書き込み（クラッシュ）| IPC per-record 書き込みを廃止し SQLite `repo.save()` による atomic write に一本化（R1-DP-09）|
 | `import_record_to_domain` での `unreachable!` panic | `ImportValidator` 通過済みのデータのみ本関数に到達する設計契約。panic は実装バグの早期検出（告知的プログラミング）|
-| IPC 経路での Secret 値送信 | IPC `add_record` は既存 AddInput 経由でペイロードを送信する。Secret kind の平文は daemon ソケット（ローカル IPC）経由での送信になるが、既存 `shikomi add --kind secret` と同経路であり、脅威モデル上は許容済み |

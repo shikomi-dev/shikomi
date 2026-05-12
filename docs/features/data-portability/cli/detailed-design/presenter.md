@@ -145,11 +145,12 @@
 
 処理順序:
 
-1. `let now = OffsetDateTime::now_utc()`
-2. `handle` に応じて UseCase を分岐する:
-   - `RepositoryHandle::Sqlite(repo)` → `usecase::portability::import::import_records_sqlite(repo, args, now)?`
-   - `RepositoryHandle::Ipc(ipc)` → `usecase::portability::import::import_records_ipc(ipc, args, now)?`
-3. `!quiet` の場合: `print_stdout(&presenter::success::render_imported(summary.added, summary.skipped, summary.overwritten, locale))`
+1. vault_dir の解決: `args.vault_dir.as_deref()` が `Some(p)` なら `p` を使用、`None` なら `io::paths::resolve_os_default_vault_dir()?`
+2. `handle` が `RepositoryHandle::Ipc(_)` かつ `args.no_ipc == false` の場合: `tracing::warn!(target: "shikomi_cli::import", "import uses direct SQLite access regardless of IPC mode")` を記録する（`run_export` と同じ pattern。import も常に SQLite 直接アクセス、R1-DP-08）
+3. `RepositoryHandle` のバリアントに**関わらず**、解決した vault_dir から `SqliteVaultRepository::new(&vault_path)` を構築する（理由: IPC per-record 書き込みは R1-DP-09 の atomicity 要件に非適合。`basic-design.md §REQ-DP-009` 参照）
+4. `let now = OffsetDateTime::now_utc()`
+5. `usecase::portability::import::import_records(&sqlite_repo, args, now)?`
+6. `!quiet` の場合: `print_stdout(&presenter::success::render_imported(summary.added, summary.skipped, summary.overwritten, locale))`
 
 ---
 
@@ -160,3 +161,4 @@
 | `--export-secrets` による誤操作全漏洩 | `run_export` が UseCase 呼び出し前に `eprintln!` で MSG-CLI-145 を stderr に強制出力。`quiet` フラグを確認しない経路として設計し、コードレビューで確認可能な形にする |
 | MSG-CLI-145 の `--quiet` 抑止 | `run_export` で `quiet` フラグを参照せず直接 `eprintln!` を使用。将来 `quiet` フラグの分岐が追加されても MSG-CLI-145 が影響を受けないよう、コメントで `--quiet 抑止不可` を明記する |
 | `format_conflict_ids` での情報過多 | 最大 4 件 + 省略表示。大量の ID を表示して端末を溢れさせない |
+| import の部分書き込み（クラッシュ）| IPC per-record 書き込みを廃止し `SqliteVaultRepository::save()` による atomic write に一本化（R1-DP-09）。`run_import` も `run_export` と同様に常に SQLite 直接アクセスを使用する |
