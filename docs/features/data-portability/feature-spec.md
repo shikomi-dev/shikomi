@@ -2,7 +2,7 @@
 
 <!-- feature: data-portability / Issue #135（Phase 2 export/import）/ Issue #140（Sub-A: domain）/ Issue #141（Sub-B: cli）-->
 <!-- 配置先: docs/features/data-portability/feature-spec.md -->
-<!-- 本ファイルは最初の sub-feature PR で凍結。以降の sub-feature PR は引用のみ -->
+<!-- 本ファイルは Sub-A（PR #142）で凍結。Sub-B（PR #144）工程 2 で R1-DP-08/09 を改訂（IPC import 経路の atomicity 不適合発覚による）。以降の sub-feature PR は引用のみ -->
 
 ## 1. 業務概要
 
@@ -53,8 +53,8 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 | R1-DP-05 | `shikomi import --input <FILE>` で JSON ファイルを読み込み、バリデーション後に vault へ追加する |
 | R1-DP-06 | import 時の衝突戦略を `--on-conflict skip|overwrite|error` で指定可能にする（既定: `error`）|
 | R1-DP-07 | `{"kind":"redacted"}` payload を持つレコードのインポートを拒否する（`MSG-CLI-144`）|
-| R1-DP-08 | export は `VaultRepository` trait 経由で実装し、IPC 経路（daemon）と SQLite 直結（`--no-ipc`）の両方で動作する |
-| R1-DP-09 | export / import の処理は `tempfile` を用いた atomic な書き込みで実装する（import の部分書き込み防止）|
+| R1-DP-08 | export / import はともに常に SQLite 直接アクセス（`SqliteVaultRepository`）で実装する。`IpcVaultRepository` はペイロードを返さない設計制約（`list_summaries()` が空文字列代替を返す）と、IPC per-record 書き込みではアトミック性を保証できない（R1-DP-09 への非適合）という 2 つの根拠により、daemon 起動状態に関わらず SQLite 直結を使用する |
+| R1-DP-09 | export は `tempfile::NamedTempFile::persist` による atomic rename で実装する。import は `SqliteVaultRepository::save()` が内部で atomic write を保証する（`tempfile` + rename）。いずれも途中クラッシュで vault が壊れない |
 | R1-DP-10 | `hotkey` フィールドを export ファイルに含める（`null` または文字列）。import 時は hotkey フィールドも復元する |
 
 ## 4. 非機能要件（本 feature スコープ）
