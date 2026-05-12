@@ -40,15 +40,7 @@ fn setup_vault_dir() -> TempDir {
 /// vault に Text レコードを 1 件追加する。成功が前提。
 fn add_text_record(dir: &Path, label: &str, value: &str) {
     shikomi(dir)
-        .args([
-            "add",
-            "--kind",
-            "text",
-            "--label",
-            label,
-            "--value",
-            value,
-        ])
+        .args(["add", "--kind", "text", "--label", label, "--value", value])
         .assert()
         .success();
 }
@@ -57,13 +49,7 @@ fn add_text_record(dir: &Path, label: &str, value: &str) {
 fn add_secret_record(dir: &Path, label: &str, value: &str) {
     shikomi(dir)
         .args([
-            "add",
-            "--kind",
-            "secret",
-            "--label",
-            label,
-            "--value",
-            value,
+            "add", "--kind", "secret", "--label", label, "--value", value,
         ])
         .assert()
         .success();
@@ -220,8 +206,7 @@ fn tc_e2e_dp_005_second_import_all_conflict_exits_1_with_msg_cli_142() {
 fn tc_e2e_dp_006_export_on_locked_vault_exits_1_with_msg_cli_140() {
     let dir = setup_vault_dir();
     // 暗号化 vault を作成（ロック済み）
-    common::fixtures::create_encrypted_vault(dir.path())
-        .expect("create_encrypted_vault");
+    common::fixtures::create_encrypted_vault(dir.path()).expect("create_encrypted_vault");
     let out = dir.path().join("out.json");
 
     shikomi(dir.path())
@@ -250,7 +235,9 @@ fn tc_e2e_dp_007_export_existing_file_without_force_exits_1_with_msg_cli_141() {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicate::str::contains("export output file already exists"))
+        .stderr(predicate::str::contains(
+            "export output file already exists",
+        ))
         .stderr(predicate::str::contains("--force"));
 }
 

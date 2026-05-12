@@ -1,7 +1,7 @@
 //! `SqliteVaultRepository` — `VaultRepository` の `SQLite` 実装。
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
 use shikomi_core::{Record, Vault, VaultHeader, VaultVersion};
@@ -27,6 +27,14 @@ use super::{
 /// `SQLite` バックエンドの `VaultRepository` 実装。
 pub struct SqliteVaultRepository {
     paths: VaultPaths,
+    /// SQLite コネクションに設定する `busy_timeout`。
+    ///
+    /// `from_directory_with_busy_timeout` 経由で構築した場合のみ `Some`。
+    /// `from_directory` / `new` 経由では `None`（既存動作を維持）。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §busy_timeout のカプセル化設計（Issue #146）
+    busy_timeout: Option<Duration>,
 }
 
 impl SqliteVaultRepository {
@@ -53,7 +61,42 @@ impl SqliteVaultRepository {
     /// - `fs::canonicalize` 失敗: `PersistenceError::InvalidVaultDir { reason: Canonicalize }`
     pub fn from_directory(path: &Path) -> Result<Self, PersistenceError> {
         let paths = VaultPaths::new(path.to_path_buf())?;
-        Ok(Self { paths })
+        Ok(Self {
+            paths,
+            busy_timeout: None,
+        })
+    }
+
+    /// 明示的な vault ディレクトリと `busy_timeout` を指定して `SqliteVaultRepository` を構築する。
+    ///
+    /// `from_directory` と同じバリデーションを行った上で、SQLite コネクションを開く際に
+    /// `connection.busy_timeout(timeout)` を適用する（Tell, Don't Ask）。
+    ///
+    /// `lib.rs::run_import` のみが呼び出す。他の操作（daemon / export 等）は
+    /// `from_directory` / `new` を使用して既存の挙動を維持する。
+    ///
+    /// # Arguments
+    ///
+    /// - `path` — vault ディレクトリの絶対パス
+    /// - `timeout` — SQLITE_BUSY 発生時に SQLite が待機する最大時間
+    ///
+    /// # Errors
+    ///
+    /// - ディレクトリ検証失敗: `PersistenceError::InvalidVaultDir`
+    ///
+    /// # 設計根拠
+    ///
+    /// docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §busy_timeout のカプセル化設計（Issue #146）
+    pub fn from_directory_with_busy_timeout(
+        path: &Path,
+        timeout: Duration,
+    ) -> Result<Self, PersistenceError> {
+        let paths = VaultPaths::new(path.to_path_buf())?;
+        Ok(Self {
+            paths,
+            busy_timeout: Some(timeout),
+        })
     }
 
     /// vault パス情報への参照を返す。
@@ -225,6 +268,15 @@ impl SqliteVaultRepository {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| PersistenceError::Sqlite { source: e })?;
+
+        // Issue #146: busy_timeout が設定されている場合（`from_directory_with_busy_timeout`
+        // 経由での構築時）、コネクションに適用する。SQLITE_BUSY 発生時に SQLite が
+        // `timeout` 時間リトライし、タイムアウト後も解消しない場合は
+        // `PersistenceError::DatabaseBusy` を返す（`From<rusqlite::Error>` が型検査）。
+        if let Some(timeout) = self.busy_timeout {
+            conn.busy_timeout(timeout)
+                .map_err(|e| PersistenceError::Sqlite { source: e })?;
+        }
 
         // Step 8: application_id 確認
         let app_id: u32 = conn

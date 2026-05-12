@@ -277,11 +277,17 @@ pub fn render_autostart_uninstalled(locale: Locale) -> String {
 ///
 /// `quiet == true` の場合は呼出側（`run_export`）で呼ばない（presenter 層は quiet 非関与）。
 #[must_use]
-pub fn render_exported(record_count: usize, output_path: &std::path::Path, locale: Locale) -> String {
+pub fn render_exported(
+    record_count: usize,
+    output_path: &std::path::Path,
+    locale: Locale,
+) -> String {
     let path_str = output_path.display();
     let mut out = format!("exported {record_count} record(s) to {path_str}\n");
     if matches!(locale, Locale::JapaneseEn) {
-        out.push_str(&format!("{record_count} 件のレコードを {path_str} に export しました\n"));
+        out.push_str(&format!(
+            "{record_count} 件のレコードを {path_str} に export しました\n"
+        ));
     }
     out
 }
@@ -291,7 +297,8 @@ pub fn render_exported(record_count: usize, output_path: &std::path::Path, local
 /// `quiet == true` の場合は呼出側（`run_import`）で呼ばない（presenter 層は quiet 非関与）。
 #[must_use]
 pub fn render_imported(added: usize, skipped: usize, overwritten: usize, locale: Locale) -> String {
-    let mut out = format!("imported {added} record(s) (skipped {skipped}, overwritten {overwritten})\n");
+    let mut out =
+        format!("imported {added} record(s) (skipped {skipped}, overwritten {overwritten})\n");
     if matches!(locale, Locale::JapaneseEn) {
         out.push_str(&format!(
             "{added} 件を追加しました（スキップ: {skipped} 件、上書き: {overwritten} 件）\n"
@@ -310,9 +317,7 @@ pub fn render_export_secrets_warning(locale: Locale) -> String {
     let mut out = String::from(
         "warning: --export-secrets is set; secret values will be written to the export file in plaintext\n",
     );
-    out.push_str(
-        "warning: store the export file securely and delete it when no longer needed\n",
-    );
+    out.push_str("warning: store the export file securely and delete it when no longer needed\n");
     if matches!(locale, Locale::JapaneseEn) {
         out.push_str(
             "warning: --export-secrets が指定されています。Secret の値が平文でエクスポートファイルに書き込まれます\n",
@@ -507,8 +512,7 @@ mod tests {
     /// English 行と日本語行の両方を含む（バイリンガル出力保証）。
     #[test]
     fn tc_ut_212c_render_exported_japanese_en_contains_both_english_and_japanese() {
-        let rendered =
-            render_exported(5, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
+        let rendered = render_exported(5, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
         assert!(
             rendered.contains("exported 5 record(s)"),
             "JapaneseEn must also contain English line, got: {rendered:?}"
@@ -677,7 +681,11 @@ mod tests {
     #[test]
     fn tc_ut_212p_render_exported_large_count_does_not_panic() {
         // パニックしないことを確認するだけ（値の厳密な検証は不要）。
-        let _ = render_exported(usize::MAX, std::path::Path::new("/tmp/large.json"), Locale::English);
+        let _ = render_exported(
+            usize::MAX,
+            std::path::Path::new("/tmp/large.json"),
+            Locale::English,
+        );
     }
 
     /// TC-UT-212q (REQ-DP-011 / AC-DP-07): `render_imported` は `usize::MAX` のような
@@ -738,8 +746,7 @@ mod tests {
     /// TC-UT-212v (REQ-DP-011): `render_exported` JapaneseEn locale は正確に 2 行（改行 2 個）。
     #[test]
     fn tc_ut_212v_render_exported_japanese_en_has_exactly_two_lines() {
-        let rendered =
-            render_exported(1, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
+        let rendered = render_exported(1, std::path::Path::new("/tmp/v.json"), Locale::JapaneseEn);
         assert_eq!(
             rendered.matches('\n').count(),
             2,
@@ -914,7 +921,8 @@ mod tests {
     /// JapaneseEn ロケールは `"Secret"` と `"平文"` の両方を含む
     /// （Secret 種別と平文書き出しの日本語での明示保証）。
     #[test]
-    fn tc_ut_212aj_render_export_secrets_warning_japanese_en_mentions_secret_and_plaintext_japanese() {
+    fn tc_ut_212aj_render_export_secrets_warning_japanese_en_mentions_secret_and_plaintext_japanese(
+    ) {
         let rendered = render_export_secrets_warning(Locale::JapaneseEn);
         assert!(
             rendered.contains("Secret"),

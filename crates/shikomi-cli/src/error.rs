@@ -155,7 +155,6 @@ pub enum CliError {
     GuiLaunchFailed(String),
 
     // ---------------- Issue #141: data-portability export / import ----------------
-
     /// vault がロック済みで export / import を試みた（MSG-CLI-140、exit 1）。
     ///
     /// `CliError::VaultLocked`（exit 3）とは意図的に分離：export / import は
@@ -188,6 +187,12 @@ pub enum CliError {
     /// import バリデーション失敗（MSG-CLI-143 / MSG-CLI-144、exit 1）。
     #[error("import validation failed: {0}")]
     ImportValidationFailed(shikomi_core::portability::ImportValidationError),
+
+    /// import 実行時に SQLITE_BUSY が `busy_timeout 2000ms` 超過後も解消しない
+    /// （MSG-CLI-146、exit 1）。daemon 常駐中に vault.db を直接書き込む経路
+    /// （`import_records`）でのロック競合。
+    #[error("vault is in use by shikomi-daemon; import aborted after 2 seconds")]
+    ImportVaultBusy,
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -268,6 +273,8 @@ impl From<crate::usecase::portability::error::DataPortabilityError> for CliError
                     reason: io_err.to_string(),
                 })
             }
+            // Issue #146: VaultBusy → ImportVaultBusy（MSG-CLI-146、exit 1）
+            DataPortabilityError::VaultBusy => Self::ImportVaultBusy,
         }
     }
 }
@@ -336,7 +343,9 @@ impl From<&CliError> for ExitCode {
             | CliError::ExportOutputFileExists { .. }
             | CliError::ImportConflict { .. }
             | CliError::ImportDeserializationFailed { .. }
-            | CliError::ImportValidationFailed(_) => Self::UserError,
+            | CliError::ImportValidationFailed(_)
+            // Issue #146: SQLITE_BUSY（daemon 常駐中の vault ロック競合、exit 1）
+            | CliError::ImportVaultBusy => Self::UserError,
             // exit 2（SystemError / WrongPassword）: 既存 I/O 系 + Sub-F SSoT パスワード違い
             CliError::Persistence(_)
             | CliError::Domain(_)
@@ -625,6 +634,8 @@ mod tests {
                     },
                 ),
             ),
+            // Issue #146: SQLITE_BUSY（daemon 常駐中の vault ロック競合）→ exit 1
+            ("ImportVaultBusy", CliError::ImportVaultBusy),
         ];
         for (name, err) in user_error_cases {
             assert_eq!(

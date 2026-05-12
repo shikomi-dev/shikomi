@@ -9,10 +9,8 @@ mod common;
 
 use shikomi_cli::cli::{ExportArgs, ImportArgs, OnConflictArg};
 use shikomi_cli::error::CliError;
-use shikomi_cli::usecase::portability::{
-    export::export_records, import::import_records,
-};
-use shikomi_core::{RecordKind, RecordLabel, RecordPayload, SecretString, Hotkey};
+use shikomi_cli::usecase::portability::{export::export_records, import::import_records};
+use shikomi_core::{Hotkey, RecordKind, RecordLabel, RecordPayload, SecretString};
 use shikomi_infra::persistence::VaultRepository;
 
 use common::{fixed_time, fresh_repo};
@@ -38,7 +36,10 @@ fn tc_it_dp_001_export_records_empty_vault_returns_summary_with_zero_count() {
         .expect("export_records should succeed for empty vault");
 
     assert_eq!(summary.record_count, 0);
-    assert!(out.exists(), "output file should be created even for empty vault");
+    assert!(
+        out.exists(),
+        "output file should be created even for empty vault"
+    );
 
     let content = std::fs::read_to_string(&out).unwrap();
     assert!(
@@ -101,7 +102,9 @@ fn tc_it_dp_003_import_records_unknown_format_version_returns_validation_failed(
         matches!(
             result,
             Err(CliError::ImportValidationFailed(
-                shikomi_core::portability::ImportValidationError::UnknownFormatVersion { found: 999 }
+                shikomi_core::portability::ImportValidationError::UnknownFormatVersion {
+                    found: 999
+                }
             ))
         ),
         "expected ImportValidationFailed(UnknownFormatVersion {{ found: 999 }}), got: {result:?}"
@@ -146,8 +149,7 @@ fn tc_it_dp_004_import_records_hotkey_is_restored() {
         export_secrets: false,
         force: false,
     };
-    export_records(&repo_a, &export_args, dir_a.path(), now)
-        .expect("export should succeed");
+    export_records(&repo_a, &export_args, dir_a.path(), now).expect("export should succeed");
 
     // vault B に import
     let (_dir_b, repo_b) = fresh_repo();
@@ -155,17 +157,14 @@ fn tc_it_dp_004_import_records_hotkey_is_restored() {
         input: out,
         on_conflict: OnConflictArg::Error,
     };
-    let summary = import_records(&repo_b, &import_args, now)
-        .expect("import should succeed");
+    let summary = import_records(&repo_b, &import_args, now).expect("import should succeed");
     assert_eq!(summary.added, 1);
 
     // vault B のレコードの hotkey が "ctrl+2" に復元されていること
     let vault_b = repo_b.load().unwrap();
     let records: Vec<_> = vault_b.records().iter().collect();
     assert_eq!(records.len(), 1);
-    let hotkey_str = records[0]
-        .hotkey()
-        .map(|h| h.as_str().to_owned());
+    let hotkey_str = records[0].hotkey().map(|h| h.as_str().to_owned());
     assert_eq!(
         hotkey_str,
         Some("ctrl+2".to_owned()),

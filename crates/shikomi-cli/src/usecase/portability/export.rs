@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use shikomi_core::portability::{ExportPayload, ExportRecord};
-use shikomi_core::{ProtectionMode};
+use shikomi_core::ProtectionMode;
 use shikomi_infra::persistence::VaultRepository;
 use time::OffsetDateTime;
 

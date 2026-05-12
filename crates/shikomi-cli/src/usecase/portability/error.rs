@@ -57,6 +57,17 @@ pub enum DataPortabilityError {
     /// ファイル I/O エラー（`tempfile` 操作 / `persist` 失敗を含む）。
     #[error("io error: {0}")]
     IoError(std::io::Error),
+
+    /// `repo.save()` または `repo.load()` が `SQLITE_BUSY`（エラーコード 5）を
+    /// `busy_timeout 2000ms` 超過後も解消しない場合に発生する。
+    ///
+    /// `From<DataPortabilityError> for CliError` で `CliError::ImportVaultBusy`
+    /// （MSG-CLI-146）にマッピングされる。
+    ///
+    /// 設計根拠: docs/features/data-portability/cli/detailed-design/usecase.md
+    /// §SQLITE_BUSY の検出経路（Issue #146）
+    #[error("vault is busy (SQLITE_BUSY)")]
+    VaultBusy,
 }
 
 impl From<std::io::Error> for DataPortabilityError {
