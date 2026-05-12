@@ -93,6 +93,8 @@ jobs:
 
       - name: import certificate to Keychain
         # 設計根拠: jobs.md §3.4
+        # APPLE_CERTIFICATE 未設定時はスキップ（MVPフェーズ: コード署名なし許容、Issue #121）
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -107,16 +109,18 @@ jobs:
 
       - name: tauri build (macos)
         # 設計根拠: jobs.md §3.3 / §3.5
+        # APPLE_CERTIFICATE 未設定時は signing env を渡さず unsigned ビルド（Issue #121）
         working-directory: crates/shikomi-gui
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID || '' }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_TEAM_ID || '' }}
         run: cargo tauri build --ci
 
       - name: cleanup Keychain
         # 設計根拠: jobs.md §3.4 — タスクビルド失敗時も実行（対称性保証）
-        if: always()
+        # APPLE_CERTIFICATE 未設定時は Keychain を作成していないためスキップ（Issue #121）
+        if: ${{ always() && secrets.APPLE_CERTIFICATE != '' }}
         run: |
           security delete-keychain build.keychain
           rm -f certificate.p12
@@ -151,7 +155,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
 
       - name: tauri build setup
+        # save-cache: 'false' — Windows の rust-cache 保存ステップが tar/API エラーで失敗するため抑制（Issue #121）
         uses: ./.github/actions/tauri-build-setup
+        with:
+          save-cache: "false"
 
       - name: tauri build (windows)
         # 設計根拠: jobs.md §4.3 / §4.4
