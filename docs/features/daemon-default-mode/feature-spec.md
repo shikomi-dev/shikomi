@@ -68,6 +68,8 @@ Phase 1（`daemon-ipc` feature）では `--ipc` フラグが opt-in だった。
 
 ## 5. 受入基準
 
+### Sub-A（Issue #126）: CLI IPC 既定化
+
 | ID | 基準 |
 |----|------|
 | AC-DDM-01 | daemon 起動状態で `shikomi list`（`--ipc` なし）が IPC 経由でレコード一覧を返す |
@@ -77,11 +79,21 @@ Phase 1（`daemon-ipc` feature）では `--ipc` フラグが opt-in だった。
 | AC-DDM-05 | daemon 起動状態で `shikomi list` の stderr に `MSG-CLI-051` が出力**されない**こと（廃止確認）|
 | AC-DDM-06 | `shikomi --no-ipc vault encrypt` が失敗し、vault サブコマンドが IPC 強制されていることを確認 |
 
+### Sub-B（Issue #127）: daemon OS 自動起動
+
+| ID | 基準 |
+|----|------|
+| AC-DDM-07 | `shikomi daemon install` が成功し、stdout に `"shikomi-daemon autostart enabled"` + OS 固有 hint を出力して exit 0 で終了する。OS 固有の自動起動ファイル（macOS: plist / Linux: systemd unit または .desktop / Windows: schtasks タスク）が配置されていること |
+| AC-DDM-08 | `shikomi daemon uninstall` が成功し、stdout に `"shikomi-daemon autostart disabled"` を出力して exit 0 で終了する。自動起動ファイルが削除されていること |
+| AC-DDM-09 | `shikomi daemon status` が常に exit 0 で終了し、`"daemon: running"` / `"daemon: not running"` + `"autostart: enabled"` / `"autostart: disabled"` の 2 行を正しく出力する |
+| AC-DDM-10 | `shikomi daemon install` を 2 回連続実行しても 2 回目も exit 0 で終了する（冪等性確認）|
+
 ## 6. スコープ外
 
 | 項目 | 理由 |
 |------|------|
-| daemon OS 自動起動 | Sub-B（Issue #127）で対応 |
+| OS 再起動後の daemon 自動起動実証 | CI 環境での OS 再起動テストは実施不可。手動受入テストとして実施する（`SC-DDM-002` §手動確認事項）|
+| MSG-CLI-110 hint への `shikomi daemon install` 誘導追加 | Sub-B 完了後の別 PR で実施（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ`）|
 | `--ipc` 廃止の移行支援 CLI（`shikomi migrate` 等）| YAGNI（移行コストは軽微、`CHANGELOG.md` で十分）|
 | IPC プロトコルの変更 | `daemon-ipc` feature の protocol は `V1` で凍結済み（`ipc-protocol.md §バージョニングルール`）|
 | ホットキー / クリップボード / 暗号化 vault の Phase 2 対応 | 各後続 feature のスコープ |
