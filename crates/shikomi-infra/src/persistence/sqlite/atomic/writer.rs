@@ -63,11 +63,10 @@ impl AtomicWriter {
         paths: &VaultPaths,
         vault: &Vault,
     ) -> Result<(), PersistenceError> {
-        let mut session = AtomicWriteSession::new(paths, vault)?;
-        // conn を正常 drop して SQLite を閉じる（sqlite3_close_v2 経由）
-        drop(session.conn.take());
-        // new_path を None に — Drop が cleanup_new を呼ばないようにして .new を残す
-        session.new_path = None;
+        let session = AtomicWriteSession::new(paths, vault)?;
+        // conn を close して SQLite ハンドルを解放し、new_path を None にして
+        // Drop が cleanup_new を呼ばないようにすることで .new を残す。
+        session.close_without_rename();
         Ok(())
     }
 }

@@ -15,8 +15,9 @@ use crate::persistence::permission::PermissionGuard;
 use crate::persistence::sqlite::mapping::Mapping;
 use crate::persistence::sqlite::schema::SchemaSql;
 
+use super::constants::SQLITE_SIDECAR_SUFFIXES;
+use super::retry_policy::RetryPolicy;
 use super::writer::AtomicWriter;
-use super::{RetryPolicy, SQLITE_SIDECAR_SUFFIXES};
 
 /// SQLite 書込中の `Connection` を保持するセッション型（Phase 8 新設、Issue #73）。
 ///
@@ -28,12 +29,12 @@ use super::{RetryPolicy, SQLITE_SIDECAR_SUFFIXES};
 /// best-effort 実行し panic しない（Fail Safe）。
 /// `new_path` が `None` ならば cleanup 不要（`finalize` が所有権を取得済）。
 pub(crate) struct AtomicWriteSession {
-    pub(super) conn: Option<rusqlite::Connection>,
+    conn: Option<rusqlite::Connection>,
     /// `finalize` 冒頭で `take()` し `None` にする。
     /// `Drop` は `Some` の場合のみ cleanup_new を呼ぶ。
-    pub(super) new_path: Option<PathBuf>,
-    pub(super) final_path: PathBuf,
-    pub(super) dir_path: PathBuf,
+    new_path: Option<PathBuf>,
+    final_path: PathBuf,
+    dir_path: PathBuf,
 }
 
 impl AtomicWriteSession {
@@ -240,6 +241,20 @@ impl AtomicWriteSession {
 
         // Step 7.7: アトミックリネーム（Win: retry_policy に従う retry + symlink 再検証）
         Self::rename_atomic(&path, &final_path, retry_policy)
+    }
+
+    /// conn を close し new_path を `None` にしてセッションを終了する（テスト専用）。
+    ///
+    /// `finalize` を呼ばずに `.new` ファイルを意図的に残したい場合（AC-06 の中断状態再現）に使用。
+    /// `conn` を正常 close することで SQLite ハンドルを解放し、`new_path = None` により
+    /// `Drop` impl が `cleanup_new` を呼ばないことを保証する。
+    #[cfg(test)]
+    pub(crate) fn close_without_rename(mut self) {
+        // conn を take() して drop — SQLite ハンドルを解放する
+        drop(self.conn.take());
+        // new_path を None に — Drop が cleanup_new を呼ばないようにして .new を残す
+        self.new_path = None;
+        // self が drop されるが new_path = None のため cleanup は発火しない
     }
 
     // ------------------------------------------------------------------
@@ -451,5 +466,24 @@ impl AtomicWriteSession {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for AtomicWriteSession {
+    /// `finalize` 未呼出のまま drop された場合は `.new` を best-effort 削除（Fail Safe）。
+    ///
+    /// `new_path` が `None`（`finalize` が所有権を取得済）の場合は何もしない。
+    ///
+    /// **順序**: `conn` を先に close してからファイル削除する。
+    /// Windows はオープン中のファイルハンドルを持つファイルの削除を
+    /// `ERROR_ACCESS_DENIED (5)` で拒否するため、`cleanup_new` の前に
+    /// `conn.take()` で `rusqlite::Connection` を drop しなければならない。
+    fn drop(&mut self) {
+        // Windows: conn が Some のまま remove_file すると ERROR_ACCESS_DENIED (5)。
+        // take() で Connection を drop し、ファイルハンドルを解放してから削除する。
+        drop(self.conn.take());
+        if let Some(ref path) = self.new_path {
+            AtomicWriter::cleanup_new(path);
+        }
     }
 }
