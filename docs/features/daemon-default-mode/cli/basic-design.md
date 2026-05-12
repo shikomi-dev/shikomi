@@ -64,10 +64,10 @@
 | 項目 | 内容 |
 |------|------|
 | 入力 | `Subcommand::Vault(_)` + `args.no_ipc == true` |
-| 処理 | vault サブコマンド経路は `args.no_ipc` フラグを**無視**して IPC 強制を維持する（既存 `connect_vault_ipc` 関数は変更なし）|
-| 出力 | IPC 経由での vault 操作（`--no-ipc` 指定時でも同じ）|
-| エラー時 | daemon 未起動 → `MSG-CLI-110` + exit 1（`--no-ipc` が指定されていても同じ）|
-| 設計原則 | vault 管理は daemon の責務（Phase 2 設計規定 / `process-model.md §4.1`）|
+| 処理 | vault サブコマンド経路は `args.no_ipc` フラグを**無視**して IPC 強制を維持する（既存 `connect_vault_ipc` 関数は変更なし）。`args.no_ipc == true` を検出した時点で `MSG-CLI-052`（note 行）を stderr に先行出力してから IPC 接続処理に進む |
+| 出力 | (1) `quiet == false` かつ `args.no_ipc == true` の場合 → `MSG-CLI-052` を stderr に出力してから IPC 経由での vault 操作を続行 / (2) `quiet == true` の場合 → `MSG-CLI-052` を抑止して IPC 経由での vault 操作のみ実行 |
+| エラー時 | daemon 未起動 → `MSG-CLI-052` 出力後に `MSG-CLI-110` + exit 1（`--no-ipc` が指定されていても同じ）|
+| 設計原則 | vault 管理は daemon の責務（Phase 2 設計規定 / `process-model.md §4.1`）/ Tell, Don't Ask（ユーザーのフラグ指定に対してシステムが沈黙で上書きしない）|
 
 ## ユーザー向けメッセージ一覧
 
@@ -78,6 +78,12 @@
 | MSG-CLI-051 | IPC が既定となったため opt-in 警告が不要 |
 
 **MSG-CLI-051 の ID は再利用禁止**（`daemon-ipc/detailed-design/future-extensions.md §バイナリ正規形仕様` の ID 固定契約に準じる）。
+
+### 新規追加するメッセージ
+
+| ID | メッセージ（英語） | メッセージ（日本語） | 表示条件 |
+|----|----------------|------------------|---------|
+| MSG-CLI-052 | `note: vault commands always use IPC; --no-ipc does not apply` | `注: vault サブコマンドは常に IPC 経由です。--no-ipc は適用されません` | `Subcommand::Vault(_)` かつ `args.no_ipc == true` かつ `quiet == false` の時（情報通知、終了コード 0 維持。`--quiet` で抑止）|
 
 ### 更新するメッセージ
 

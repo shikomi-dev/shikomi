@@ -241,17 +241,59 @@ grep -rn "MSG-CLI-051\|ipc_opt_in\|render_ipc" crates/shikomi-cli/src/
 
 期待結果: 0 件（`presenter/warning.rs` の関数削除後）
 
+### `--no-ipc vault *` 実行時の `MSG-CLI-052` 出力（REQ-DDM-005 / ペガサス指摘対応）
+
+`run_vault` 呼び出し前の vault サブコマンド dispatch ブロックに、`args.no_ipc == true` 検出時の note 出力を追加する。
+
+**変更前（`lib.rs` vault dispatch ブロック）**:
+
+```
+if let Subcommand::Vault(vault) = &args.subcommand {
+    let result = run_vault(vault, args.vault_dir.as_deref(), locale, quiet);
+    ...
+}
+```
+
+**変更後（`args.no_ipc` 検出時に MSG-CLI-052 を先行出力）**:
+
+```
+if let Subcommand::Vault(vault) = &args.subcommand {
+    if args.no_ipc && !quiet {
+        let note = presenter::warning::render_vault_ipc_forced_note(locale);
+        eprint_stderr(&note);
+    }
+    let result = run_vault(vault, args.vault_dir.as_deref(), locale, quiet);
+    ...
+}
+```
+
+**`render_vault_ipc_forced_note` 関数の追加位置**:
+- `crates/shikomi-cli/src/presenter/warning.rs` に追加（`render_ipc_opt_in_notice` を削除した後の空きスペースに配置）
+- 英語 / 日本語の locale 分岐は既存 `render_ipc_opt_in_notice` と同型
+
+**MSG-CLI-052 確定文面**:
+
+| Locale | 出力文 |
+|--------|-------|
+| English | `note: vault commands always use IPC; --no-ipc does not apply` |
+| JapaneseEn | 英語行 + `注: vault サブコマンドは常に IPC 経由です。--no-ipc は適用されません` の 2 行 |
+
+**出力タイミングの設計根拠**:
+- `run_vault` 呼び出し**前**に出力する（IPC 接続を試みる前にユーザーへ通知）
+- daemon が起動中でも未起動でも note は表示される（`--no-ipc` フラグを無視したことの通知が目的）
+- daemon 未起動の場合: `note:` → `MSG-CLI-110` の順で出力され、ユーザーは「`--no-ipc` が無視された + daemon が必要」を一度に把握できる
+
 ### `--no-ipc` の `vault` サブコマンドへの影響確認
 
-`run_vault` / `connect_vault_ipc` は `args` を受け取らず `vault_dir` のみを受け取るため、`--no-ipc` は vault 経路に自動的に影響しない。追加の実装変更は不要。
+`run_vault` / `connect_vault_ipc` は `args` を受け取らず `vault_dir` のみを受け取るため、`--no-ipc` は vault 経路の IPC 強制に自動的に影響しない（note 出力は vault dispatch ブロックの責務であり、`run_vault` / `connect_vault_ipc` は変更不要）。
 
-実装担当は以下の grep で vault 経路が `no_ipc` を参照していないことを確認する:
+実装担当は以下の grep で vault 経路自体が `no_ipc` を参照していないことを確認する:
 
 ```
 grep -n "no_ipc" crates/shikomi-cli/src/lib.rs
 ```
 
-期待結果: `build_handle` 関数内の 1 箇所のみ（`run_vault` / `connect_vault_ipc` では参照しない）。
+期待結果: vault dispatch ブロック内の `if args.no_ipc` 1 箇所 + `build_handle` 内の `if args.no_ipc` 1 箇所（計 2 箇所）。`run_vault` / `connect_vault_ipc` 関数本体では参照しない。
 
 ## テスト設計（本詳細設計から派生するテスト観点）
 
