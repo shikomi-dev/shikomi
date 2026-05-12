@@ -11,6 +11,7 @@ pub mod constants;
 pub mod crypto;
 pub mod error;
 pub mod ipc;
+pub mod portability;
 pub mod secret;
 pub mod vault;
 
