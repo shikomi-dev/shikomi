@@ -12,7 +12,11 @@ use super::{
     lock::VaultLock,
     paths::{self, VaultPaths},
     permission::PermissionGuard,
-    sqlite::{atomic::AtomicWriter, mapping::Mapping, schema::SchemaSql},
+    sqlite::{
+        atomic::{AtomicWriteSession, AtomicWriter, ExponentialBackoffRetryPolicy},
+        mapping::Mapping,
+        schema::SchemaSql,
+    },
     VaultRepository,
 };
 
@@ -361,11 +365,11 @@ impl SqliteVaultRepository {
         // Step 5: 孤立 `.new` ファイルの検出
         AtomicWriter::detect_orphan(self.paths.vault_db_new())?;
 
-        // Step 6: `.new` ファイルに書き込む
-        AtomicWriter::write_new(&self.paths, vault)?;
+        // Step 6: `.new` 作成から SQLite COMMIT まで実行しセッションを取得
+        let session = AtomicWriteSession::new(&self.paths, vault)?;
 
-        // Step 7: fsync + リネーム
-        AtomicWriter::fsync_and_rename(&self.paths)?;
+        // Step 7: クローズ順序固定 → sidecar DACL → fsync → rename（Win: retry 補強）
+        session.finalize(&ExponentialBackoffRetryPolicy)?;
 
         // 書き込みバイト数を取得（監査ログ用）
         let bytes_written = self
