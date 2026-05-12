@@ -1,3 +1,4 @@
+use super::retry_policy::RetryPolicy;
 use super::{AtomicWriteSession, AtomicWriter, ExponentialBackoffRetryPolicy, NoSleepRetryPolicy};
 use shikomi_core::{
     Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString, Vault, VaultHeader,
