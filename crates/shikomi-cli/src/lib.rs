@@ -510,12 +510,14 @@ fn probe_daemon_running() -> String {
         .build()
         .map(|rt| {
             rt.block_on(async {
-                tokio::time::timeout(
-                    std::time::Duration::from_millis(200),
-                    io::ipc_client::IpcClient::connect(&socket_path),
+                matches!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(200),
+                        io::ipc_client::IpcClient::connect(&socket_path),
+                    )
+                    .await,
+                    Ok(Ok(_))
                 )
-                .await
-                .is_ok()
             })
         })
         .unwrap_or(false);
