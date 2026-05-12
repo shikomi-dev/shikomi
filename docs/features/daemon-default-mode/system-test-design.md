@@ -18,7 +18,11 @@
 
 ## 2. 対応受入基準
 
-本 feature の受入基準（`feature-spec.md §5`）と ST-ID の対応を示す。受入基準の詳細は `docs/acceptance-tests/scenarios/SC-DDM-001-ipc-default-mode.md` を単一真実源とする。
+本 feature の受入基準（`feature-spec.md §5`）と ST-ID の対応を示す。受入基準の詳細は各シナリオドキュメントを単一真実源とする。
+
+### Sub-A（Issue #126）: CLI IPC 既定化
+
+受入基準詳細: `docs/acceptance-tests/scenarios/SC-DDM-001-ipc-default-mode.md`
 
 | 受入基準 | 対応 ST-ID | 対応シナリオ |
 |---------|-----------|------------|
@@ -29,7 +33,20 @@
 | AC-DDM-05（daemon 起動中 `shikomi list` の stderr に MSG-CLI-051 なし）| ST-DDM-014 | `SC-DDM-001` |
 | AC-DDM-06（`shikomi --no-ipc vault encrypt` → vault IPC 強制確認）| ST-DDM-015 | `SC-DDM-001` |
 
-## 3. システムテスト定義（ST-DDM-010〜015）
+### Sub-B（Issue #127）: daemon OS 自動起動
+
+受入基準詳細: `docs/acceptance-tests/scenarios/SC-DDM-002-daemon-autostart.md`
+
+| 受入基準 | 対応 ST-ID | 対応シナリオ |
+|---------|-----------|------------|
+| AC-DDM-07（`shikomi daemon install` → exit 0 + autostart ファイル配置確認）| ST-DDM-020 | `SC-DDM-002` |
+| AC-DDM-08（`shikomi daemon uninstall` → exit 0 + autostart ファイル削除確認）| ST-DDM-021 | `SC-DDM-002` |
+| AC-DDM-09（`shikomi daemon status` daemon 起動中 → `"daemon: running"` + exit 0）| ST-DDM-022 | `SC-DDM-002` |
+| AC-DDM-09（`shikomi daemon status` daemon 未起動 → `"daemon: not running"` + exit 0）| ST-DDM-023 | `SC-DDM-002` |
+| AC-DDM-10（`shikomi daemon install` 2 回実行 → 2 回目も exit 0）| ST-DDM-024 | `SC-DDM-002` |
+| 追加（`shikomi daemon status --no-ipc` → `"daemon: unknown (--no-ipc)"` + exit 0）| ST-DDM-025 | `SC-DDM-002` |
+
+## 3. システムテスト定義（ST-DDM-010〜015 / 020〜025）
 
 ### ST-DDM-010: daemon 起動中に `shikomi list` が IPC 経由で成功すること
 
@@ -95,6 +112,70 @@
 | 検証方法 | `assert_cmd::assert().code(1).stderr(predicates::str::contains("vault commands always use IPC")).stderr(predicates::str::contains("not running"))` |
 | 根拠 | `--no-ipc` が無視されて IPC 接続を試みた結果 `MSG-CLI-110` が出ることで、vault 経路の IPC 強制（REQ-DDM-005）が機能していることを証明する |
 
+## Sub-B システムテスト定義（ST-DDM-020〜025）
+
+### ST-DDM-020: `shikomi daemon install` が exit 0 で成功し autostart ファイルが配置されること（AC-DDM-07）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-07 |
+| 前提 | `tempfile::TempDir` を `HOME` 代替に設定（`dirs::home_dir()` が返すディレクトリを上書き）。`shikomi-daemon` バイナリが `current_exe()` と同ディレクトリに存在すること |
+| 操作 | `shikomi daemon install` を実行 |
+| 期待結果 | (1) exit 0 / (2) stdout に `"shikomi-daemon autostart enabled"` が含まれる / (3) stdout に OS 固有 hint が含まれる（macOS: `"launchctl kickstart"` / Linux systemd: `"systemctl --user status"` / Linux XDG: `"XDG Autostart"` / Windows: `"schtasks /Run"`）/ (4) OS 固有ファイルが配置されていること（macOS: plist ファイル存在 / Linux: unit または .desktop ファイル存在 / Windows: schtasks query 成功）|
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("autostart enabled"))` + ファイル存在確認 `Path::exists()` |
+| CI 条件 | 3 OS matrix（Linux / macOS / Windows）でそれぞれ対応 Backend が選択されること |
+
+### ST-DDM-021: `shikomi daemon uninstall` が exit 0 で成功し autostart ファイルが削除されること（AC-DDM-08）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-08 |
+| 前提 | ST-DDM-020 後の状態（install 済み）|
+| 操作 | `shikomi daemon uninstall` を実行 |
+| 期待結果 | (1) exit 0 / (2) stdout に `"shikomi-daemon autostart disabled"` が含まれる / (3) OS 固有ファイルが削除されていること |
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("autostart disabled"))` + `!Path::exists()` |
+
+### ST-DDM-022: `shikomi daemon status` が daemon 起動中に正しい 2 行を出力すること（AC-DDM-09）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-09 |
+| 前提 | `shikomi-daemon` を起動済み（`200ms` 待機）+ `shikomi daemon install` 実行済み |
+| 操作 | `shikomi daemon status` を実行 |
+| 期待結果 | (1) exit 0 / (2) stdout の 1 行目に `"daemon: running"` / (3) stdout の 2 行目に `"autostart: enabled"` |
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("daemon: running")).stdout(predicates::str::contains("autostart: enabled"))` |
+
+### ST-DDM-023: `shikomi daemon status` が daemon 未起動でも exit 0 を返すこと（AC-DDM-09）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-09 |
+| 前提 | daemon は**起動しない**。autostart は未登録 |
+| 操作 | `shikomi daemon status` を実行 |
+| 期待結果 | (1) **exit 0**（status は常に成功）/ (2) stdout に `"daemon: not running"` / (3) stdout に `"autostart: disabled"` |
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("not running")).stdout(predicates::str::contains("autostart: disabled"))` |
+| 注意 | exit 1 で終了してはならない（REQ-DDM-012: status は情報提供のみ）|
+
+### ST-DDM-024: `shikomi daemon install` の 2 回実行が冪等であること（AC-DDM-10）
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-10 |
+| 前提 | 1 回目の `shikomi daemon install` 実行済み |
+| 操作 | `shikomi daemon install` を再度実行（2 回目）|
+| 期待結果 | (1) exit 0 / (2) stdout に `"shikomi-daemon autostart enabled"` が含まれる（重複登録エラーにならない）|
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("autostart enabled"))` |
+
+### ST-DDM-025: `shikomi daemon status` に `--no-ipc` を指定した場合、IPC probe を省略して exit 0 を返すこと
+
+| 項目 | 内容 |
+|------|------|
+| 対応受入基準 | AC-DDM-09（`--no-ipc` 分岐）/ basic-design.md §`--no-ipc` との関係 |
+| 前提 | daemon の起動状態は問わない |
+| 操作 | `shikomi --no-ipc daemon status` を実行 |
+| 期待結果 | (1) exit 0 / (2) stdout に `"daemon: unknown (--no-ipc)"` が含まれる / (3) IPC 接続試行なし（タイムアウト待ちが発生しない）|
+| 検証方法 | `assert_cmd::assert().success().stdout(predicates::str::contains("daemon: unknown (--no-ipc)"))` |
+
 ## 4. 観察戦略
 
 | 観測対象 | 観測手段 |
@@ -109,10 +190,16 @@
 
 | 項目 | 理由 |
 |------|------|
-| daemon OS 自動起動（launchd / systemd / Windows Task Scheduler）| Sub-B（Issue #127）スコープ。本書では対象外 |
+| OS 再起動後の daemon 自動起動実証 | CI 環境での OS 再起動は不可。`SC-DDM-002 §手動確認事項` として記録 |
 | `--no-ipc` と暗号化 vault の組み合わせ | `daemon-vault-encryption` feature スコープ（未起票）|
 | Windows Named Pipe + `--no-ipc` 同時接続 | CI 環境で `\\.\pipe\` 経路のテスト設定が複雑。Phase 2 過渡期は Linux / macOS のみ重点確認 |
+| MSG-CLI-110 hint への `shikomi daemon install` 誘導 | Sub-B 完了後の別 PR（`autostart/basic-design.md §Sub-B 完了後に更新するメッセージ`）|
 
 ## 6. 受入テストシナリオとの対応
 
-詳細な受入テスト（AC-DDM-01〜06 の Given / When / Then）は `docs/acceptance-tests/scenarios/SC-DDM-001-ipc-default-mode.md` を単一真実源とする。本書の ST-DDM-010〜015 は同シナリオの**技術的実装**（subprocess + `assert_cmd` による自動化）を担当する。
+| シナリオ | 対象 AC | 対応 ST-ID |
+|---------|---------|-----------|
+| `SC-DDM-001-ipc-default-mode.md` | AC-DDM-01〜06（Sub-A） | ST-DDM-010〜015 |
+| `SC-DDM-002-daemon-autostart.md` | AC-DDM-07〜10（Sub-B） | ST-DDM-020〜025 |
+
+各シナリオの Given / When / Then は `docs/acceptance-tests/scenarios/` を単一真実源とする。本書の ST-DDM-NNN は各シナリオの**技術的実装**（subprocess + `assert_cmd` による自動化）を担当する。
