@@ -78,8 +78,12 @@
 | TC-UT-206 | REQ-DP-011 | AC-DP-10 | 境界値 | `format_conflict_ids`: 4 件以下 → 全 ID をそのままカンマ区切りで返す |
 | TC-UT-207 | REQ-DP-011 | AC-DP-10 | 境界値 | `format_conflict_ids`: 5 件以上 → 先頭 4 件 + `... (N more)` 形式 |
 | TC-UT-208 | REQ-DP-010/011 | AC-DP-08 | 正常 | `render_error`: `ImportValidationFailed(RedactedPayload)` → `MSG-CLI-144` 文面が出力される |
+| TC-IT-DP-005 | REQ-DP-009 | —（Issue #146）| 異常 | `import_records`: SQLITE_BUSY `busy_timeout(2000ms)` 超過 → `CliError::ImportVaultBusy` |
+| TC-UT-209 | REQ-DP-010 | —（Issue #146 設計内部保証）| 正常 | `From<DataPortabilityError> for CliError` — `VaultBusy` → `CliError::ImportVaultBusy`（`ExitCode::UserError` = exit 1）|
+| TC-UT-210 | REQ-DP-010/011 | —（Issue #146 MSG-CLI-146 文面保証）| 正常 | `render_error(&CliError::ImportVaultBusy, Locale::English)` → MSG-CLI-146 文面（"vault is in use" / daemon 停止 hint）が含まれる |
 
 上位トレーサビリティ: `TC-E2E-DP-001〜012` → `AC-DP-06〜10` / `R1-DP-01〜10`（`feature-spec.md §5 Sub-B`）  
+Issue #146 追加分: `TC-IT-DP-005` / `TC-UT-209` / `TC-UT-210` → `basic-design.md §SQLITE_BUSY 設計判断` / `§MSG-CLI-146`  
 下位連結: 本設計書 TC-E2E-* の検証対象 UseCase 実装に対し、`TC-IT-DP-*`・`TC-UT-*` が白箱保証を補完する
 
 ---
@@ -327,6 +331,21 @@
 
 ---
 
+#### TC-IT-DP-005: `import_records` — SQLITE_BUSY `busy_timeout(2000ms)` 超過 → `CliError::ImportVaultBusy`
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-IT-DP-005 |
+| 対応要件 | REQ-DP-009 |
+| 対応受入基準 | —（`basic-design.md §SQLITE_BUSY 設計判断`）|
+| 種別 | 異常系 |
+| 前提条件 | `fresh_repo()` で実 `SqliteVaultRepository` + `TempDir` を生成する。vault に Text レコードが 1 件存在する（`import_records` が `repo.save()` を必要とする状態）。|
+| 操作 | 1. `fresh_repo()` でテスト用 repo（vault.db ファイル）を生成する / 2. `rusqlite::Connection::open(&vault_db_path)` で **別の SQLite 接続**（lock_conn）を開く / 3. `lock_conn.execute("BEGIN EXCLUSIVE", [])` で排他トランザクションを開始し vault.db の書き込みロックを確保する / 4. `import_records(&repo, &args, fixed_time())` を呼ぶ（`repo` は `busy_timeout(2000ms)` 設定済みの `SqliteVaultRepository` を使用する。`fresh_repo()` の impl が未対応の場合は `busy_timeout` 設定済み repo を構築するヘルパーを追加する）/ 5. `import_records` の戻り値を受け取る（`busy_timeout 2000ms` 超過まで待機が発生する） |
+| 期待結果 | `Err(CliError::ImportVaultBusy)` が返ること。lock_conn を保持したまま 2 秒以上経過後にエラーが返ることを確認する（`#[cfg_attr(not(slow_tests), ignore)]` アノテーション推奨 — 2 秒の実時間待機が発生するため）|
+| 補足 | **逆シナリオ**（lock 解放後に成功）は TC-IT-DP-001〜004 の `fresh_repo()` ベーステスト（競合なし = 即座に `save()` 成功）が担保する。`busy_timeout` 設定なしの場合は即座に SQLITE_BUSY が返り 2 秒待機しないため、テスト対象の repo に `busy_timeout` が適切に設定されていることを事前確認すること |
+
+---
+
 ### 5.3 ユニットテスト — Presenter / ExitCode / Helper（REQ-DP-010 / REQ-DP-011）
 
 配置:
@@ -448,14 +467,44 @@
 
 ---
 
+#### TC-UT-209: `From<DataPortabilityError> for CliError` — `VaultBusy` → `CliError::ImportVaultBusy`（`ExitCode::UserError`）
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-UT-209 |
+| 対応要件 | REQ-DP-010 |
+| 対応受入基準 | —（Issue #146 設計内部保証）|
+| 種別 | 正常系 |
+| 前提条件 | なし |
+| 配置 | `crates/shikomi-cli/src/error.rs` `#[cfg(test)] mod tests` |
+| 操作 | 1. `DataPortabilityError::VaultBusy` を `CliError::from(...)` で変換する / 2. `ExitCode::from(&cli_err)` を呼ぶ |
+| 期待結果 | (1) `CliError::ImportVaultBusy` が返ること / (2) `ExitCode::UserError` が返ること（exit 1 に対応）|
+
+---
+
+#### TC-UT-210: `render_error(&CliError::ImportVaultBusy, Locale::English)` → MSG-CLI-146 文面
+
+| 項目 | 内容 |
+|------|------|
+| テストID | TC-UT-210 |
+| 対応要件 | REQ-DP-010 / REQ-DP-011 |
+| 対応受入基準 | —（Issue #146 MSG-CLI-146 文面保証）|
+| 種別 | 正常系 |
+| 前提条件 | なし |
+| 配置 | `crates/shikomi-cli/src/presenter/error.rs` `#[cfg(test)] mod tests` |
+| 操作 | 1. `CliError::ImportVaultBusy` を構築する / 2. `render_error(&err, Locale::English)` を呼ぶ |
+| 期待結果 | 出力文字列に `"vault is in use by shikomi-daemon"` が含まれる / `"stop shikomi-daemon"` ヒントが含まれる（MSG-CLI-146 文面と一致）|
+
+---
+
 ## 6. テストケース数サマリー
 
 | グループ | 対象 | TC 数 |
 |---------|------|-------|
 | 5.1 E2E | `shikomi export` / `shikomi import` CLIコマンド（AC-DP-06〜10 + エラー経路）| 12（TC-E2E-DP-001〜012）|
-| 5.2 IT | `export_records` / `import_records` UseCase 契約 | 4（TC-IT-DP-001〜004）|
-| 5.3 UT | Presenter 純粋関数 / ExitCode マッピング / conflict ID フォーマット | 8（TC-UT-201〜208）|
-| **合計** | | **24** |
+| 5.2 IT | `export_records` / `import_records` UseCase 契約 | 5（TC-IT-DP-001〜005）|
+| 5.3 UT | Presenter 純粋関数 / ExitCode マッピング / conflict ID フォーマット | 10（TC-UT-201〜210）|
+| **合計** | | **27** |
 
 **受入テスト（階層 1 横断）**: data-portability feature は他 feature との crossing シナリオが「端末移行（export 元 vault → 別端末 vault）」に相当する。本設計書スコープ外だが、`SC-DDM-001` / `SC-DDM-002` 系の受入テストシナリオとして将来 `docs/acceptance-tests/scenarios/` に追加する。
 
