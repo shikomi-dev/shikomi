@@ -7,7 +7,7 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use assert_cmd::Command;
 use predicates::prelude::*;

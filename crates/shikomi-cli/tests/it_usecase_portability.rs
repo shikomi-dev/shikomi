@@ -176,7 +176,7 @@ fn tc_it_dp_004_import_records_hotkey_is_restored() {
 // TC-IT-DP-005: import_records — SQLITE_BUSY busy_timeout 超過 → CliError::ImportVaultBusy
 // -------------------------------------------------------------------
 
-/// TC-IT-DP-005 (REQ-DP-009 / Issue #146 §SQLITE_BUSY 設計判断):
+/// TC-IT-DP-005 (REQ-DP-009 / Issue #146 §`SQLITE_BUSY` 設計判断):
 /// `busy_timeout(2000ms)` 超過後に `CliError::ImportVaultBusy` が返る。
 ///
 /// 別 `rusqlite::Connection` で `BEGIN EXCLUSIVE` を保持して vault.db をロックした状態で
@@ -208,7 +208,7 @@ fn tc_it_dp_005_import_records_sqlite_busy_timeout_returns_vault_busy() {
     //    （`lib.rs::run_import` と同等の設定。usecase.md §busy_timeout 設定 参照）
     let repo = SqliteVaultRepository::from_directory_with_busy_timeout(
         dir.path(),
-        Duration::from_millis(2000),
+        Duration::from_secs(2),
     )
     .expect("from_directory_with_busy_timeout");
 
