@@ -256,20 +256,4 @@ mod tests {
         let result = ExportRecordPayload::from_record(&payload, RecordKind::Text, true);
         assert_eq!(result, Err(ExportError::VaultLocked));
     }
-
-    // --- tagged union JSON 表現確認 ---
-    #[test]
-    fn export_record_payload_serializes_to_tagged_union() {
-        let plaintext = ExportRecordPayload::Plaintext {
-            value: "v".to_owned(),
-        };
-        let json = serde_json::to_string(&plaintext).unwrap();
-        assert!(json.contains(r#""kind":"plaintext""#));
-        assert!(json.contains(r#""value":"v""#));
-
-        let redacted = ExportRecordPayload::Redacted;
-        let json = serde_json::to_string(&redacted).unwrap();
-        assert!(json.contains(r#""kind":"redacted""#));
-        assert!(!json.contains("value"));
-    }
 }

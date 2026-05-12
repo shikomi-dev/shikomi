@@ -117,9 +117,10 @@ fn tc_ut_185_export_payload_roundtrip_via_json() {
     assert_eq!(import_payload.records[0].payload, export_record.payload);
 }
 
-// --- TC-UT-186: ImportValidator — format_version=2 は UnknownFormatVersion ---
+// --- TC-UT-186b: ImportValidator — JSON パース経由: format_version=2 は UnknownFormatVersion ---
+// JSON 文字列からデシリアライズした ImportPayload での統合検証（import.rs TC-UT-186 の JSON 経路補完）
 #[test]
-fn tc_ut_186_format_version_two_is_rejected() {
+fn tc_ut_186b_format_version_two_is_rejected_via_json_parse() {
     let json_str = r#"{"format_version":2,"exported_at":"1970-01-01T00:00:00Z","vault_name":"v","records":[]}"#;
     let payload: ImportPayload = serde_json::from_str(json_str).unwrap();
     let result = ImportValidator::validate(&payload, &HashSet::new());
@@ -129,9 +130,10 @@ fn tc_ut_186_format_version_two_is_rejected() {
     ));
 }
 
-// --- TC-UT-187: ImportValidator — format_version=1 は受理 ---
+// --- TC-UT-187b: ImportValidator — JSON パース経由: format_version=1 は受理 ---
+// JSON 文字列からデシリアライズした ImportPayload での統合検証（import.rs TC-UT-187 の JSON 経路補完）
 #[test]
-fn tc_ut_187_format_version_one_is_accepted() {
+fn tc_ut_187b_format_version_one_is_accepted_via_json_parse() {
     let json_str = r#"{"format_version":1,"exported_at":"1970-01-01T00:00:00Z","vault_name":"v","records":[]}"#;
     let payload: ImportPayload = serde_json::from_str(json_str).unwrap();
     let report = ImportValidator::validate(&payload, &HashSet::new()).unwrap();
