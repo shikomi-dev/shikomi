@@ -58,11 +58,22 @@ fn setup_encrypted_vault() -> TempDir {
 }
 
 /// 平文 vault を持つ TempDir を返す（`add` で vault.db を初期化）。
+///
+/// OWASP A02 陰性確認のため `SECRET_TEST_VALUE` を値とする secret レコードを投入する。
+/// TC-F-A01 / TC-F-A02 の `.windows(secret_marker.len()).all(|w| w != secret_marker)` が
+/// 有意な検査になるようフィクスチャ側でもマーカーを実際に vault に書き込む。
 fn setup_plaintext_vault() -> TempDir {
     let dir = TempDir::new().expect("tempdir");
     tighten_perms_unix(dir.path());
     shikomi_with_vault_dir(dir.path())
         .args(["add", "--kind", "text", "--label", "L", "--value", "V"])
+        .assert()
+        .success();
+    // OWASP A02 陰性確認: stdout に secret 値が漏洩しないことを検証する意味のある assert にするため
+    // 実際に "SECRET_TEST_VALUE" を vault に投入する（TC-F-A01 / TC-F-A02 で照合）。
+    shikomi_with_vault_dir(dir.path())
+        .args(["add", "--kind", "secret", "--label", "S", "--stdin"])
+        .write_stdin("SECRET_TEST_VALUE\n")
         .assert()
         .success();
     dir
@@ -108,14 +119,15 @@ fn tc_f_a01_vault_encrypt_output_print_produces_pdf_bytes() {
         "stdout must contain %%EOF terminator"
     );
 
-    // OWASP A02: vault secret 値が stdout に含まれないこと
-    // (add で投入した "V" はシングル文字だが、SECRET_TEST_VALUE 相当のシークレットを
-    //  add した場合の陰性確認は実装後に拡張する)
+    // OWASP A02: vault secret 値のバイト列が PDF stdout に含まれないこと（TC-F-A02 と対称）
+    // setup_plaintext_vault() で投入した "SECRET_TEST_VALUE" が全長 17 バイトで現れないことを確認。
+    // `.windows(3)` + 3 バイト前方一致は不十分（"SEC" 程度で false negative が多すぎる）。
+    let secret_marker = b"SECRET_TEST_VALUE";
     assert!(
-        !output
+        output
             .stdout
-            .windows(3)
-            .any(|w| w == b"SECRET_TEST_VALUE".get(..3).unwrap_or(&[])),
+            .windows(secret_marker.len())
+            .all(|w| w != secret_marker),
         "stdout must not contain vault secret bytes (OWASP A02)"
     );
 }
@@ -188,6 +200,25 @@ fn tc_f_a03_vault_encrypt_output_audio_spawns_tts_with_pid() {
     let dir = setup_plaintext_vault();
     let daemon = helpers::DaemonSpawn::new(dir.path()).expect("daemon spawn");
 
+    // dictation 学習 prefs の mtime を事前記録（run 後の変化なし確認、OWASP A02 §11.3）
+    // macOS: ~/Library/Preferences/com.apple.SpeechRecognitionServer.plist
+    // Linux: ~/.local/share/speech-dispatcher / ~/.config/speech-dispatcher
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dictation_pref_rels: &[&str] = &[
+        "Library/Preferences/com.apple.SpeechRecognitionServer.plist",
+        ".local/share/speech-dispatcher",
+        ".config/speech-dispatcher",
+    ];
+    let pref_mtimes_before: Vec<(std::path::PathBuf, Option<std::time::SystemTime>)> =
+        dictation_pref_rels
+            .iter()
+            .map(|rel| {
+                let p = std::path::Path::new(&home).join(rel);
+                let mtime = p.metadata().ok().and_then(|m| m.modified().ok());
+                (p, mtime)
+            })
+            .collect();
+
     let output = shikomi_with_vault_dir(dir.path())
         .envs(daemon.env_args())
         .args(["vault", "encrypt", "--output", "audio"])
@@ -218,13 +249,23 @@ fn tc_f_a03_vault_encrypt_output_audio_spawns_tts_with_pid() {
 
     // env allowlist 通過確認: CLI が spawn した TTS プロセスに余分な env が渡されていない
     // (fake TTS バイナリが自身の env を stdout に出力する実装を前提とする)
-    // dictation 学習 prefs 汚染なし (OWASP A02、§11.3)
     let shikomi_internal_env_leaked =
         stdout.contains("SHIKOMI_") || stdout.contains("XDG_RUNTIME_DIR=");
     assert!(
         !shikomi_internal_env_leaked,
         "TTS subprocess must not receive shikomi internal env vars (env allowlist violation, OWASP A02)"
     );
+
+    // dictation 学習 prefs 汚染なし: fake TTS が prefs ファイルに書き込まないこと (OWASP A02、§11.3)
+    // 事前 mtime と事後 mtime を比較し、変化があった場合は prefs 汚染とみなして失敗させる。
+    for (path, mtime_before) in &pref_mtimes_before {
+        let mtime_after = path.metadata().ok().and_then(|m| m.modified().ok());
+        assert_eq!(
+            mtime_before, &mtime_after,
+            "dictation prefs must not be modified by fake TTS subprocess (OWASP A02 §11.3): {:?}",
+            path
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,13 +377,25 @@ fn tc_f_a05_vault_encrypt_output_print_respects_umask_077() {
         "out.pdf mode must be 0o600 (umask 077), got {mode:#o}"
     );
 
-    // /tmp 以下に vault.db 関連の中間ファイルが生成されていないこと
-    // （shikomi-cli は memory-only 出力、disk hit なし、§11.1）
-    let tmp_vault_db = std::path::Path::new("/tmp").join("vault.db");
-    assert!(
-        !tmp_vault_db.exists(),
-        "/tmp/vault.db must not be created (memory-only output required)"
-    );
+    // /tmp 以下に vault.db 関連の中間ファイルが生成されていないこと（全バリアント確認）
+    // SQLite が生成する -wal / -shm / -journal と作業中間ファイル .tmp / .new を含む
+    // 全パターンを検査する（single-file チェックでは -wal 漏洩を見逃す）。
+    // § 11.1 memory-only 出力契約。
+    let vault_db_variants = [
+        "vault.db",
+        "vault.db-wal",
+        "vault.db-shm",
+        "vault.db-journal",
+        "vault.db.tmp",
+        "vault.db.new",
+    ];
+    for variant in &vault_db_variants {
+        let p = std::path::Path::new("/tmp").join(variant);
+        assert!(
+            !p.exists(),
+            "/tmp/{variant} must not be created (memory-only output required, §11.1)"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,9 +405,8 @@ fn tc_f_a05_vault_encrypt_output_print_respects_umask_077() {
 
 #[test]
 #[ignore = "requires Sub-F daemon V2 Locked state — VaultEncrypt IPC handler not yet implemented \
-            in crates/shikomi-daemon/src/ipc/handler/mod.rs; \
-            Locked vault state requires VaultUnlock + VaultLock IPC handlers to establish \
-            (test-design integration.md §11.4, \
+            in crates/shikomi-daemon/src/ipc/handler/mod.rs (locked-vault gate, \
+            test-design integration.md §11.4, \
             unlock condition: implement VaultEncrypt + VaultUnlock + VaultLock IPC handlers)"]
 fn tc_f_a06_locked_vault_encrypt_output_print_rejected() {
     // 前提: 暗号化 vault (Locked) + DaemonSpawn
@@ -373,7 +425,10 @@ fn tc_f_a06_locked_vault_encrypt_output_print_rejected() {
         !output.status.success(),
         "shikomi vault encrypt on Locked vault must not exit 0 (OWASP A01)"
     );
-    let exit_code = output.status.code().unwrap_or(0);
+    // シグナル終了（SIGKILL 等）時は `status.code()` が None を返す。
+    // None の場合も非ゼロ終了として扱うため unwrap_or(1) とする。
+    // unwrap_or(0) では SIGKILL 終了が exit 0 と判定され assert が false positive を起こす。
+    let exit_code = output.status.code().unwrap_or(1);
     assert!(
         exit_code >= 1,
         "expected exit code >= 1 for Locked vault, got {exit_code}"
