@@ -53,7 +53,10 @@ test-infra:
 # `shikomi-infra/test-fixtures` feature を有効化して `ensure_vault_dir` / `ensure_vault_file`
 # テスト専用ヘルパを利用可能にする（Issue #89 工程5 P1-① 対応）。
 # CI / lefthook / 手動 3 経路は本レシピ 1 行で SSoT 化。
+# Sub-B (#127): `resolve_daemon_path()` の Fail Fast 仕様（exists() 確認）を満たすため、
+# e2e_sc_ddm_002 実行前に shikomi-daemon バイナリをビルドしておく必要がある。
 test-cli:
+    cargo build -p shikomi-daemon
     cargo test --no-fail-fast --all-targets -p shikomi-cli --features "shikomi-infra/test-fixtures"
 
 # Sub-F (#44) 工程4 マユリ Bug-F-003 解消: shikomi-daemon 専用テスト CI ジョブ。

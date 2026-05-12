@@ -235,6 +235,37 @@ fn push_word_lines(out: &mut String, words: &[SerializableSecretBytes]) {
 // への委譲構造に統合済（同モジュール 1 箇所が MSG-S20 文言の SSoT、DRY を維持しつつ
 // `*_with_fallback_notice` 公開 API を C-31/C-36 articulate に整合）。
 
+// -------------------------------------------------------------------
+// Sub-B (#127): autostart 成功メッセージ（ペガサス指摘②対応）
+//
+// 設計根拠: docs/features/daemon-default-mode/autostart/detailed-design/presenter.md
+// §render_autostart_installed / §render_autostart_uninstalled
+// -------------------------------------------------------------------
+
+/// `shikomi daemon install` 成功文言。
+///
+/// `quiet == true` の場合は呼出側（`run_daemon_subcommand`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_autostart_installed(locale: Locale) -> String {
+    let mut out = String::from("shikomi-daemon autostart enabled\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str("shikomi-daemon の自動起動を有効にしました\n");
+    }
+    out
+}
+
+/// `shikomi daemon uninstall` 成功文言。
+///
+/// `quiet == true` の場合は呼出側（`run_daemon_subcommand`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_autostart_uninstalled(locale: Locale) -> String {
+    let mut out = String::from("shikomi-daemon autostart disabled\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str("shikomi-daemon の自動起動を無効にしました\n");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

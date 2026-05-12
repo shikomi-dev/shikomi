@@ -129,8 +129,8 @@ fn tc_ut_159_no_ipc_referenced_in_lib_rs() {
         })
         .count();
     assert_eq!(
-        code_refs, 2,
-        "args.no_ipc should appear in exactly 2 non-comment, non-test lines in lib.rs \
-         (① build_handle branch / ② vault MSG-CLI-052 dispatch), got {code_refs}"
+        code_refs, 3,
+        "args.no_ipc should appear in exactly 3 non-comment, non-test lines in lib.rs \
+         (① build_handle branch / ② vault MSG-CLI-052 dispatch / ③ daemon status IPC probe), got {code_refs}"
     );
 }

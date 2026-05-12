@@ -30,6 +30,12 @@ pub mod record_runners;
 pub mod usecase;
 #[doc(hidden)]
 pub mod view;
+// Sub-B (#127): OS 自動起動バックエンド群。
+#[doc(hidden)]
+pub mod autostart;
+// Sub-B (#127): daemon サブコマンド dispatcher 群（lib.rs 500 行ルール対応）。
+#[doc(hidden)]
+pub mod daemon_runners;
 
 pub use error::{CliError, ExitCode};
 
@@ -187,6 +193,11 @@ pub fn run() -> ExitCode {
         return run_gui(locale);
     }
 
+    // Sub-B (#127): daemon サブコマンドは RepositoryHandle 不要のため early return する。
+    if let Subcommand::Daemon(daemon_sub) = &args.subcommand {
+        return daemon_runners::run_daemon_subcommand(daemon_sub, args.no_ipc, locale, quiet);
+    }
+
     // Sub-F (#44) Phase 2: vault サブコマンドは daemon IPC 経路に**強制**する。
     // V1 の `RepositoryHandle::Sqlite` 経路は vault に直接触らない契約 (Phase 2 規定、
     // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
@@ -222,6 +233,8 @@ pub fn run() -> ExitCode {
         Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
         // 上の `if let Subcommand::Gui` early return で処理済（網羅性のため unreachable）。
         Subcommand::Gui => unreachable!("gui subcommand handled above"),
+        // 上の `if let Subcommand::Daemon(_)` early return で処理済（網羅性のため unreachable）。
+        Subcommand::Daemon(_) => unreachable!("daemon subcommand handled above"),
     };
 
     match result {

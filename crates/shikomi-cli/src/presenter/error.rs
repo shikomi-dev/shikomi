@@ -317,6 +317,39 @@ fn render_persistence_lines(pe: &PersistenceError) -> (String, String, String, S
     }
 }
 
+// -------------------------------------------------------------------
+// Sub-B (#127): autostart エラーメッセージ（MSG-CLI-120 / MSG-CLI-121）
+//
+// 設計根拠: docs/features/daemon-default-mode/autostart/detailed-design/presenter.md
+// §MSG-CLI-120 / MSG-CLI-121 追加
+// -------------------------------------------------------------------
+
+/// MSG-CLI-120: `shikomi daemon install` 失敗文言。
+#[must_use]
+pub fn render_autostart_install_error(
+    err: &crate::autostart::AutostartError,
+    locale: Locale,
+) -> String {
+    let mut out = format!("error: failed to enable autostart: {err}\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("エラー: 自動起動の有効化に失敗しました: {err}\n"));
+    }
+    out
+}
+
+/// MSG-CLI-121: `shikomi daemon uninstall` 失敗文言。
+#[must_use]
+pub fn render_autostart_uninstall_error(
+    err: &crate::autostart::AutostartError,
+    locale: Locale,
+) -> String {
+    let mut out = format!("error: failed to disable autostart: {err}\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("エラー: 自動起動の無効化に失敗しました: {err}\n"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
