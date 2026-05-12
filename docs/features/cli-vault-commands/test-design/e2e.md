@@ -429,4 +429,71 @@
 
 ---
 
+## 13. Sub-F 田中ペルソナ E2E（TC-F-E01）
+
+> Issue #79 / #74-E。  
+> SSoT: `vault-encryption/test-design/sub-f-cli-subcommands/index.md §15.8`（Rev1）
+
+### 13.1 設計方針
+
+- **テスト対象**: `shikomi-daemon` + `shikomi vault {unlock,change-password}` + アイドル自動 lock の end-to-end 田中ペルソナシナリオ（Sub-E TC-E-E01 の Sub-F 段階実機完走）
+- **実行形式**: `bash tests/e2e/sub-f-tanaka-persona.sh`（assert_cmd 経由バイナリ呼び出し、シェルスクリプト orchestration）
+- **env seam**: `SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS=2`（C-40 allowlist、debug build 限定）で idle TTL を 2 秒に短縮。Step 4 発火には 3 秒 sleep（TTL 2s + ポーリング余裕 1s）
+- **PTY**: C-38 stdin パイプ拒否のため、passphrase / new-password 入力は `expectrl` PTY を使用（§10.3 と同一 dev-dep）
+- **CI**: Linux のみ（`ubuntu-latest`）。bash + expectrl PTY はプロセス fork モデルに依存し、Windows CI では対応しない（§13.3 参照）
+
+### 13.2 外部 I/O 依存マップ
+
+| 外部 I/O | 方針 |
+|---|---|
+| **`shikomi-daemon` プロセス** | `DaemonSpawn::new()` で実子プロセス起動（socket 親 `0700`、§10.2 インフラ再利用）。env `SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS=2` を注入 |
+| **TTY（passphrase / new-password）** | `expectrl` PTY 経由（C-38 前提、§10.3 と同一 dev-dep）|
+| **暗号化済み seed vault** | `create_encrypted_vault()` ヘルパーで事前生成（§5 フィクスチャ再利用）。複数レコード seed 済み状態でシナリオ開始 |
+| **idle clock 加速** | `SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS=2` + `sleep 3` で自動 lock を強制発火 |
+
+### 13.3 OS 別 CI 条件
+
+| OS | 実行可否 | 理由 |
+|---|---|---|
+| Linux（`ubuntu-latest`）| ✅ CI 必須 | bash + expectrl PTY + Unix シグナル全対応 |
+| macOS | ✅ ローカル可 | CI matrix 対象外（コスト削減）、ローカル実行は可 |
+| Windows | ❌ skip | bash / expectrl PTY 非対応。スクリプト先頭の OS ガードで自動 skip |
+
+### 13.4 TC-F-E01 テストケース詳細（SSoT §15.8 1:1 対応）
+
+| ステップ | 操作 | 期待結果 |
+|---|---|---|
+| Step 1 | daemon を `SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS=2` env で起動 | プロセス起動 + UDS listening |
+| Step 2 | `shikomi vault unlock`（`expectrl` PTY 経由 passphrase 入力）| exit 0 + stdout に MSG-S03「vault をアンロックしました」+「アイドル 2 秒で自動的にロック」|
+| Step 3 | `shikomi list`（seed 済み vault）| exit 0 + `[encrypted, unlocked]` 緑色バナー + レコード一覧 |
+| Step 4 | `sleep 3` → `shikomi list` 再実行 | exit **3** + MSG-S09(c)「アイドル 2 秒でロックしました、再度 `vault unlock` してください」|
+| Step 5 | `shikomi vault unlock` 再入力（`expectrl` PTY 経由）| exit 0 + MSG-S03 |
+| Step 6 | `shikomi vault change-password`（旧 / 新 passphrase PTY 入力）| exit 0 + MSG-S05「VEK は不変のため再 unlock は不要、daemon キャッシュも維持」|
+| Step 7 | `shikomi list`（再 unlock なし）| exit 0 + `[encrypted, unlocked]` バナー + レコード一覧（cache 維持確認、Sub-E REQ-S10 / EC-3 整合）|
+| Cleanup | daemon に SIGTERM | exit 0 + tempdir 削除 |
+
+### 13.5 i18n 2 モード検証
+
+§13.4 の全 7 ステップを `LANG=ja_JP.UTF-8` と `LANG=C` の **2 モードで実行**し、MSG-S03 / S04 / S05 の文言を `grep` で確認する:
+
+| モード | env | 観測対象 |
+|---|---|---|
+| 日本語 | `LANG=ja_JP.UTF-8` | MSG-S03「vault をアンロックしました」/ MSG-S04「VEK はメモリから消去」/ MSG-S05「VEK は不変のため再 unlock は不要」|
+| 英語 | `LANG=C` | MSG-S03「vault unlocked」/ MSG-S04「VEK zeroed from memory」/ MSG-S05「VEK unchanged; daemon cache maintained」|
+
+### 13.6 証跡方針
+
+`bash tests/e2e/sub-f-tanaka-persona.sh 2>&1 | tee` でログを記録し、`/app/shared/attachments/マユリ/sub-f-e2e-tanaka.log` として Discord 添付（SSoT §15.11 TC-F-E01 証跡要件準拠）。
+
+### 13.7 カバレッジ対象
+
+| 受入基準 / 契約 | カバー TC |
+|---|---|
+| Sub-E TC-E-E01 田中ペルソナ実機完走（REQ-S10 cache 維持 / EC-3 整合）| TC-F-E01 全 7 ステップ |
+| MSG-S03 / S04 / S05 文言 i18n 両モード（EC-F11）| §13.5 |
+| exit code 表整合（3=VaultLocked / 0=OK）| Step 4 / Step 7 |
+| C-38 stdin パイプ拒否 + C-40 env seam debug 限定 | §13.2 / §13.3 |
+
+---
+
 *この文書は `index.md` の分割成果。トレーサビリティ・モック方針・カバレッジ基準は `index.md` を参照*
