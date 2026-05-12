@@ -20,6 +20,7 @@ use std::path::Path;
 use assert_cmd::Command;
 use common::fixtures;
 use common::tighten_perms_unix;
+use predicates::prelude::*;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -310,10 +311,12 @@ fn tc_f_i11b_path_traversal_via_env_var_rejected() {
         .output()
         .expect("shikomi spawn");
 
-    // 非ゼロ終了を確認（PersistenceError::InvalidVaultDir → CliError::Persistence → exit 2）
-    assert!(
-        !out.status.success(),
-        "shikomi list with traversal vault dir must exit non-zero"
+    // exit 2 を確認（PersistenceError::InvalidVaultDir → CliError::Persistence → exit 2）
+    // `.success()` のみでは他の exit code でも通過するため exit code を固定する。
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "shikomi list with traversal vault dir must exit 2 (Persistence)"
     );
 
     // /etc/ 配下に vault.db が生成されていないことを確認
@@ -368,11 +371,17 @@ fn tc_f_i12_stdin_pipe_to_vault_unlock_rejected() {
     // DaemonSpawn (requires shikomi-daemon binary to be pre-built)
     let daemon = helpers::DaemonSpawn::new(encrypted_dir.path()).expect("daemon spawn");
 
-    // stdin パイプ経由でパスワード送信 → NonInteractivePassword (exit 1)
+    // stdin パイプ経由でパスワード送信 → NonInteractivePassword (exit 1) + 案内文言
+    // `.code(1)` だけでは DaemonNotRunning / EncryptionUnsupported 等で誤 pass するため
+    // 設計書 §10.4.7 の期待文言も stderr で固定する（契約的検証）。
     shikomi_with_vault_dir(encrypted_dir.path())
         .envs(daemon.env_args())
         .args(["vault", "unlock"])
         .write_stdin("strong-password\n")
         .assert()
-        .code(1); // CliError::NonInteractivePassword → ExitCode::UserError (1)
+        .code(1) // CliError::NonInteractivePassword → ExitCode::UserError (1)
+        .stderr(
+            predicates::str::contains("NonInteractivePassword")
+                .or(predicates::str::contains("プロンプト入力のみ")),
+        );
 }
