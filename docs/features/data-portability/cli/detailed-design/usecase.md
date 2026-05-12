@@ -36,6 +36,7 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 | `DeserializationFailed` | `reason: String` | `serde_json::from_reader` 失敗 |
 | `ValidationFailed` | `ImportValidationError` | `ImportValidator::validate` 失敗 |
 | `IoError` | `std::io::Error` | ファイル読み込み / `tempfile` 操作 / `persist` 失敗 |
+| `VaultBusy` | なし | `repo.save()` が SQLITE_BUSY（エラーコード 5）を `busy_timeout 2000ms` 超過後も解消しない場合（`cli.md §From<DataPortabilityError>` で `CliError::ImportVaultBusy` にマッピング）|
 
 `From<std::io::Error> for DataPortabilityError` を実装し I/O エラーを `IoError` に wrap する。
 
@@ -80,6 +81,8 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 
 **設計判断（IPC 経路を廃止した根拠）**: Import も export と同様に常に `SqliteVaultRepository` を使用する（`feature-spec.md R1-DP-08` / `basic-design.md §REQ-DP-009`）。IPC per-record `add_record()` は 2 つの根本問題を持つ: (1) 途中クラッシュで vault が半書き込み状態になり `R1-DP-09` の atomicity 要件に非適合、(2) `IpcVaultRepository::add_record()` は `created_at` / `updated_at` を受け付けないためタイムスタンプ保存に IPC プロトコル拡張が必要——YAGNI かつ Sub-B 範囲外。SQLite 直接アクセスなら `repo.save()` が atomic write を保証し、`Record::rehydrate` でタイムスタンプを完全復元できる。
 
+**`busy_timeout` の設定（Issue #146）**: `lib.rs::run_import` は `SqliteVaultRepository` の SQLite 接続に `busy_timeout(2000ms)` を設定してから `import_records` に渡す。`import_records` 関数自体は `busy_timeout` を直接操作しないが、渡された `repo` の接続がこの設定を保持している前提で動作する。この設定により daemon の短時間ロック（通常ミリ秒オーダー）は SQLite の内部リトライで透過的に吸収される。
+
 ### `ImportSummary` 型
 
 | フィールド | 型 | 説明 |
@@ -106,7 +109,9 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
    - `domain_record = import_record_to_domain(record)?`（変換失敗 → `ImportDeserializationFailed`）
    - `is_conflicting && on_conflict == Overwrite` → `vault.remove_record(domain_record.id()).map_err(CliError::Domain)?` → `vault.add_record(domain_record).map_err(CliError::Domain)?` → `overwritten += 1`
    - それ以外 → `vault.add_record(domain_record).map_err(CliError::Domain)?` → `added += 1`
-8. `repo.save(&vault)?`（`SqliteVaultRepository::save` が内部で `tempfile` + rename による atomic write を保証。R1-DP-09 適合）
+8. `repo.save(&vault)` を実行する（接続の `busy_timeout(2000ms)` は `lib.rs::run_import` が設定済み）。`SqliteVaultRepository::save` 内部の `tempfile` + rename が atomic write を保証（R1-DP-09 適合）。永続化失敗時の判定:
+   - `PersistenceError` が SQLITE_BUSY（SQLite エラーコード 5、`busy_timeout 2000ms` 超過後も未解消）→ `DataPortabilityError::VaultBusy.into()` として `Err` で返す
+   - それ以外の永続化エラー → 従来通り `Err(e.into())` として伝播する
 9. `Ok(ImportSummary { added, skipped, overwritten })`
 
 ### `import_record_to_domain` helper 関数
@@ -140,3 +145,4 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 | import ファイルの OOM | `serde_json::from_reader` によるストリーミングパース。`read_to_string` は使用しない（`threat-model.md §7.5`）|
 | import の部分書き込み（クラッシュ）| IPC per-record 書き込みを廃止し SQLite `repo.save()` による atomic write に一本化（R1-DP-09）|
 | `import_record_to_domain` での `unreachable!` panic | `ImportValidator` 通過済みのデータのみ本関数に到達する設計契約。panic は実装バグの早期検出（告知的プログラミング）|
+| SQLITE_BUSY による import 失敗 | `busy_timeout(2000ms)` で daemon の短時間ロックをリトライ吸収。タイムアウト後は `DataPortabilityError::VaultBusy` → `MSG-CLI-146` で Fail Fast し、ユーザーに daemon 停止を案内する（`basic-design.md §MSG-CLI-146`）|

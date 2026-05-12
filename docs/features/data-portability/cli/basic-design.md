@@ -75,11 +75,17 @@ Import は **常に SQLite 直接アクセス（`SqliteVaultRepository`）を使
 | 入力 | `repo: &dyn VaultRepository`（常に `SqliteVaultRepository`、後述）・`args: &ImportArgs`・`now: OffsetDateTime` |
 | 処理 | (1) `File::open(&args.input)` でファイルを開き、`serde_json::from_reader::<_, ImportPayload>(file)` でストリーミングパース（OOM 防止、`threat-model.md §7.5` 準拠）。(2) `repo.load()` または未作成なら空 Vault を準備——`ProtectionMode::Encrypted` かつロック済みなら `ExportImportVaultLocked`。(3) vault の全レコード ID を `HashSet<String>` に収集。(4) `ImportValidator::validate(&payload, &existing_ids)` — 失敗時は `ImportValidationFailed`。(5) `on_conflict == Error && !conflicting_ids.is_empty()` → `ImportConflict`。(6) 各 `ImportRecord` を `import_record_to_domain(r, now)?` で domain 型に変換し、衝突戦略を適用して vault に追加・更新。(7) `repo.save(&vault)` で atomic 永続化（`tempfile` + rename が `SqliteVaultRepository::save` 内部で保証）。|
 | 出力 | `Ok(ImportSummary { added, skipped, overwritten })` |
-| エラー時 | vault ロック済み → `ExportImportVaultLocked` / JSON パース失敗 → `ImportDeserializationFailed` / バリデーション失敗 → `ImportValidationFailed` / 衝突（error 戦略）→ `ImportConflict` / I/O 失敗 → `Persistence(...)` |
+| エラー時 | vault ロック済み → `ExportImportVaultLocked` / JSON パース失敗 → `ImportDeserializationFailed` / バリデーション失敗 → `ImportValidationFailed` / 衝突（error 戦略）→ `ImportConflict` / SQLITE_BUSY（`busy_timeout 2000ms` 超過）→ `ImportVaultBusy` / I/O 失敗 → `Persistence(...)` |
 
 **`--no-ipc` 経路**: export と同様に、`lib.rs::run_import` は `RepositoryHandle` のバリアントに関わらず `vault_dir` から `SqliteVaultRepository` を構築して UseCase に渡す。`tracing::warn` でログに記録する（`run_export` と同じ pattern）。
 
 **設計原則**: Fail Fast（ファイルオープン → パース → バリデーション → 衝突チェックの順で早期検出）/ 単一責務（衝突戦略の適用は UseCase 責務、`ImportValidator` は衝突 ID の検出のみ）/ アトミック性（`repo.save()` = SQLite の `tempfile` + rename）
+
+**SQLITE_BUSY 設計判断（Issue #146）**:
+
+`import_records` は daemon 常駐中に vault.db へ SQLite 直接書き込みを行うため、daemon の読み取りロックと競合して `SQLITE_BUSY`（SQLite エラーコード 5）が発生しうる（`feature-spec.md R1-DP-08` の SQLite 直結設計の副作用）。`schema.rs` が `PRAGMA journal_mode = DELETE`（ロールバックジャーナル）を使用しており WAL による concurrent read/write が不可能なため、ロック競合は実在する。
+
+対策として `lib.rs::run_import` は `SqliteVaultRepository` の接続に `busy_timeout(2000ms)` を設定して `import_records` に渡す。これにより daemon の短時間ロック（通常ミリ秒オーダー）はリトライで透過的に成功する。2 秒を超えてもロックが解消しない場合は `DataPortabilityError::VaultBusy` → `CliError::ImportVaultBusy`（MSG-CLI-146）として Fail Fast する。WAL モードへの移行（案 A）は `schema.rs` の `PRAGMA journal_mode` 変更と daemon を含む全コネクションの協調が必要なため、別 Issue に分離した。
 
 **`ImportRecord` → `Record` 変換（ペテルギウス指摘 1 対応）**:
 
@@ -106,6 +112,7 @@ Import は **常に SQLite 直接アクセス（`SqliteVaultRepository`）を使
 | `ImportConflict { ids: Vec<String> }` | MSG-CLI-142 | `--on-conflict error` で 1 件以上の衝突が発生 |
 | `ImportDeserializationFailed { reason: String }` | MSG-CLI-143 | JSON パース失敗（`format_version` 不一致は `ImportValidationFailed` 経由）|
 | `ImportValidationFailed(ImportValidationError)` | MSG-CLI-143 または MSG-CLI-144 | `ImportValidator::validate` 失敗（バリアントによって MSG を切替）|
+| `ImportVaultBusy` | MSG-CLI-146 | `import_records` が `repo.save()` で SQLITE_BUSY を検出（`busy_timeout 2000ms` 超過後も未解消）|
 
 **設計判断**: `ExportImportVaultLocked` を既存 `CliError::VaultLocked`（exit 3、Sub-F SSoT）と**別バリアント**にする。理由: `feature-spec.md` の UC-DP-001/002 は vault ロックを exit 1（ユーザー入力エラー）と定義しており、Sub-F の vault encryption 操作中のロック（exit 3）とはコンテキストが異なる。ユーザーの操作意図（「export する前にロック解除が必要」= 手順エラー）に対応するため exit 1 を採用する。
 
@@ -209,6 +216,19 @@ hint: re-export the source vault with --export-secrets, then import the new file
 hint: ソース vault を --export-secrets 付きで再 export し、新しいファイルを import してください
 ```
 
+### MSG-CLI-146（ImportVaultBusy）— exit 1
+
+```
+error: vault is in use by shikomi-daemon; import aborted after 2 seconds
+error: vault が shikomi-daemon に使用されています。2 秒待機後に import を中断しました
+hint: stop shikomi-daemon, then retry the import
+hint: shikomi-daemon を停止してから import を再実行してください
+```
+
+**設計判断**: `shikomi daemon stop` コマンドは存在しない（daemon は OS サービス経由で起動するため手動停止手段は OS 依存）。hint は OS 固有のコマンドを列挙せず「停止してから再実行」のみを案内する（KISS）。`--no-ipc` フラグは `import` の経路選択に影響しない（import は常に SQLite 直接アクセス）ため hint に含めない。エラー文に「2 秒」を明示することで、ユーザーが「コマンドがフリーズした」と誤認することを防ぐ。
+
+---
+
 ### MSG-CLI-145（--export-secrets 警告）— stderr 出力・exit 0・`--quiet` 抑止不可
 
 ```
@@ -262,6 +282,7 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | MSG-CLI-143 | error | stderr | JSON パース失敗 / フォーマットバージョン不一致 / ファイル内重複 ID | 1 |
 | MSG-CLI-144 | error | stderr | `{"kind":"redacted"}` payload レコードの import 試行 | 1 |
 | MSG-CLI-145 | warning | stderr | `--export-secrets` 実行時の平文 export 警告（`--quiet` でも抑止不可）| 0（処理継続）|
+| MSG-CLI-146 | error | stderr | import 実行時に SQLITE_BUSY が `busy_timeout 2000ms` 超過（daemon 長期ロック）| 1 |
 
 文面の確定は本設計書 §MSG-CLI-140〜145 確定文面。
 
@@ -280,6 +301,8 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | IT | `--export-secrets` なし export → import で MSG-CLI-144（`AC-DP-08`）|
 | IT | `--on-conflict skip` が衝突レコードをスキップして残りを追加すること（`AC-DP-09`）|
 | IT | 同一ファイルを 2 回 import → 2 回目全件衝突で MSG-CLI-142（`AC-DP-10`）|
+| IT | daemon 起動中（DB 書き込みロック保持状態をシミュレート）で `import_records` を実行 → `busy_timeout 2000ms` 超過後に `CliError::ImportVaultBusy`（MSG-CLI-146）が返ること |
+| UT | `From<DataPortabilityError> for CliError` — `VaultBusy` バリアントが `CliError::ImportVaultBusy`（exit 1）にマッピングされること |
 
 ---
 
