@@ -4235,6 +4235,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "tracing-test",
  "uuid",
  "windows-sys 0.59.0",
 ]

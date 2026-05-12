@@ -62,6 +62,9 @@ predicates         = { workspace = true }
 serial_test        = { workspace = true }
 # Issue #89 テスト: tokio::time::pause / advance でタイマー時間制御
 tokio              = { workspace = true, features = ["test-util"] }
+# Issue #80 TC-IT-102: shikomi_daemon::init target の INFO ログを in-memory で観測する。
+# no-env-filter feature により別 crate (shikomi-infra 等) のログも全捕捉する。
+tracing-test       = { workspace = true }
 
 # pty 経由 E2E（Issue #33 / TC-E2E-017、Unix 限定）。
 # `e2e_daemon_phase15_pty.rs` のみで使用、本番バイナリ非混入。

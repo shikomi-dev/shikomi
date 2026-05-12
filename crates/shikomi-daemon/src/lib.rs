@@ -112,10 +112,10 @@ pub async fn run() -> ExitCode {
         return DaemonExit::SystemError.into();
     }
 
-    let vault = match repo.load_or_create() {
+    let vault = match repo.load_or_create_plaintext() {
         Ok(v) => v,
         Err(err) => {
-            tracing::error!(target: "shikomi_daemon::lifecycle", "failed to load vault: {err}");
+            tracing::error!(target: "shikomi_daemon::init", "failed to load or create vault: {err}");
             return DaemonExit::SystemError.into();
         }
     };
