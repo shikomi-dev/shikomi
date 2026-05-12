@@ -40,3 +40,10 @@ jobs:
         # `cargo test --no-fail-fast --all-targets -p shikomi-cli --features "shikomi-infra/test-fixtures"`
         # を 1 経路で確定する (CI / lefthook / 手動 3 経路の DRY)。
         run: just test-cli
+
+      - name: sub-f static checks
+        # ci.md §8.1 SSoT: TC-F-S01〜S06 grep ゲート。
+        # 静的検査は軽量で shikomi-cli 実装直読のため test-cli と同一 job に配置。
+        # Windows は bash スクリプト非対応のため linux/mac のみ実行。
+        if: runner.os != 'Windows'
+        run: bash tests/docs/sub-f-static-checks.sh
