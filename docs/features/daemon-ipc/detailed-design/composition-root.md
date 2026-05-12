@@ -25,9 +25,15 @@
 5. **repo 構築**: `let repo = SqliteVaultRepository::from_directory(&vault_dir)?;`
    - **業務ルール（初回起動時のデータディレクトリ自動生成）**: `from_directory` は `vault_dir` が存在しない場合に `std::fs::create_dir_all` でディレクトリを作成し、SQLite ファイルを初期化してから返す。`run()` に `create_dir_all` を直接記述しない——ファイルシステム初期化はリポジトリ層（`SqliteVaultRepository`）の責務（Clean Architecture 原則、`run()` はコンポジションルートとしての組み立てのみを担う）
    - 失敗時: `tracing::error!("failed to construct SqliteVaultRepository: {}", err);` → `ExitCode::from(1)` early return
-6. **vault load（初回起動対応）**: `let vault = repo.load_or_create_plaintext()?;`
-   - **業務ルール（初回インストール時の空 vault 自動生成）**: vault ファイルが存在しない場合（初回インストール / CI 環境）は空の plaintext vault を生成して返す。`run()` で `ErrorKind::NotFound` を場当たり的に `match` しない——「NotFound → 空 vault 生成」ロジックは `SqliteVaultRepository::load_or_create_plaintext()` に閉じる（**Tell, Don't Ask 原則**。呼び出し元がリポジトリ状態を尋ねて外部で処理を分岐させない）
-   - 失敗時: `tracing::error!("failed to load or create vault: {}", err);` → `ExitCode::from(1)` early return
+6. **vault load（初回起動対応）**: `let vault = repo.load_or_create_plaintext()?;`（REQ-DAEMON-024）
+   - **`load_or_create_plaintext` 型シグネチャ**: `pub fn load_or_create_plaintext(&self) -> Result<Vault, PersistenceError>`（`shikomi-infra::SqliteVaultRepository` に追加するメソッド）
+   - **業務ルール（初回インストール時の空 vault 自動生成）**: vault.db が存在しない場合（初回インストール / CI 環境）は `Vault::new_plaintext()` で空の plaintext vault を生成し `self.save(&vault)` で永続化してから返す。`run()` で `ErrorKind::NotFound` を場当たり的に `match` しない——「NotFound → 空 vault 生成」ロジックを `SqliteVaultRepository::load_or_create_plaintext()` に閉じる（**Tell, Don't Ask 原則**。呼び出し元がリポジトリ状態を尋ねて外部で処理を分岐させない）
+   - **vault.db 存在時**: `self.load()` を呼び既存 vault を返す。新規生成ログは出力しない
+   - **vault 新規生成時のログ（Bug-F-008 / Issue #80 対応）**: vault.db が存在せず新規生成が完了したとき、以下の 2 行を `tracing::info!` で出力する（`target: "shikomi_daemon::init"`、固定文言・英語）
+     1. `"vault not found; created new plaintext vault at {path}"` — ユーザが vault ファイルの格納場所を確認できる（`{path}` は vault_dir の表示パス）
+     2. `"hint: to enable encryption, run \`shikomi vault encrypt\` after the daemon has started"` — 暗号化 vault の存在をユーザに伝えるオンボーディング案内
+   - **冪等性**: 生成後に同一パスで再度 `load_or_create_plaintext()` を呼ぶと既存 vault がロードされて返る（生成済みの vault.db があれば `self.load()` 経路を通る、二重生成による破壊なし）
+   - 失敗時（新規生成失敗 / load 失敗）: `tracing::error!(target: "shikomi_daemon::init", "failed to load or create vault: {}", err);` → `ExitCode::from(1)` early return
 7. **暗号化モード検証**: `if vault.protection_mode() == ProtectionMode::Encrypted { tracing::error!("vault is encrypted; daemon does not support encrypted vaults yet (Issue #26 scope-out)"); return ExitCode::from(3); }`
 8. **共有データ構造の構築**:
    - `let repo = Arc::new(repo);`

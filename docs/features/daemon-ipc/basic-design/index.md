@@ -74,6 +74,7 @@ crates/shikomi-core/src/
 | REQ-DAEMON-007〜010, 013, 023 | `ipc::handler` | `crates/shikomi-daemon/src/ipc/handler.rs` | `IpcRequest` → `IpcResponse` の pure 写像（`Mutex<Vault>` / `&dyn VaultRepository` 注入）|
 | REQ-DAEMON-005 | `permission::peer_credential` | `crates/shikomi-daemon/src/permission/peer_credential.rs` | OS 別ピア UID / SID 取得（`unix.rs` / `windows.rs` 分割）|
 | REQ-DAEMON-022 | `panic_hook` | `crates/shikomi-daemon/src/panic_hook.rs` | fixed-message panic hook（CLI と同型）|
+| REQ-DAEMON-024 | `SqliteVaultRepository::load_or_create_plaintext` | `crates/shikomi-infra/src/persistence/repository.rs`（`shikomi-infra` 実装、daemon `run()` ステップ 6 から呼ぶ）| vault.db が存在しない場合に空の plaintext vault を生成して返す（Issue #80 / Bug-F-008）。呼び出し元 `run()` が `ErrorKind::NotFound` を外部で分岐しない——生成ロジックを `SqliteVaultRepository` に閉じる（**Tell, Don't Ask**）。生成時は `tracing::info!(target: "shikomi_daemon::init", ...)` で vault パスとオンボーディングヒントを出力（詳細は `../detailed-design/composition-root.md §処理順序 ステップ 6`）|
 
 ```
 ディレクトリ構造:

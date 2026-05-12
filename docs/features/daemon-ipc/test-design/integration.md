@@ -240,6 +240,7 @@ crates/shikomi-daemon/tests/
   it_protocol_roundtrip.rs        # TC-IT-001〜009
   it_server_connection.rs         # TC-IT-010〜032
   it_single_instance.rs           # TC-IT-060〜071（unix/windows cfg 分岐）
+  it_vault_init.rs                # [Issue #80 新設] TC-IT-100〜102（vault.db 不在での daemon 起動）
 
 crates/shikomi-cli/tests/
   common/
@@ -294,6 +295,9 @@ cargo test -p shikomi-daemon --test it_single_instance
 
 # 暗号化 vault フィクスチャが必要な TC-IT-014
 cargo test -p shikomi-daemon --features "shikomi-infra/test-fixtures" --test it_server_connection encryption_unsupported
+
+# [Issue #80] vault.db 不在での daemon 起動 IT（TC-IT-100〜102）
+cargo test -p shikomi-daemon --test it_vault_init
 ```
 
 ---
@@ -307,6 +311,29 @@ cargo test -p shikomi-daemon --features "shikomi-infra/test-fixtures" --test it_
 - TC-IT-044 の未起動経路は daemon 側ログではなく CLI 側エラー扱い（ログ検証対象外）
 
 **観測負債**: `tracing` ログの全 11 メッセージを網羅する IT は書かない（過剰、メッセージテンプレート変更時の fragile さを避ける、YAGNI）。代表 3 件で十分。
+
+---
+
+## 11. [Issue #80 追加] vault.db 不在での daemon 起動 — in-process 検証（REQ-DAEMON-024）
+
+**対象**: `SqliteVaultRepository::load_or_create_plaintext`（`shikomi-infra` 実装）と daemon `run()` ステップ 6 の連携。初回起動時に vault.db が存在しない状態でも空の plaintext vault が生成され、続く IPC リクエスト処理が正常に完了することを in-process で検証する。
+
+**配置**: `crates/shikomi-daemon/tests/it_vault_init.rs`（新設）。`common/mod.rs` の `fresh_repo()` ヘルパー（`tempfile::TempDir` + `SqliteVaultRepository` 組み立て）を流用する。
+
+### 11.1 正常系
+
+| TC-ID | シナリオ | 操作 | 期待結果 |
+|-------|---------|------|---------|
+| TC-IT-100 | vault.db 不在での `load_or_create_plaintext` | (1) `tempfile::TempDir` を生成（vault.db を置かない） / (2) `SqliteVaultRepository::from_directory(&dir)` を構築 / (3) `repo.load_or_create_plaintext()` を呼ぶ | `Ok(vault)` が返る。`vault.protection_mode() == ProtectionMode::Plaintext`。`vault.entries().is_empty()` が `true` |
+| TC-IT-101 | vault.db 不在 → IPC Add → 再 load で永続確認 | (1) vault.db 不在で repo 構築 / (2) `load_or_create_plaintext()` で空 vault 取得 / (3) `tokio::io::duplex` ストリームで IPC `AddRecord(Text, "label", "value")` を送信 / (4) `IpcResponse::Added { id }` を受信 / (5) 同 repo で `load_or_create_plaintext()` を再度呼ぶ（再起動相当）/ (6) `ListRecords` で一覧を確認 | ステップ 4 の `id` がステップ 6 の `Records` に含まれる（vault.db への永続化が正しく機能している） |
+
+### 11.2 初回起動ログ観測
+
+| TC-ID | シナリオ | 観測内容 | 期待 |
+|-------|---------|--------|------|
+| TC-IT-102 | vault.db 不在時の tracing 出力 | TC-IT-100 と同条件で `tracing_test` layer を仕込み、`shikomi_daemon::init` target の `INFO` ログを観察 | `"vault not found; created new plaintext vault at "` の部分文字列が `INFO` レベルで出力される。`"hint: to enable encryption, run \`shikomi vault encrypt\`"` が続けて出力される |
+
+**観測方針**: `tracing_test` の `#[traced_test]` マクロまたは `tracing_subscriber::fmt` の in-memory writer を用いる。ログ全文ではなく部分文字列マッチ（`assert!(log_output.contains("vault not found; created new plaintext vault at "))`）に留める（fragile さ回避）。
 
 ---
 
