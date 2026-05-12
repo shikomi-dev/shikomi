@@ -2,7 +2,7 @@
 
 <!-- feature: data-portability / Issue #135（Phase 2 export/import）/ Issue #140（Sub-A: domain）/ Issue #141（Sub-B: cli）-->
 <!-- 配置先: docs/features/data-portability/feature-spec.md -->
-<!-- 本ファイルは最初の sub-feature PR で凍結。以降の sub-feature PR は引用のみ -->
+<!-- 本ファイルは Sub-A（PR #142）で凍結。Sub-B（PR #144）工程 2 で R1-DP-08/09 を改訂（IPC import 経路の atomicity 不適合発覚による）。以降の sub-feature PR は引用のみ -->
 
 ## 1. 業務概要
 
