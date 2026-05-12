@@ -215,28 +215,28 @@ mod tests {
         assert_eq!(result, Ok(ExportRecordPayload::Redacted));
     }
 
-    // --- TC-UT-178: Text kind + include_secrets=false → Plaintext ---
+    // --- TC-UT-178: Secret kind + include_secrets=true → Plaintext ---
     #[test]
-    fn tc_ut_178_text_kind_without_include_secrets_returns_plaintext() {
-        let payload = make_plaintext_payload("hello");
-        let result = ExportRecordPayload::from_record(&payload, RecordKind::Text, false);
-        assert_eq!(
-            result,
-            Ok(ExportRecordPayload::Plaintext {
-                value: "hello".to_owned()
-            })
-        );
-    }
-
-    // --- TC-UT-179: Secret kind + include_secrets=true → Plaintext ---
-    #[test]
-    fn tc_ut_179_secret_kind_with_include_secrets_returns_plaintext() {
+    fn tc_ut_178_secret_kind_with_include_secrets_returns_plaintext() {
         let payload = make_plaintext_payload("my-password");
         let result = ExportRecordPayload::from_record(&payload, RecordKind::Secret, true);
         assert_eq!(
             result,
             Ok(ExportRecordPayload::Plaintext {
                 value: "my-password".to_owned()
+            })
+        );
+    }
+
+    // --- TC-UT-179: Text kind + include_secrets=false → Plaintext ---
+    #[test]
+    fn tc_ut_179_text_kind_without_include_secrets_returns_plaintext() {
+        let payload = make_plaintext_payload("hello");
+        let result = ExportRecordPayload::from_record(&payload, RecordKind::Text, false);
+        assert_eq!(
+            result,
+            Ok(ExportRecordPayload::Plaintext {
+                value: "hello".to_owned()
             })
         );
     }

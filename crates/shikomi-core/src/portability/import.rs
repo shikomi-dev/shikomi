@@ -186,9 +186,9 @@ mod tests {
         }
     }
 
-    // --- TC-UT-188: UnknownFormatVersion ---
+    // --- TC-UT-186: UnknownFormatVersion ---
     #[test]
-    fn tc_ut_188_unknown_format_version_returns_error() {
+    fn tc_ut_186_unknown_format_version_returns_error() {
         let payload = ImportPayload {
             format_version: 2,
             exported_at: "2026-05-12T00:00:00Z".to_owned(),
@@ -202,12 +202,9 @@ mod tests {
         ));
     }
 
-    // --- TC-UT-189: RedactedPayload → DuplicateIdInFile より前に検出されない (順序確認) ---
-    // 実際の順序: 重複 ID 検出 → Redacted 検出
-
-    // --- TC-UT-190: DuplicateIdInFile ---
+    // --- TC-UT-188: DuplicateIdInFile ---
     #[test]
-    fn tc_ut_190_duplicate_id_returns_error() {
+    fn tc_ut_188_duplicate_id_returns_error() {
         let payload = make_payload(vec![
             make_plaintext_record("id-1"),
             make_plaintext_record("id-1"),
@@ -219,9 +216,9 @@ mod tests {
         ));
     }
 
-    // --- TC-UT-191: RedactedPayload ---
+    // --- TC-UT-189: RedactedPayload ---
     #[test]
-    fn tc_ut_191_redacted_payload_returns_error() {
+    fn tc_ut_189_redacted_payload_returns_error() {
         let payload = make_payload(vec![make_redacted_record("id-1")]);
         let result = ImportValidator::validate(&payload, &HashSet::new());
         assert!(matches!(
@@ -230,9 +227,9 @@ mod tests {
         ));
     }
 
-    // --- TC-UT-192: 衝突 ID の収集 ---
+    // --- TC-UT-190: 衝突 ID の収集 ---
     #[test]
-    fn tc_ut_192_conflicting_ids_are_collected() {
+    fn tc_ut_190_conflicting_ids_are_collected() {
         let payload = make_payload(vec![
             make_plaintext_record("id-1"),
             make_plaintext_record("id-2"),
@@ -243,18 +240,18 @@ mod tests {
         assert!(report.warnings.is_empty());
     }
 
-    // --- TC-UT-193: 正常系（衝突なし）---
+    // --- TC-UT-187: 正常系（衝突なし）---
     #[test]
-    fn tc_ut_193_valid_payload_returns_empty_report() {
+    fn tc_ut_187_valid_payload_returns_empty_report() {
         let payload = make_payload(vec![make_plaintext_record("id-1")]);
         let report = ImportValidator::validate(&payload, &HashSet::new()).unwrap();
         assert!(report.conflicting_ids.is_empty());
         assert!(report.warnings.is_empty());
     }
 
-    // --- TC-UT-194: 空 records → EmptyImport 警告 ---
+    // --- TC-UT-191: 空 records → EmptyImport 警告 ---
     #[test]
-    fn tc_ut_194_empty_records_produces_warning() {
+    fn tc_ut_191_empty_records_produces_warning() {
         let payload = make_payload(vec![]);
         let report = ImportValidator::validate(&payload, &HashSet::new()).unwrap();
         assert!(report.warnings.contains(&ImportWarning::EmptyImport));
@@ -277,5 +274,38 @@ mod tests {
         }]);
         let result = ImportValidator::validate(&payload, &HashSet::new());
         assert!(result.is_ok(), "plaintext payload should be accepted: {result:?}");
+    }
+
+    // --- TC-UT-192: バリデーション順序: format_version=999 + ID 重複 → UnknownFormatVersion 優先 ---
+    #[test]
+    fn tc_ut_192_validation_order_format_version_beats_duplicate_id() {
+        let payload = ImportPayload {
+            format_version: 999,
+            exported_at: "2026-05-12T00:00:00Z".to_owned(),
+            vault_name: "test".to_owned(),
+            records: vec![
+                make_plaintext_record("id-1"),
+                make_plaintext_record("id-1"),
+            ],
+        };
+        let result = ImportValidator::validate(&payload, &HashSet::new());
+        assert!(matches!(
+            result,
+            Err(ImportValidationError::UnknownFormatVersion { found: 999 })
+        ));
+    }
+
+    // --- TC-UT-193: バリデーション順序: ID 重複 + Redacted payload → DuplicateIdInFile 優先 ---
+    #[test]
+    fn tc_ut_193_validation_order_duplicate_id_beats_redacted() {
+        let payload = make_payload(vec![
+            make_plaintext_record("id-1"),
+            make_redacted_record("id-1"),
+        ]);
+        let result = ImportValidator::validate(&payload, &HashSet::new());
+        assert!(matches!(
+            result,
+            Err(ImportValidationError::DuplicateIdInFile { id }) if id == "id-1"
+        ));
     }
 }

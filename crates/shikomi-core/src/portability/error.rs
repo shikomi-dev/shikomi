@@ -70,8 +70,9 @@ mod tests {
         assert!(e.to_string().contains("99"));
     }
 
+    // --- TC-UT-194: RedactedPayload の Display に record id が含まれる ---
     #[test]
-    fn import_validation_error_redacted_payload_display() {
+    fn tc_ut_194_redacted_payload_display_contains_record_id() {
         let e = ImportValidationError::RedactedPayload {
             id: "some-id".to_owned(),
         };

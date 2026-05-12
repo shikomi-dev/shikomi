@@ -8,7 +8,7 @@ use shikomi_core::portability::{
     ExportPayload, ExportRecord, ExportRecordPayload, ImportPayload, ImportValidationError,
     ImportValidator, EXPORT_FORMAT_VERSION,
 };
-use shikomi_core::{Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString};
+use shikomi_core::{Hotkey, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString};
 use time::OffsetDateTime;
 
 fn make_record(kind: RecordKind, label: &str, value: &str) -> Record {
@@ -38,9 +38,30 @@ fn tc_ut_181_plaintext_serializes_to_tagged_union() {
     assert_eq!(json["value"], "hello");
 }
 
-// --- TC-UT-182: ExportRecord::try_from — hotkey=None / Plaintext ---
+// --- TC-UT-182: ExportRecord::try_from — hotkey=Some でフィールドが正しくマッピングされる ---
 #[test]
-fn tc_ut_182_export_record_try_from_record_no_hotkey() {
+fn tc_ut_182_export_record_try_from_record_with_hotkey() {
+    let id = RecordId::new(uuid::Uuid::now_v7()).unwrap();
+    let label = RecordLabel::try_new("my-label".to_owned()).unwrap();
+    let payload = RecordPayload::Plaintext(SecretString::from_string("my-value".to_owned()));
+    let hotkey = Hotkey::parse("ctrl+1").unwrap();
+    let record = Record::new(id, RecordKind::Text, label, payload, OffsetDateTime::UNIX_EPOCH)
+        .with_hotkey(hotkey);
+
+    let export = ExportRecord::try_from((&record, false)).unwrap();
+
+    assert_eq!(export.id, record.id().to_string());
+    assert_eq!(export.kind, RecordKind::Text);
+    assert_eq!(export.label, "my-label");
+    // Hotkey::as_str() 正規化文字列変換の検証: "ctrl+1" に正規化される
+    assert_eq!(export.hotkey, Some("ctrl+1".to_owned()));
+    assert!(!export.created_at.is_empty());
+    assert!(!export.updated_at.is_empty());
+}
+
+// --- TC-UT-183: ExportRecord::try_from — hotkey=None / Plaintext ---
+#[test]
+fn tc_ut_183_export_record_try_from_record_hotkey_none() {
     let record = make_record(RecordKind::Text, "my-label", "my-value");
     let export = ExportRecord::try_from((&record, false)).unwrap();
 
@@ -50,16 +71,6 @@ fn tc_ut_182_export_record_try_from_record_no_hotkey() {
     assert_eq!(json["payload"]["kind"], "plaintext");
     assert_eq!(json["payload"]["value"], "my-value");
     assert!(json["hotkey"].is_null(), "hotkey should be null when None");
-}
-
-// --- TC-UT-183: ExportRecord::try_from — Secret + include_secrets=false → Redacted ---
-#[test]
-fn tc_ut_183_export_record_try_from_secret_without_include_secrets_redacted() {
-    let record = make_record(RecordKind::Secret, "pw-label", "secret-value");
-    let export = ExportRecord::try_from((&record, false)).unwrap();
-
-    assert_eq!(export.payload, ExportRecordPayload::Redacted);
-    assert_eq!(export.kind, RecordKind::Secret);
 }
 
 // --- TC-UT-184: ExportPayload::new — format_version=1 が含まれる ---
