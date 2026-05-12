@@ -15,7 +15,7 @@
 | ファイル | 変更種別 | 変更内容 |
 |---------|---------|---------|
 | `crates/shikomi-cli/src/presenter/success.rs` | 編集 | `render_exported` / `render_imported` / `render_export_secrets_warning` を追加 |
-| `crates/shikomi-cli/src/presenter/error.rs` | 編集 | `render_error` に MSG-CLI-144 dispatch 追加 + `lines_for` に新 5 バリアントの arm 追加 + `format_conflict_ids` helper 追加 |
+| `crates/shikomi-cli/src/presenter/error.rs` | 編集 | `render_error` に MSG-CLI-144 dispatch 追加 + `lines_for` に新 6 バリアントの arm 追加 + `format_conflict_ids` helper 追加 |
 | `crates/shikomi-cli/src/lib.rs` | 編集 | `Subcommand::Export` / `Subcommand::Import` の match arm + `run_export` / `run_import` dispatcher 追加 |
 
 ---
@@ -63,7 +63,7 @@
 
 `UnknownFormatVersion` / `DuplicateIdInFile` は `lines_for` の fallback（MSG-CLI-143）で処理するため、この arm では `RedactedPayload` のみを dispatch する。
 
-### 追加: `lines_for` の match arm（新バリアント 5 種）
+### 追加: `lines_for` の match arm（新バリアント 6 種）
 
 `lines_for` 末尾の `unreachable` sentinel の直前に以下を追加する（wildcard `_` は使わない、コンパイル時網羅性を維持）。各 arm は `(error_en, error_ja, hint_en, hint_ja)` のタプルを返す:
 
@@ -95,6 +95,12 @@
 - error EN: `format!("failed to parse import file: {err}")`
 - error JA: `format!("import ファイルの解析に失敗しました: {err}")`
 - hint EN/JA: `ImportDeserializationFailed` と同文言
+
+**`ImportVaultBusy`**（MSG-CLI-146）:
+- error EN: `"vault is in use by shikomi-daemon; import aborted after 2 seconds"`
+- error JA: `"vault が shikomi-daemon に使用されています。2 秒待機後に import を中断しました"`
+- hint EN: `"stop shikomi-daemon, then retry (to disable autostart: shikomi daemon uninstall)"`
+- hint JA: `"shikomi-daemon を停止してから再実行してください（自動起動の無効化: shikomi daemon uninstall）"`
 
 **`DaemonNotRunning` / `ProtocolVersionMismatch`** の sentinel arm: `lines_for` の契約上、これらは `render_error` の専用 helper で処理されるため `lines_for` には到達しない。`debug_assert!(false, "...")` を保持する（既存パターン）。
 
@@ -162,3 +168,4 @@
 | MSG-CLI-145 の `--quiet` 抑止 | `run_export` で `quiet` フラグを参照せず直接 `eprintln!` を使用。将来 `quiet` フラグの分岐が追加されても MSG-CLI-145 が影響を受けないよう、コメントで `--quiet 抑止不可` を明記する |
 | `format_conflict_ids` での情報過多 | 最大 4 件 + 省略表示。大量の ID を表示して端末を溢れさせない |
 | import の部分書き込み（クラッシュ）| IPC per-record 書き込みを廃止し `SqliteVaultRepository::save()` による atomic write に一本化（R1-DP-09）。`run_import` も `run_export` と同様に常に SQLite 直接アクセスを使用する |
+| MSG-CLI-146 hint の過剰情報漏洩 | hint に OS 固有のプロセス停止コマンドは含めない（パス情報漏洩・環境依存のリスクを排除）。`shikomi daemon uninstall` コマンドのみを案内する（KISS）|

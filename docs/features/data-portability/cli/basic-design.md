@@ -75,11 +75,17 @@ Import は **常に SQLite 直接アクセス（`SqliteVaultRepository`）を使
 | 入力 | `repo: &dyn VaultRepository`（常に `SqliteVaultRepository`、後述）・`args: &ImportArgs`・`now: OffsetDateTime` |
 | 処理 | (1) `File::open(&args.input)` でファイルを開き、`serde_json::from_reader::<_, ImportPayload>(file)` でストリーミングパース（OOM 防止、`threat-model.md §7.5` 準拠）。(2) `repo.load()` または未作成なら空 Vault を準備——`ProtectionMode::Encrypted` かつロック済みなら `ExportImportVaultLocked`。(3) vault の全レコード ID を `HashSet<String>` に収集。(4) `ImportValidator::validate(&payload, &existing_ids)` — 失敗時は `ImportValidationFailed`。(5) `on_conflict == Error && !conflicting_ids.is_empty()` → `ImportConflict`。(6) 各 `ImportRecord` を `import_record_to_domain(r, now)?` で domain 型に変換し、衝突戦略を適用して vault に追加・更新。(7) `repo.save(&vault)` で atomic 永続化（`tempfile` + rename が `SqliteVaultRepository::save` 内部で保証）。|
 | 出力 | `Ok(ImportSummary { added, skipped, overwritten })` |
-| エラー時 | vault ロック済み → `ExportImportVaultLocked` / JSON パース失敗 → `ImportDeserializationFailed` / バリデーション失敗 → `ImportValidationFailed` / 衝突（error 戦略）→ `ImportConflict` / I/O 失敗 → `Persistence(...)` |
+| エラー時 | vault ロック済み → `ExportImportVaultLocked` / JSON パース失敗 → `ImportDeserializationFailed` / バリデーション失敗 → `ImportValidationFailed` / 衝突（error 戦略）→ `ImportConflict` / SQLITE_BUSY（`busy_timeout 2000ms` 超過）→ `ImportVaultBusy` / I/O 失敗 → `Persistence(...)` |
 
 **`--no-ipc` 経路**: export と同様に、`lib.rs::run_import` は `RepositoryHandle` のバリアントに関わらず `vault_dir` から `SqliteVaultRepository` を構築して UseCase に渡す。`tracing::warn` でログに記録する（`run_export` と同じ pattern）。
 
 **設計原則**: Fail Fast（ファイルオープン → パース → バリデーション → 衝突チェックの順で早期検出）/ 単一責務（衝突戦略の適用は UseCase 責務、`ImportValidator` は衝突 ID の検出のみ）/ アトミック性（`repo.save()` = SQLite の `tempfile` + rename）
+
+**SQLITE_BUSY 設計判断（Issue #146）**:
+
+`import_records` は daemon 常駐中に vault.db へ SQLite 直接書き込みを行うため、daemon の読み取りロックと競合して `SQLITE_BUSY`（SQLite エラーコード 5）が発生しうる（`feature-spec.md R1-DP-08` の SQLite 直結設計の副作用）。`schema.rs` が `PRAGMA journal_mode = DELETE`（ロールバックジャーナル）を使用しており WAL による concurrent read/write が不可能なため、ロック競合は実在する。
+
+対策として `lib.rs::run_import` は `SqliteVaultRepository` の接続に `busy_timeout(2000ms)` を設定して `import_records` に渡す。これにより daemon の短時間ロック（通常ミリ秒オーダー）はリトライで透過的に成功する。2 秒を超えてもロックが解消しない場合は `DataPortabilityError::VaultBusy` → `CliError::ImportVaultBusy`（MSG-CLI-146）として Fail Fast する。WAL モードへの移行（案 A）は `schema.rs` の `PRAGMA journal_mode` 変更と daemon を含む全コネクションの協調が必要なため、別 Issue に分離した。
 
 **`ImportRecord` → `Record` 変換（ペテルギウス指摘 1 対応）**:
 
@@ -106,6 +112,7 @@ Import は **常に SQLite 直接アクセス（`SqliteVaultRepository`）を使
 | `ImportConflict { ids: Vec<String> }` | MSG-CLI-142 | `--on-conflict error` で 1 件以上の衝突が発生 |
 | `ImportDeserializationFailed { reason: String }` | MSG-CLI-143 | JSON パース失敗（`format_version` 不一致は `ImportValidationFailed` 経由）|
 | `ImportValidationFailed(ImportValidationError)` | MSG-CLI-143 または MSG-CLI-144 | `ImportValidator::validate` 失敗（バリアントによって MSG を切替）|
+| `ImportVaultBusy` | MSG-CLI-146 | `import_records` が `repo.save()` で SQLITE_BUSY を検出（`busy_timeout 2000ms` 超過後も未解消）|
 
 **設計判断**: `ExportImportVaultLocked` を既存 `CliError::VaultLocked`（exit 3、Sub-F SSoT）と**別バリアント**にする。理由: `feature-spec.md` の UC-DP-001/002 は vault ロックを exit 1（ユーザー入力エラー）と定義しており、Sub-F の vault encryption 操作中のロック（exit 3）とはコンテキストが異なる。ユーザーの操作意図（「export する前にロック解除が必要」= 手順エラー）に対応するため exit 1 を採用する。
 
@@ -209,6 +216,19 @@ hint: re-export the source vault with --export-secrets, then import the new file
 hint: ソース vault を --export-secrets 付きで再 export し、新しいファイルを import してください
 ```
 
+### MSG-CLI-146（ImportVaultBusy）— exit 1
+
+```
+error: vault is in use by shikomi-daemon; import aborted after 2 seconds
+error: vault が shikomi-daemon に使用されています。2 秒待機後に import を中断しました
+hint: stop shikomi-daemon, then retry (to disable autostart: shikomi daemon uninstall)
+hint: shikomi-daemon を停止してから再実行してください（自動起動の無効化: shikomi daemon uninstall）
+```
+
+**設計判断**: `shikomi daemon stop` コマンドは存在しない（daemon は OS サービス経由で起動するため手動停止手段は OS 依存）。hint に OS 固有のプロセス停止コマンドは含めない（パス情報漏洩・環境依存のリスクを排除）。代わりに `shikomi daemon uninstall` を案内することで autostart を無効化する手段を提示し、アクショナブルにする（KISS）。`--no-ipc` フラグは `import` の経路選択に影響しない（import は常に SQLite 直接アクセス）ため hint に含めない。エラー文に「2 秒」を明示することで、ユーザーが「コマンドがフリーズした」と誤認することを防ぐ。
+
+---
+
 ### MSG-CLI-145（--export-secrets 警告）— stderr 出力・exit 0・`--quiet` 抑止不可
 
 ```
@@ -228,7 +248,7 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | クレート | パス | 変更種別 | 内容 |
 |---------|------|---------|------|
 | `shikomi-cli` | `src/cli.rs` | 編集 | `Subcommand::Export(ExportArgs)` / `Subcommand::Import(ImportArgs)` / `ExportArgs` / `ImportArgs` / `OnConflictArg` を追加 |
-| `shikomi-cli` | `src/error.rs` | 編集 | `CliError` 新バリアント 5 種追加 / `ExitCode::from(&CliError)` の match arm 追加 / `From<DataPortabilityError> for CliError` 実装 |
+| `shikomi-cli` | `src/error.rs` | 編集 | `CliError` 新バリアント 6 種追加 / `ExitCode::from(&CliError)` の match arm 追加 / `From<DataPortabilityError> for CliError` 実装 |
 | `shikomi-cli` | `src/usecase/portability/mod.rs` | 新規 | `export` / `import` / `error` モジュールの re-export |
 | `shikomi-cli` | `src/usecase/portability/error.rs` | 新規 | `DataPortabilityError` 型定義（UseCase 内部中間エラー）|
 | `shikomi-cli` | `src/usecase/portability/export.rs` | 新規 | `export_records` 関数 + `ExportSummary` 型 |
@@ -262,6 +282,7 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | MSG-CLI-143 | error | stderr | JSON パース失敗 / フォーマットバージョン不一致 / ファイル内重複 ID | 1 |
 | MSG-CLI-144 | error | stderr | `{"kind":"redacted"}` payload レコードの import 試行 | 1 |
 | MSG-CLI-145 | warning | stderr | `--export-secrets` 実行時の平文 export 警告（`--quiet` でも抑止不可）| 0（処理継続）|
+| MSG-CLI-146 | error | stderr | import 実行時に SQLITE_BUSY が `busy_timeout 2000ms` 超過（daemon 長期ロック）| 1 |
 
 文面の確定は本設計書 §MSG-CLI-140〜145 確定文面。
 
@@ -275,11 +296,13 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | UT | `import_records` — JSON パース失敗 / Redacted payload → MSG-CLI-144 / 衝突 error 戦略 / skip 戦略 / overwrite 戦略 |
 | UT | `render_export_secrets_warning` — `--quiet` に関わらず出力されること |
 | UT | `render_exported` / `render_imported` — English / JapaneseEn 両 locale |
-| UT | `From<CliError> for ExitCode` — 新バリアント 5 種が全て exit 1 にマッピングされること（SSoT matrix 拡張）|
+| UT | `From<CliError> for ExitCode` — 新バリアント 6 種が全て exit 1 にマッピングされること（SSoT matrix 拡張）|
 | IT | `export_records` → `import_records` round-trip — export したペイロードを import すると同じレコードが vault に入ること（`AC-DP-07`）|
 | IT | `--export-secrets` なし export → import で MSG-CLI-144（`AC-DP-08`）|
 | IT | `--on-conflict skip` が衝突レコードをスキップして残りを追加すること（`AC-DP-09`）|
 | IT | 同一ファイルを 2 回 import → 2 回目全件衝突で MSG-CLI-142（`AC-DP-10`）|
+| IT | daemon 起動中（DB 書き込みロック保持状態をシミュレート）で `import_records` を実行 → `busy_timeout 2000ms` 超過後に `CliError::ImportVaultBusy`（MSG-CLI-146）が返ること |
+| UT | `From<DataPortabilityError> for CliError` — `VaultBusy` バリアントが `CliError::ImportVaultBusy`（exit 1）にマッピングされること |
 
 ---
 
@@ -304,3 +327,41 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | vault ロック済みでの export（平文漏洩の試み）| `export_records` が `RecordPayload::Encrypted` を持つレコードを変換する段階で `ExportError::VaultLocked` を検出し、`ExportImportVaultLocked` で早期失敗（Fail Fast）|
 | 改ざんされた import ファイルによるデータ汚染 | `ImportValidator` が `format_version` / 重複 ID / Redacted payload を早期検出（Sub-A domain 層の責務）。UseCase は validator の結果が `Ok` の場合のみ import を進める |
 | 部分書き込みによる vault 破損 | `tempfile::NamedTempFile::persist(path)` による atomic rename で import 中クラッシュ時の部分書き込みを防ぐ（`feature-spec.md R1-DP-09`）|
+
+### OWASP Top 10 対応表（data-portability / cli スコープ）
+
+feature 固有の脅威を OWASP Top 10（2021 版）と突き合わせた表。システム全体の対応方針は `docs/design/threat-model.md` を参照。
+
+| ID | カテゴリ | 本 feature での脅威 | 対策 | 判定 |
+|----|---------|-------------------|------|------|
+| A01 | Broken Access Control | export / import が vault 未ロック解除で平文データにアクセスする | `export_records` / `import_records` が `repo.load()` 前に VEK 存在を確認し、ロック済みなら `ExportImportVaultLocked`（MSG-CLI-140）で Fail Fast。export ファイルは `0600`（owner read/write のみ）で作成し、第三者の読み取りを防ぐ | ✅ |
+| A02 | Cryptographic Failures | `--export-secrets` で Secret ペイロードが平文 JSON に書き出される | `MSG-CLI-145` を `--quiet` 抑止不可で stderr に必ず出力。デフォルト動作は `{"kind":"redacted"}` でリダクト。export ファイルは `0600` パーミッション。`threat-model.md §7.5` 参照 | ✅ |
+| A03 | Injection | import ファイルの文字列フィールドが SQLite クエリに注入される | `rusqlite` のパラメタライズドクエリ（positional parameter `?N`）を使用。SQL 文字列連結は禁止。`shikomi-infra` の既存 `execute` / `query_row` 呼び出しは全て prepared statement 経由（既存設計の継承）。`serde_json::from_reader` で型付きデシリアライズ後に domain 型へ変換するため、生 SQL 文字列として扱われる経路が存在しない | ✅ |
+| A04 | Insecure Design | import 途中クラッシュで vault が半書き込み状態になる | `repo.save()` が `tempfile::NamedTempFile::persist` による atomic rename を保証。vault 全体を一時ファイルに書いてから rename するため中間状態は外部から見えない（R1-DP-09）| ✅ |
+| A05 | Security Misconfiguration | `PRAGMA journal_mode = DELETE` による concurrent write ロック競合 | `SqliteVaultRepository::from_directory_with_busy_timeout(2000ms)` で import コネクションに busy_timeout を設定。2 秒超過時は `ImportVaultBusy`（MSG-CLI-146）で Fail Fast。WAL 移行は別 Issue に分離（`schema.rs` / daemon 全コネクション協調が必要なため）| ✅ |
+| A06 | Vulnerable and Outdated Components | `rusqlite 0.31.0` に既知 CVE が存在する / 最新版から乖離している | 後述「§rusqlite CVE 確認」参照。既知の 2 件の RustSec advisory はいずれも 0.31.0 には非該当。`cargo audit` を CI で定期実行して新規 CVE を検出する（`docs/design/tech-stack.md §セキュリティ運用`）| ✅ |
+| A07 | Identification and Authentication Failures | vault ロック済み（VEK 不在）状態での export / import が成功する | A01 と同経路。`repo.load()` が `ProtectionMode::Encrypted` かつ VEK 不在を検出して `ExportImportVaultLocked` を返す。認証バイパス経路なし | ✅ |
+| A08 | Software and Data Integrity Failures | 改ざんされた import ファイルが vault を汚染する | `ImportValidator::validate` が `format_version`（1 のみ許可）/ ファイル内重複 ID / `{"kind":"redacted"}` payload を早期検出して `ImportValidationFailed` で拒否（Sub-A domain 層の責務）。import ファイルのデジタル署名検証は対象外（スコープ外、`feature-spec.md` 非要件）| ✅ |
+| A09 | Security Logging and Monitoring Failures | SQLITE_BUSY 発生が監査ログに残らない / IPC バイパスが記録されない | `run_export` / `run_import` が IPC バイパス時に `tracing::warn` で記録。SQLITE_BUSY 発生時は `MSG-CLI-146` を stderr に出力してユーザーに通知。**構造化監査ログの永続化は対象外**（CLI ツールはサーバープロセスではなく、永続ログは OS ログ基盤の責務）。サーバーサイド監査ログが必要な場合は daemon 側で実装する（別 Issue）| ✅ |
+| A10 | Server-Side Request Forgery | 該当なし（CLI ツールはサーバーとして動作しない。外部 HTTP リクエストを発行しない）| 非スコープ | N/A |
+
+---
+
+### §rusqlite CVE 確認
+
+`PersistenceError::DatabaseBusy` が依存する `rusqlite::ErrorCode::DatabaseBusy` のセキュリティアリバイ（服部平次指摘対応）。
+
+**採用バージョン**: `rusqlite 0.31.0`（`Cargo.lock` checksum: `b838eba278d213a8beaf485bd313fd580ca4505a00d5871caeb1457c55322cae`）
+
+**既知 advisory（RustSec Advisory Database 調査、2026-05-12 時点）**:
+
+| Advisory ID | 発見日 | 概要 | 影響バージョン | パッチ済みバージョン | 0.31.0 への影響 |
+|-------------|--------|------|--------------|---------------------|----------------|
+| RUSTSEC-2020-0014 | 2020-10-01 | セキュリティ監査による複数のメモリ安全性問題（`Connection::get_aux` / `set_aux` / `Session::attach` 等）| `< 0.23.0` | `>= 0.23.0` | **非該当** |
+| RUSTSEC-2021-0128 | 2021-12-09 | クロージャのライフタイム境界誤りによる use-after-free | `0.25.0`〜`0.26.1` | `>= 0.25.4` / `>= 0.26.2` | **非該当** |
+
+**結論**: `rusqlite 0.31.0` に対する既知の未対応 CVE / RustSec advisory は存在しない。
+
+**メンテ状況**: 最新安定版は `0.39.0`（2025-03-15 リリース）。`0.31.0` は 8 マイナーバージョン旧。`ErrorCode::DatabaseBusy` enum は `0.23` 時代から安定しており API 互換性は保たれているが、バージョン追跡は `cargo audit` CI ジョブで継続する。アップグレード判断は `docs/design/tech-stack.md §3.2 依存ライブラリ管理方針` に従う。
+
+**`cargo audit` の実行方針**: CI パイプライン（`.github/workflows/release.yml`）に `cargo audit` ジョブが追加済み（Issue #136 対応済み）。新規 CVE 検出時は該当 Issue を起票して即座に対処する。
