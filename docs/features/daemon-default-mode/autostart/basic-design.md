@@ -140,7 +140,7 @@
 
 | ID | 変更内容 |
 |----|---------|
-| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: `"hint: or enable autostart: shikomi daemon install"` を追加（別 PR）|
+| MSG-CLI-110 hint（Sub-A で更新済み）| Sub-B 完了後: `"hint: or enable autostart: shikomi daemon install"` を追加（完了 — Issue #134）|
 
 ## セキュリティ考慮
 
