@@ -14,6 +14,7 @@ use super::Locale;
 ///
 /// 例外: MSG-CLI-110（DaemonNotRunning）は 3 OS 並記の hint で複数行 / MSG-CLI-111
 /// （ProtocolVersionMismatch）は 1 hint 行で構成し、それぞれ専用 helper を呼ぶ。
+/// Issue #141: MSG-CLI-144（ImportValidationFailed::RedactedPayload）も専用 helper を呼ぶ。
 #[must_use]
 pub fn render_error(err: &CliError, locale: Locale) -> String {
     match err {
@@ -21,6 +22,11 @@ pub fn render_error(err: &CliError, locale: Locale) -> String {
         CliError::ProtocolVersionMismatch { server, client } => {
             render_protocol_version_mismatch(server, client, locale)
         }
+        // Issue #141: MSG-CLI-144 — RedactedPayload は専用 helper で描画する。
+        // UnknownFormatVersion / DuplicateIdInFile は lines_for の fallback（MSG-CLI-143）で処理する。
+        CliError::ImportValidationFailed(
+            shikomi_core::portability::ImportValidationError::RedactedPayload { id },
+        ) => render_import_validation_redacted(id, locale),
         _ => render_default(err, locale),
     }
 }
@@ -286,6 +292,49 @@ fn lines_for(err: &CliError) -> (String, String, String, String) {
             "is shikomi-gui installed? try reinstalling shikomi".to_owned(),
             "shikomi-gui がインストールされているか確認してください".to_owned(),
         ),
+        // Issue #141: data-portability export / import エラー文言（MSG-CLI-140〜143）
+        CliError::ExportImportVaultLocked => lit(
+            "vault is locked; unlock the vault before running export or import",
+            "vault がロックされています。export / import の前に vault のロックを解除してください",
+            "run `shikomi vault unlock` first",
+            "先に `shikomi vault unlock` を実行してください",
+        ),
+        CliError::ExportOutputFileExists { path } => (
+            format!("export output file already exists: {}", path.display()),
+            format!("export 先ファイルが既に存在します: {}", path.display()),
+            "pass --force to overwrite, or choose a different --output path".to_owned(),
+            "上書きする場合は --force を指定するか、別の --output パスを指定してください".to_owned(),
+        ),
+        CliError::ImportConflict { ids } => {
+            let display = format_conflict_ids(ids);
+            (
+                format!("import conflict: {} record(s) already exist in vault (ids: {display})", ids.len()),
+                format!("import 衝突: {} 件のレコードが vault に既に存在します（ID: {display}）", ids.len()),
+                "use --on-conflict skip to skip conflicting records, or --on-conflict overwrite to replace them".to_owned(),
+                "--on-conflict skip で衝突レコードをスキップするか、--on-conflict overwrite で上書きしてください".to_owned(),
+            )
+        }
+        CliError::ImportDeserializationFailed { reason } => (
+            format!("failed to parse import file: {reason}"),
+            format!("import ファイルの解析に失敗しました: {reason}"),
+            "verify the file is a valid shikomi export (format_version must be 1)".to_owned(),
+            "ファイルが有効な shikomi export ファイルであることを確認してください（format_version は 1 である必要があります）".to_owned(),
+        ),
+        // `RedactedPayload` は `render_error` 側の専用 helper で処理済のため、
+        // `lines_for` には到達しない契約。万一到達した場合のコンパイル時網羅性のため記述する。
+        CliError::ImportValidationFailed(err) => {
+            debug_assert!(
+                false,
+                "ImportValidationFailed(RedactedPayload) should be rendered by render_import_validation_redacted; \
+                 other variants fall through to lines_for"
+            );
+            (
+                format!("failed to parse import file: {err}"),
+                format!("import ファイルの解析に失敗しました: {err}"),
+                "verify the file is a valid shikomi export (format_version must be 1)".to_owned(),
+                "ファイルが有効な shikomi export ファイルであることを確認してください（format_version は 1 である必要があります）".to_owned(),
+            )
+        }
     }
 }
 
@@ -321,6 +370,43 @@ fn render_persistence_lines(pe: &PersistenceError) -> (String, String, String, S
             "パーミッションを確認して再実行してください".to_owned(),
         ),
     }
+}
+
+// -------------------------------------------------------------------
+// Issue #141: data-portability private helpers
+// -------------------------------------------------------------------
+
+/// 衝突 ID 一覧を最大 4 件 + 省略で整形する。
+///
+/// 4 件以下: `ids.join(", ")`
+/// 5 件以上: `"id1, id2, id3, id4, ... (N more)"` 形式（terminal 溢れ防止）
+fn format_conflict_ids(ids: &[String]) -> String {
+    if ids.len() <= 4 {
+        ids.join(", ")
+    } else {
+        let head = ids[..4].join(", ");
+        format!("{head}, ... ({} more)", ids.len() - 4)
+    }
+}
+
+/// MSG-CLI-144: `ImportValidationFailed(RedactedPayload)` の専用 render helper。
+///
+/// `render_error` から dispatch される。リダクトペイロードを含むレコードの
+/// import 試行に対し、`--export-secrets` 付き再 export を案内する。
+fn render_import_validation_redacted(id: &str, locale: Locale) -> String {
+    let mut out = format!("error: cannot import record {id}: payload is redacted\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("error: レコード {id} を import できません: ペイロードがリダクトされています\n"));
+    }
+    out.push_str(
+        "hint: re-export the source vault with --export-secrets, then import the new file\n",
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "hint: ソース vault を --export-secrets 付きで再 export し、新しいファイルを import してください\n",
+        );
+    }
+    out
 }
 
 // -------------------------------------------------------------------

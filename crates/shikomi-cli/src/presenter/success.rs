@@ -266,6 +266,64 @@ pub fn render_autostart_uninstalled(locale: Locale) -> String {
     out
 }
 
+// -------------------------------------------------------------------
+// Issue #141: data-portability export / import 成功文言（MSG-CLI-140 / MSG-CLI-145）
+//
+// 設計根拠: docs/features/data-portability/cli/detailed-design/presenter.md
+// §render_exported / §render_imported / §render_export_secrets_warning
+// -------------------------------------------------------------------
+
+/// `shikomi export` 成功文言（MSG-CLI-140 相当）。
+///
+/// `quiet == true` の場合は呼出側（`run_export`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_exported(record_count: usize, output_path: &std::path::Path, locale: Locale) -> String {
+    let path_str = output_path.display();
+    let mut out = format!("exported {record_count} record(s) to {path_str}\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!("{record_count} 件のレコードを {path_str} に export しました\n"));
+    }
+    out
+}
+
+/// `shikomi import` 成功文言。
+///
+/// `quiet == true` の場合は呼出側（`run_import`）で呼ばない（presenter 層は quiet 非関与）。
+#[must_use]
+pub fn render_imported(added: usize, skipped: usize, overwritten: usize, locale: Locale) -> String {
+    let mut out = format!("imported {added} record(s) (skipped {skipped}, overwritten {overwritten})\n");
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(&format!(
+            "{added} 件を追加しました（スキップ: {skipped} 件、上書き: {overwritten} 件）\n"
+        ));
+    }
+    out
+}
+
+/// `--export-secrets` 指定時の警告文言（MSG-CLI-145）。
+///
+/// `--quiet` でも抑止不可。呼出側（`run_export`）は `quiet` フラグを確認せずに
+/// 直接 `eprintln!` で stderr へ出力する（設計書 §セキュリティ考慮 参照）。
+/// 本関数はロケール別文言の生成責務のみを担う。
+#[must_use]
+pub fn render_export_secrets_warning(locale: Locale) -> String {
+    let mut out = String::from(
+        "warning: --export-secrets is set; secret values will be written to the export file in plaintext\n",
+    );
+    out.push_str(
+        "warning: store the export file securely and delete it when no longer needed\n",
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        out.push_str(
+            "warning: --export-secrets が指定されています。Secret の値が平文でエクスポートファイルに書き込まれます\n",
+        );
+        out.push_str(
+            "warning: エクスポートファイルを安全に保管し、不要になったら削除してください\n",
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

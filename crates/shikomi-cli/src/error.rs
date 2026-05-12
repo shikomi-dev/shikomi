@@ -153,6 +153,41 @@ pub enum CliError {
     /// R1-GUI-01: `shikomi gui` コマンドが `shikomi-gui` を exec できない場合。
     #[error("failed to launch GUI: {0}")]
     GuiLaunchFailed(String),
+
+    // ---------------- Issue #141: data-portability export / import ----------------
+
+    /// vault がロック済みで export / import を試みた（MSG-CLI-140、exit 1）。
+    ///
+    /// `CliError::VaultLocked`（exit 3）とは意図的に分離：export / import は
+    /// daemon ではなく CLI が直接 SQLite を操作する経路であり、exit 3 の
+    /// 「daemon 経由の unlock 要求」とは文脈が異なる。
+    #[error("vault is locked; unlock the vault before running export or import")]
+    ExportImportVaultLocked,
+
+    /// export 出力ファイルが既に存在する（MSG-CLI-141、exit 1）。
+    #[error("export output file already exists: {path}")]
+    ExportOutputFileExists {
+        /// 既に存在するファイルパス。
+        path: PathBuf,
+    },
+
+    /// `--on-conflict error` で import 衝突を検出した（MSG-CLI-142、exit 1）。
+    #[error("import conflict: {} record(s) already exist in vault", ids.len())]
+    ImportConflict {
+        /// 衝突したレコード ID 文字列一覧。
+        ids: Vec<String>,
+    },
+
+    /// import ファイルのデシリアライズ失敗（MSG-CLI-143、exit 1）。
+    #[error("failed to parse import file: {reason}")]
+    ImportDeserializationFailed {
+        /// デシリアライズ失敗の詳細（固定文言または外部ライブラリエラー文言）。
+        reason: String,
+    },
+
+    /// import バリデーション失敗（MSG-CLI-143 / MSG-CLI-144、exit 1）。
+    #[error("import validation failed: {0}")]
+    ImportValidationFailed(shikomi_core::portability::ImportValidationError),
 }
 
 /// daemon から返る `IpcErrorCode` を CLI 層エラーに写像する（Sub-F #44 Phase 2）。
@@ -208,6 +243,31 @@ impl From<PersistenceError> for CliError {
             // SQLite 経路と同じ presenter 経路（MSG-CLI-103）に着地させる（DRY、UX 同一）。
             PersistenceError::RecordNotFound(id) => Self::RecordNotFound(id),
             other => Self::Persistence(other),
+        }
+    }
+}
+
+/// `DataPortabilityError`（UseCase 内部中間エラー型）を `CliError` に変換する（Issue #141）。
+///
+/// 設計根拠: docs/features/data-portability/cli/detailed-design/cli.md §From<DataPortabilityError>
+impl From<crate::usecase::portability::error::DataPortabilityError> for CliError {
+    fn from(e: crate::usecase::portability::error::DataPortabilityError) -> Self {
+        use crate::usecase::portability::error::DataPortabilityError;
+        match e {
+            DataPortabilityError::VaultLocked => Self::ExportImportVaultLocked,
+            DataPortabilityError::OutputFileExists { path } => {
+                Self::ExportOutputFileExists { path }
+            }
+            DataPortabilityError::ConflictError { ids } => Self::ImportConflict { ids },
+            DataPortabilityError::DeserializationFailed { reason } => {
+                Self::ImportDeserializationFailed { reason }
+            }
+            DataPortabilityError::ValidationFailed(err) => Self::ImportValidationFailed(err),
+            DataPortabilityError::IoError(io_err) => {
+                Self::Persistence(PersistenceError::Internal {
+                    reason: io_err.to_string(),
+                })
+            }
         }
     }
 }
@@ -270,7 +330,13 @@ impl From<&CliError> for ExitCode {
             | CliError::ProtocolVersionMismatch { .. }
             | CliError::Crypto { .. }
             | CliError::HotkeyConflict { .. }
-            | CliError::HotkeyParseError { .. } => Self::UserError,
+            | CliError::HotkeyParseError { .. }
+            // Issue #141: data-portability export / import エラー（全て exit 1）
+            | CliError::ExportImportVaultLocked
+            | CliError::ExportOutputFileExists { .. }
+            | CliError::ImportConflict { .. }
+            | CliError::ImportDeserializationFailed { .. }
+            | CliError::ImportValidationFailed(_) => Self::UserError,
             // exit 2（SystemError / WrongPassword）: 既存 I/O 系 + Sub-F SSoT パスワード違い
             CliError::Persistence(_)
             | CliError::Domain(_)
@@ -530,6 +596,34 @@ mod tests {
                 CliError::HotkeyParseError {
                     reason: "invalid combo: foobar".to_owned(),
                 },
+            ),
+            // Issue #141: data-portability export / import エラー（全て exit 1）
+            ("ExportImportVaultLocked", CliError::ExportImportVaultLocked),
+            (
+                "ExportOutputFileExists",
+                CliError::ExportOutputFileExists {
+                    path: std::path::PathBuf::from("/tmp/out.json"),
+                },
+            ),
+            (
+                "ImportConflict",
+                CliError::ImportConflict {
+                    ids: vec!["id-1".to_owned(), "id-2".to_owned()],
+                },
+            ),
+            (
+                "ImportDeserializationFailed",
+                CliError::ImportDeserializationFailed {
+                    reason: "unexpected end of input".to_owned(),
+                },
+            ),
+            (
+                "ImportValidationFailed(UnknownFormatVersion)",
+                CliError::ImportValidationFailed(
+                    shikomi_core::portability::ImportValidationError::UnknownFormatVersion {
+                        found: 99,
+                    },
+                ),
             ),
         ];
         for (name, err) in user_error_cases {

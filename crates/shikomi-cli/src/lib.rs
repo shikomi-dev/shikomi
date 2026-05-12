@@ -229,6 +229,14 @@ pub fn run() -> ExitCode {
         Subcommand::Add(a) => record_runners::run_add(&handle, a, locale, quiet),
         Subcommand::Edit(a) => record_runners::run_edit(&handle, a, locale, quiet),
         Subcommand::Remove(a) => record_runners::run_remove(&handle, a, locale, quiet),
+        // Issue #141: export / import は常に SQLite 直接アクセスを使用（IPC 経路を使わない）。
+        // `IpcVaultRepository` はペイロードを返さないため。
+        Subcommand::Export(a) => {
+            run_export(a, &handle, args.vault_dir.as_deref(), quiet, locale)
+        }
+        Subcommand::Import(a) => {
+            run_import(a, &handle, args.vault_dir.as_deref(), quiet, locale)
+        }
         // 上の `if let Subcommand::Vault(_)` early return で処理済（網羅性のため `_` で吸収）。
         Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
         // 上の `if let Subcommand::Gui` early return で処理済（網羅性のため unreachable）。
@@ -241,6 +249,120 @@ pub fn run() -> ExitCode {
         Ok(()) => ExitCode::Success,
         Err(err) => emit_error_and_exit(&err, locale),
     }
+}
+
+// -------------------------------------------------------------------
+// Issue #141: data-portability export / import dispatcher
+// -------------------------------------------------------------------
+
+/// `shikomi export` の dispatcher。
+///
+/// # セキュリティ
+/// `--export-secrets` フラグが指定されている場合、UseCase 呼出の**前**に MSG-CLI-145 を
+/// stderr へ強制出力する。`quiet` フラグを参照しない経路として設計し、UseCase がエラーを
+/// 返した場合でも警告が表示され、ユーザが試みた操作の記録が残る。
+///
+/// # IPC 経路の設計判断
+/// `RepositoryHandle` のバリアントに**関わらず**、常に `SqliteVaultRepository::from_directory`
+/// で直接 SQLite にアクセスする。`IpcVaultRepository` はペイロードを返さないため
+/// export に使用できない（basic-design.md §REQ-DP-008 --no-ipc 経路の設計判断）。
+fn run_export(
+    args: &cli::ExportArgs,
+    handle: &RepositoryHandle,
+    vault_dir: Option<&Path>,
+    quiet: bool,
+    locale: Locale,
+) -> Result<(), CliError> {
+    // Step 1: --export-secrets 警告（--quiet でも抑止不可、UseCase 呼出前に出力）
+    if args.export_secrets {
+        // 直接 eprintln! で stderr へ強制出力（quiet フラグを参照しない設計）
+        eprintln!(
+            "{}",
+            presenter::success::render_export_secrets_warning(locale).trim_end()
+        );
+    }
+
+    // Step 2: vault_dir の解決
+    let resolved_dir = match vault_dir {
+        Some(p) => p.to_path_buf(),
+        None => io::paths::resolve_os_default_vault_dir()?,
+    };
+
+    // Steps 3–4: RepositoryHandle に関わらず SQLite 直接アクセス
+    if matches!(handle, RepositoryHandle::Ipc(_)) {
+        tracing::warn!(
+            target: "shikomi_cli::export",
+            "export uses direct SQLite access regardless of IPC mode"
+        );
+    }
+    let sqlite_repo = SqliteVaultRepository::from_directory(&resolved_dir)?;
+
+    // Step 5: 現在時刻
+    let now = time::OffsetDateTime::now_utc();
+
+    // Step 6: UseCase 呼出
+    let summary =
+        usecase::portability::export::export_records(&sqlite_repo, args, &resolved_dir, now)?;
+
+    // Step 7: 成功出力（quiet の場合は抑止）
+    if !quiet {
+        print_stdout(&presenter::success::render_exported(
+            summary.record_count,
+            &summary.output_path,
+            locale,
+        ));
+    }
+
+    Ok(())
+}
+
+/// `shikomi import` の dispatcher。
+///
+/// # IPC 経路の設計判断
+/// `RepositoryHandle` のバリアントに**関わらず**、常に `SqliteVaultRepository::from_directory`
+/// で直接 SQLite にアクセスする。IPC per-record 書き込みは R1-DP-09 の atomicity 要件に
+/// 非適合（途中クラッシュで半書き込み状態になる）。SQLite `repo.save()` が atomic write を保証。
+fn run_import(
+    args: &cli::ImportArgs,
+    handle: &RepositoryHandle,
+    vault_dir: Option<&Path>,
+    quiet: bool,
+    locale: Locale,
+) -> Result<(), CliError> {
+    // Step 1: vault_dir の解決
+    let resolved_dir = match vault_dir {
+        Some(p) => p.to_path_buf(),
+        None => io::paths::resolve_os_default_vault_dir()?,
+    };
+
+    // Step 2: IPC 経路警告（export と同じ pattern）
+    if matches!(handle, RepositoryHandle::Ipc(_)) {
+        tracing::warn!(
+            target: "shikomi_cli::import",
+            "import uses direct SQLite access regardless of IPC mode"
+        );
+    }
+
+    // Step 3: SQLite 直接アクセス（R1-DP-09 atomicity 要件適合）
+    let sqlite_repo = SqliteVaultRepository::from_directory(&resolved_dir)?;
+
+    // Step 4: 現在時刻
+    let now = time::OffsetDateTime::now_utc();
+
+    // Step 5: UseCase 呼出
+    let summary = usecase::portability::import::import_records(&sqlite_repo, args, now)?;
+
+    // Step 6: 成功出力（quiet の場合は抑止）
+    if !quiet {
+        print_stdout(&presenter::success::render_imported(
+            summary.added,
+            summary.skipped,
+            summary.overwritten,
+            locale,
+        ));
+    }
+
+    Ok(())
 }
 
 // -------------------------------------------------------------------
