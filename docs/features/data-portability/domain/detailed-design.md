@@ -17,7 +17,7 @@
 | `crates/shikomi-core/src/portability/mod.rs` | 新規 | `portability` モジュールのエクスポート（re-export）|
 | `crates/shikomi-core/src/portability/export.rs` | 新規 | `ExportRecordPayload` / `ExportRecord` / `ExportPayload` |
 | `crates/shikomi-core/src/portability/import.rs` | 新規 | `ImportRecord` / `ImportPayload` / `ImportValidator` |
-| `crates/shikomi-core/src/portability/error.rs` | 新規 | `ImportValidationError` |
+| `crates/shikomi-core/src/portability/error.rs` | 新規 | `ImportValidationError` / `ExportError` |
 
 変更不要ファイル:
 
@@ -35,10 +35,10 @@
 - バリアント:
   1. `Plaintext { value: String }` → JSON: `{ "kind": "plaintext", "value": "..." }`
   2. `Redacted` → JSON: `{ "kind": "redacted" }`
-- `from_record(payload: &RecordPayload, kind: RecordKind, include_secrets: bool)` 関連関数:
-  1. `payload` が `RecordPayload::Encrypted` → 呼び出し側が事前チェック済みのためここには到達しない（`unreachable!` マクロではなく `debug_assert!` で保護）
-  2. `kind == RecordKind::Secret` かつ `include_secrets == false` → `Redacted` を返す
-  3. 上記以外 → `payload.expose_secret()` を呼び出し `Plaintext { value }` を返す
+- `from_record(payload: &RecordPayload, kind: RecordKind, include_secrets: bool) -> Result<Self, ExportError>` 関連関数:
+  1. `payload` が `RecordPayload::Encrypted` → 即座に `Err(ExportError::VaultLocked)` を返す（Fail Fast。release ビルドでも動作する）
+  2. `kind == RecordKind::Secret` かつ `include_secrets == false` → `Ok(Redacted)` を返す
+  3. 上記以外 → `payload` の平文値から `expose_secret()` を呼び出し `Ok(Plaintext { value })` を返す
 - **`expose_secret` 呼び出し集約**: この関数が唯一の expose_secret 呼び出し箇所（`cli-vault-commands/basic-design/security.md §expose_secret 経路監査` の方針に準拠）
 
 ### `ExportRecord` 型
@@ -51,12 +51,12 @@
 | `id` | `String` | 文字列 | `record.id().to_string()` |
 | `kind` | `RecordKind` | `"text"` / `"secret"` | `record.kind()` |
 | `label` | `String` | 文字列 | `record.label().as_str().to_owned()` |
-| `payload` | `ExportRecordPayload` | tagged union | `ExportRecordPayload::from_record(...)` |
+| `payload` | `ExportRecordPayload` | tagged union | `ExportRecordPayload::from_record(...)?`（`ExportError::VaultLocked` を伝播）|
 | `created_at` | `String` | RFC 3339 | `record.created_at()` → `time::format_description::well_known::Rfc3339` |
 | `updated_at` | `String` | RFC 3339 | `record.updated_at()` → `Rfc3339` |
-| `hotkey` | `Option<String>` | 文字列 or null | `record.hotkey().map(|h| h.display_string())` |
+| `hotkey` | `Option<String>` | 文字列 or null | `record.hotkey().map(|h| h.as_str().to_owned())` |
 
-- `From<(&Record, bool)>` を実装する（`bool` は `include_secrets`）。これにより `ExportRecord::from((record, include_secrets))` で変換できる
+- `ExportRecord::try_from((&Record, bool)) -> Result<Self, ExportError>` を実装する（`bool` は `include_secrets`）。`From` ではなく `TryFrom` を使う理由: `from_record` が `Result` を返すため|
 
 ### `ExportPayload` 型
 
@@ -74,9 +74,10 @@
 
 ## `crates/shikomi-core/src/portability/import.rs` の設計詳細
 
-### `ImportRecord` 型
+### `ImportRecord` 型（`ExportRecord` の type alias）
 
-- `ExportRecord` と同一フィールド定義。`Deserialize` のみ実装（import は書き込みのみ。`Serialize` は不要）
+- `type ImportRecord = ExportRecord` — type alias として定義する。フィールド定義を 2 箇所で管理しない（DRY / KISS）
+- 設計判断: `ImportRecord` を独立した struct にする振る舞い上の差異が存在しない。`ImportPayload.records` の要素型として使うだけで、バリデーション責務は `ImportValidator` が持つ。`ExportRecord` が `Serialize + Deserialize` の両方を実装しているため、roundtrip テストもこのまま成立する
 - `serde` の `deny_unknown_fields` は使用しない（将来バージョンが追加フィールドを持っても import できるよう前方互換を保つ）
 
 ### `ImportPayload` 型

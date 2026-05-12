@@ -23,8 +23,8 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 |------|------|
 | アクター | エンドユーザー（CLI 使用者）|
 | 事前条件 | daemon 起動済み（IPC 経路）または `--no-ipc` 指定済み。暗号化 vault の場合は vault がアンロック済み |
-| 基本フロー | ① `shikomi export --output <FILE>` を実行 ② CLI が `VaultRepository` 経由で全レコードを取得 ③ `Secret` kind のペイロードは `[REDACTED]`（既定）に置換して `ExportPayload` を構築 ④ JSON にシリアライズして `<FILE>` に書き込む ⑤ stdout に成功メッセージ（件数・出力先）を表示 |
-| 代替フロー A | `--export-secrets` フラグ指定時 → Secret kind のペイロードを平文で含める |
+| 基本フロー | ① `shikomi export --output <FILE>` を実行 ② CLI が `VaultRepository` 経由で全レコードを取得 ③ `Secret` kind のペイロードは `{"kind":"redacted"}` tagged union（既定）で表現した `ExportPayload` を構築 ④ JSON にシリアライズして `<FILE>` に `0600` パーミッションで書き込む ⑤ stdout に成功メッセージ（件数・出力先）を表示 |
+| 代替フロー A | `--export-secrets` フラグ指定時 → stderr に `MSG-CLI-145`（Secret 平文 export 警告）を出力してから Secret kind のペイロードを平文で含める |
 | 代替フロー B | vault がロック済みの暗号化モード → `MSG-CLI-140` で exit 1 |
 | 代替フロー C | `<FILE>` が既に存在 → `MSG-CLI-141`（上書き確認）で exit 1（`--force` で上書き可）|
 | 事後条件 | `<FILE>` に有効な `ExportPayload` JSON が書き込まれている |
@@ -39,7 +39,7 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 | 代替フロー A | `--on-conflict skip` → 衝突 ID はスキップして残りを追加 |
 | 代替フロー B | `--on-conflict overwrite` → 衝突 ID の既存レコードを置換 |
 | 代替フロー C | フォーマットバージョン不一致 → `MSG-CLI-143` で exit 1 |
-| 代替フロー D | `payload_redacted: true` のレコードを import → `MSG-CLI-144`（payload が空のレコードはインポート不可）で exit 1 |
+| 代替フロー D | `{"kind":"redacted"}` payload のレコードを import → `MSG-CLI-144`（リダクト済みレコードはインポート不可）で exit 1 |
 | 事後条件 | 指定ファイルの有効レコードが vault に追加・更新されている |
 
 ## 3. 機能要件
@@ -47,12 +47,12 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 | ID | 要件 |
 |----|------|
 | R1-DP-01 | `shikomi export --output <FILE>` で vault の全レコードを JSON 形式でファイルに書き出す |
-| R1-DP-02 | `Secret` kind のペイロードは既定でリダクト（`payload_redacted: true`）する。`--export-secrets` フラグで平文 export を明示的に許可する |
+| R1-DP-02 | `Secret` kind のペイロードは既定でリダクト（`{"kind":"redacted"}` tagged union）する。`--export-secrets` フラグで平文 export を明示的に許可する。`--export-secrets` 実行時は stderr に `MSG-CLI-145`（Secret 平文 export 警告）を必ず出力する（`--quiet` でも抑止不可）|
 | R1-DP-03 | 暗号化 vault がロック済みの場合、export / import コマンドを拒否する（`MSG-CLI-140`）|
 | R1-DP-04 | export ファイルに `format_version: 1` を含め、将来のフォーマット変更に備える |
 | R1-DP-05 | `shikomi import --input <FILE>` で JSON ファイルを読み込み、バリデーション後に vault へ追加する |
 | R1-DP-06 | import 時の衝突戦略を `--on-conflict skip|overwrite|error` で指定可能にする（既定: `error`）|
-| R1-DP-07 | `payload_redacted: true` のレコードのインポートを拒否する（`MSG-CLI-144`）|
+| R1-DP-07 | `{"kind":"redacted"}` payload を持つレコードのインポートを拒否する（`MSG-CLI-144`）|
 | R1-DP-08 | export は `VaultRepository` trait 経由で実装し、IPC 経路（daemon）と SQLite 直結（`--no-ipc`）の両方で動作する |
 | R1-DP-09 | export / import の処理は `tempfile` を用いた atomic な書き込みで実装する（import の部分書き込み防止）|
 | R1-DP-10 | `hotkey` フィールドを export ファイルに含める（`null` または文字列）。import 時は hotkey フィールドも復元する |
@@ -62,6 +62,8 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 | 項目 | 要件 |
 |------|------|
 | セキュリティ | Secret kind の平文は `--export-secrets` 明示フラグなしでは export ファイルに含まれない |
+| ファイルパーミッション | export ファイルは `0600`（owner read/write のみ）で作成する。Unix 系は `tempfile::Builder::new().permissions(0o600)` で保証する |
+| --export-secrets 警告 | `--export-secrets` 実行時は `MSG-CLI-145` を stderr に出力する。誤操作による Secret 全漏洩を防ぐ最終ゲート |
 | 互換性 | `format_version: 1` の JSON ファイルは将来バージョンでも読み込み可能にする（フォーマットは後方互換）|
 | アトミック性 | import 中にクラッシュしても vault が壊れない（`tempfile` + rename による atomic commit）|
 | エラーメッセージ | 不正な JSON / 不正なフィールド値は具体的なフィールド名付きエラーで報告する（`MSG-CLI-143`）|
@@ -73,8 +75,8 @@ shikomi の vault データをファイル単位でエクスポート・イン�
 | ID | 基準 |
 |----|------|
 | AC-DP-01 | `ExportRecord` / `ExportPayload` が JSON にシリアライズ・デシリアライズできる |
-| AC-DP-02 | `Secret` kind のレコードが `payload_redacted: true` で export される（`--export-secrets` なし）|
-| AC-DP-03 | `payload_redacted: true` のレコードを `ImportValidator` に渡すと `ImportValidationError::RedactedPayload` が返る |
+| AC-DP-02 | `Secret` kind のレコードが `{"kind":"redacted"}` tagged union で export される（`--export-secrets` なし）|
+| AC-DP-03 | `{"kind":"redacted"}` payload を持つレコードを `ImportValidator` に渡すと `ImportValidationError::RedactedPayload` が返る |
 | AC-DP-04 | 同一 ID を持つ 2 レコードを `ImportValidator` に渡すと `ImportValidationError::DuplicateId` が返る |
 | AC-DP-05 | `format_version: 999`（未知のバージョン）を `ImportValidator` に渡すと `ImportValidationError::UnknownFormatVersion` が返る |
 
