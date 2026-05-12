@@ -4,9 +4,9 @@
 //! §`usecase/portability/import.rs` の設計詳細
 //!
 //! # 設計判断: IPC 経路廃止・SQLite 一本化
-//! Import も export と同様に常に `SqliteVaultRepository` を使用する。
+//! Import も export と同様に常に `VaultRepository` を使用する。
 //! IPC per-record `add_record()` は途中クラッシュで vault が半書き込み状態になり
-//! `R1-DP-09` の atomicity 要件に非適合。SQLite `repo.save()` が atomic write を保証する。
+//! `R1-DP-09` の atomicity 要件に非適合。`repo.save()` が atomic write を保証する。
 //!
 //! # セキュリティ考慮
 //! - `serde_json::from_reader` によるストリーミングパース（OOM 防止、threat-model.md §7.5）
@@ -149,7 +149,7 @@ pub fn import_records(
         }
     }
 
-    // Step 8: atomic write（SqliteVaultRepository::save が tempfile + rename で保証、R1-DP-09 適合）
+    // Step 8: atomic write（tempfile + rename で保証、R1-DP-09 適合）
     // Issue #146: DatabaseBusy は VaultBusy に変換。その他の PersistenceError は従来通り伝播。
     repo.save(&vault).map_err(|e| -> CliError {
         match e {

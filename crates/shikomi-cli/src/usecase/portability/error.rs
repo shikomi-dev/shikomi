@@ -24,7 +24,7 @@ use thiserror::Error;
 pub enum DataPortabilityError {
     /// vault が暗号化ロック済みの状態で export / import を試みた。
     ///
-    /// `SqliteVaultRepository::load()` が `ProtectionMode::Encrypted` を検出した場合、
+    /// `VaultRepository::load()` が `ProtectionMode::Encrypted` を検出した場合、
     /// または `ExportError::VaultLocked` が伝播した場合に発生する。
     #[error("vault is locked")]
     VaultLocked,
