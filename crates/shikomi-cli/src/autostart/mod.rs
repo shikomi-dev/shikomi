@@ -69,10 +69,13 @@ pub enum AutostartError {
 
 /// `shikomi-daemon` バイナリの絶対パスを解決する共通ヘルパー。
 ///
+/// autostart 登録ファイルに書き込む起動パスを返す。バイナリが現時点で存在しなくても
+/// パスの構築は成功する（ユーザがログイン時に daemon が存在すれば良い）。
+///
 /// 設計根拠: backend-trait.md §resolve_daemon_path() 共通ヘルパー
 ///
 /// # Errors
-/// 実行ファイルの解決に失敗した場合 `AutostartError::IoError` を返す。
+/// 実行ファイルのディレクトリ解決に失敗した場合 `AutostartError::IoError` を返す。
 pub fn resolve_daemon_path() -> Result<PathBuf, AutostartError> {
     let exe = std::env::current_exe()?;
     // canonicalize でシンボリックリンクを解決（シンボリックリンク攻撃防止 / security.md §脅威モデル）
@@ -88,15 +91,7 @@ pub fn resolve_daemon_path() -> Result<PathBuf, AutostartError> {
     } else {
         "shikomi-daemon"
     };
-    let daemon_path = dir.join(daemon_name);
-    // Fail Fast: 不在なら IoError(NotFound)
-    if !daemon_path.exists() {
-        return Err(AutostartError::IoError(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("shikomi-daemon not found at {}", daemon_path.display()),
-        )));
-    }
-    Ok(daemon_path)
+    Ok(dir.join(daemon_name))
 }
 
 // -------------------------------------------------------------------

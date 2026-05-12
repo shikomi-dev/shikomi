@@ -98,8 +98,7 @@ fn sc_ddm_002_tc001_ac07_daemon_install_creates_autostart_file() {
             autostart_path.display()
         );
         // プレースホルダが残っていないこと
-        let content = std::fs::read_to_string(&autostart_path)
-            .expect("autostart file readable");
+        let content = std::fs::read_to_string(&autostart_path).expect("autostart file readable");
         assert!(
             !content.contains("{daemon_path}"),
             "AC-DDM-07: テンプレートプレースホルダ {{daemon_path}} が残っているべきでない\n内容:\n{content}"
@@ -133,8 +132,7 @@ fn sc_ddm_002_tc002_ac08_daemon_uninstall_removes_autostart_file() {
     let home = make_home_dir();
 
     // 前提: install 済み状態にする
-    run_daemon_cmd(home.path(), &["install"])
-        .success();
+    run_daemon_cmd(home.path(), &["install"]).success();
 
     // autostart ファイルが存在することを確認してから uninstall
     if let Some(autostart_path) = expected_autostart_file(home.path()) {
@@ -148,7 +146,9 @@ fn sc_ddm_002_tc002_ac08_daemon_uninstall_removes_autostart_file() {
         // exit 0
         .success()
         // stdout に成功メッセージ
-        .stdout(predicate::str::contains("shikomi-daemon autostart disabled"))
+        .stdout(predicate::str::contains(
+            "shikomi-daemon autostart disabled",
+        ))
         // stderr に "error:" なし
         .stderr(predicate::str::contains("error:").not());
 
@@ -412,7 +412,9 @@ fn tc_it_128b_daemon_uninstall_idempotent_when_not_registered() {
     // install せずに直接 uninstall
     run_daemon_cmd(home.path(), &["uninstall"])
         .success()
-        .stdout(predicate::str::contains("shikomi-daemon autostart disabled"))
+        .stdout(predicate::str::contains(
+            "shikomi-daemon autostart disabled",
+        ))
         .stderr(predicate::str::contains("error:").not());
 }
 
@@ -438,7 +440,10 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
             .output()
             .expect("実行失敗");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("autostart: disabled"), "初期状態は disabled であるべき。\nstdout:\n{stdout}");
+        assert!(
+            stdout.contains("autostart: disabled"),
+            "初期状態は disabled であるべき。\nstdout:\n{stdout}"
+        );
     }
 
     // install 後: enabled
@@ -451,7 +456,10 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
             .output()
             .expect("実行失敗");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("autostart: enabled"), "install 後は enabled であるべき。\nstdout:\n{stdout}");
+        assert!(
+            stdout.contains("autostart: enabled"),
+            "install 後は enabled であるべき。\nstdout:\n{stdout}"
+        );
     }
 
     // uninstall 後: disabled に戻る
@@ -464,6 +472,9 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
             .output()
             .expect("実行失敗");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("autostart: disabled"), "uninstall 後は disabled に戻るべき。\nstdout:\n{stdout}");
+        assert!(
+            stdout.contains("autostart: disabled"),
+            "uninstall 後は disabled に戻るべき。\nstdout:\n{stdout}"
+        );
     }
 }
