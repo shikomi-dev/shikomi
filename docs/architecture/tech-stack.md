@@ -86,12 +86,46 @@ flowchart TB
 | バンドラー | `tauri-bundler` / `cargo-bundle` / 自前 | **`tauri-bundler` v2.8+** | Tauri v2 公式、3 OS 全インストーラ形式を同一 YAML (`tauri.conf.json`) から生成<br/>出典: https://v2.tauri.app/distribute/ |
 | Windows インストーラ | MSI (WiX v3) / NSIS / MSIX | **NSIS（主）+ MSI（任意）** | NSIS はクロスコンパイル可・単一で多言語、MSI は Windows ホスト必須・言語別分離。`winget` は両形式受容<br/>出典: https://v2.tauri.app/distribute/windows-installer/ |
 | Windows 署名 | OV / EV / 未署名 | **段階移行（当面 OV、評判構築後 EV 検討）** | SmartScreen 警告回避、EV は即時 reputation だが年額コスト高、OSS 初期は OV で運用後に移行検討<br/>出典: https://v2.tauri.app/distribute/sign/windows/ |
-| macOS 署名 | Developer ID + Notarization / Ad-hoc / 未署名 | **Developer ID + Notarization（必須）** | Notarization なしは Gatekeeper で「壊れている」と表示される UX 悪化、要件「技術知識不要」に反する<br/>出典: https://v2.tauri.app/distribute/sign/macos/ |
+| macOS 署名 | Developer ID + Notarization / Ad-hoc / 未署名 | **Developer ID + Notarization（MVP後、Issue #130 で追加予定）** | MVP段階では `APPLE_CERTIFICATE` シークレット未設定のため unsigned build を許容（`bundler.yml` / `release.yml` の `HAS_APPLE_CERT` ガードで制御）。unsigned 時は Gatekeeper の「壊れています」警告が発生——ユーザーはシステム設定 → プライバシーとセキュリティ → 許可ボタンで手動許可が必要。Issue #130 で署名追加後に secrets 設定のみで解消。製品リリース（非 MVP）では署名必須（`nfr.md §9` 署名要件）<br/>出典: https://v2.tauri.app/distribute/sign/macos/ |
 | Linux 配布形式 | AppImage / deb / rpm / Flatpak / Snap / tarball | **deb + rpm + AppImage（初期）、Flatpak は後続** | Ubuntu/Debian・Fedora/RHEL・distro 非依存の 3 本で主要ユーザをカバー。Flatpak は XDG Portal 前提でホットキー実装の再確認が必要なため MVP スコープ外<br/>出典: https://v2.tauri.app/distribute/appimage/ / debian/ / rpm/ |
 | 配布チャネル | GitHub Releases / winget / Homebrew / APT repo / snap store | **GitHub Releases（主）+ winget + Homebrew Cask（副）** | OSS 初期は GitHub Releases を SSoT、winget と Homebrew Cask は YAML マニフェスト更新のみで低コスト<br/>出典: https://github.com/microsoft/winget-pkgs |
-| CI/CD | GitHub Actions / CircleCI / 自前 | **GitHub Actions** | リポジトリ所在と同一、matrix build で Win/Mac/Linux ランナーを標準提供、`taiki-e/upload-rust-binary-action` 等のエコシステム |
+| CI/CD | GitHub Actions / CircleCI / 自前 | **GitHub Actions** | リポジトリ所在と同一、matrix build で Win/Mac/Linux ランナーを標準提供、`taiki-e/upload-rust-binary-action` 等のエコシステム。PR/ブランチ CI は `bundler.yml`、タグトリガーの GitHub Releases 公開は `release.yml`（Issue #136）として分離する |
+| リリースパイプライン | tag-triggered / manual / `release-drafter` 自動化 | **`v*.*.*` タグ push トリガー（`release.yml`）** | セマンティックバージョンタグ `v[0-9]+.[0-9]+.[0-9]+` の push で自動発火。`bundler.yml` は変更しない（PR/ブランチ CI と release pipeline を独立させることで、CI 失敗がリリースフローに影響しない）。 共通セットアップは `.github/actions/tauri-build-setup` composite action を再利用（DRY）。macOS 署名スキップガード: `secrets.APPLE_CERTIFICATE` 未設定時は署名ステップを `if: env.HAS_APPLE_CERT == 'true'` でスキップ（unsigned build でワークフロー正常完了。Issue #130 で署名追加後に secrets 設定のみで有効化）。リリース公開フロー: 3 OS ビルド成功後に `gh release create --draft` → 全 artifact を `gh release upload` でアタッチ → `gh release edit --draft=false` で公開（draft を挟むことで artifacts 欠落の状態で誤公開しない）。`permissions: contents: write` は `release-publish` ジョブにのみ付与（最小権限）。SBOM（`cargo-cyclonedx`）は本 Issue スコープ外（リリース pipeline 安定後に別 Issue で追加）|
 | 依存監査 | `cargo-audit` / `cargo-deny` / Dependabot | **`cargo-deny` + Dependabot** | `cargo-deny` でライセンス / advisory / 重複バージョン / 禁止 crate を CI で fail fast、Dependabot で自動 PR |
 | SBOM | `cargo-cyclonedx` / `syft` | **`cargo-cyclonedx`** | Rust ネイティブ、CycloneDX 1.5 形式をリリースに添付 |
+
+### 2.2.1 `release.yml` ジョブ構成（Issue #136）
+
+```mermaid
+flowchart TD
+    Tag["push: tags v*.*.*"]
+    Linux["build-linux\n(ubuntu-22.04)\ndeb + rpm + AppImage"]
+    Mac["build-macos\n(macos-latest)\nDMG\n(HAS_APPLE_CERT=false → unsigned)"]
+    Win["build-windows\n(windows-latest)\nMSI + NSIS exe"]
+    UL["upload-artifact\n(linux, 90d)"]
+    UM["upload-artifact\n(macos, 90d)"]
+    UW["upload-artifact\n(windows, 90d)"]
+    Publish["release-publish\n(ubuntu-22.04)\nneeds: [build-linux, build-macos, build-windows]\ngh release create --draft\nsha256sum → SHA256SUMS.txt\ngh release upload ×3 OS + SHA256SUMS.txt\ngh release edit --draft=false"]
+
+    Tag --> Linux & Mac & Win
+    Linux --> UL --> Publish
+    Mac --> UM --> Publish
+    Win --> UW --> Publish
+```
+
+**設計判断の articulate**:
+
+| 判断 | 選択 | 根拠 |
+|------|------|------|
+| `bundler.yml` 変更の有無 | **変更しない** | PR CI と release pipeline を独立させる。`bundler.yml` の `workflow_call` 化はリファクタリング（別 Issue）|
+| macOS 署名スキップ | **`HAS_APPLE_CERT` job-level env で guard** | `secrets` コンテキストは step の `if` 式で参照不可（GitHub Actions 制約）。job-level env に昇格してから `if: env.HAS_APPLE_CERT == 'true'` でガードする（`bundler.yml` と同一パターン）。出典: https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/contexts#context-availability |
+| draft → published フロー | **draft 経由** | 3 OS ビルド全成功後に `gh release create --draft` → artifact アタッチ → `--draft=false`。直接 published にすると artifact アタッチ前の空 Release が瞬間的に外部公開される欠陥を防ぐ |
+| `permissions: contents: write` の付与範囲 | **`release-publish` ジョブのみ** | `gh release create` に必要な write 権限を build ジョブには与えない（最小権限原則）。ワークフローデフォルトは `contents: read` を維持する |
+| タグパターン | **`v[0-9]+.[0-9]+.[0-9]+`** | pre-release タグ（`v1.0.0-alpha.1` 等）は本ワークフローの自動リリース対象外。pre-release は別途 `workflow_dispatch` で手動対応（将来拡張）|
+| artifact 保持期間（release.yml）| **90 日** | `bundler.yml`（PR: 7 日 / main: 30 日）より長期。GitHub Release にも添付済みのため artifact は補助的位置づけだが、デバッグ用途で 90 日確保 |
+| `release-publish` ジョブの `needs` 設定 | **`needs: [build-linux, build-macos, build-windows]` — 3 OS 全成功必須** | 1 OS でも失敗すれば `release-publish` は実行されず、Release draft も含めて作成されない（Fail Fast / partial release 防止）。Linux のみ成功した状態で Release が公開されるような事態を構造的に防ぐ |
+| リリース成果物整合性検証（OWASP A08）| **SHA256 チェックサムを `SHA256SUMS.txt` として Release に同梱** | `release-publish` ジョブが `gh release upload` 前に `sha256sum *.dmg *.exe *.deb *.rpm *.AppImage > SHA256SUMS.txt` を生成し、バイナリと共に Release にアタッチする。GitHub アカウント侵害・CDN 改ざん・MITM に対してダウンロード後の整合性検証手段を提供する（パスワードマネージャとして必須。`threat-model.md` A08 対応）。将来は `minisign` による署名を追加可能（自動更新 pipeline が公開鍵バンドルを要求する場合）|
+| タグ push 認可（供給チェーン攻撃対策）| **GitHub Tag protection rules で maintainer ロールのみに制限** | `v[0-9]+.[0-9]+.[0-9]+` タグ push で release pipeline が自動発火するため、write 権限を持つ任意のコラボレーターが悪意あるビルドをリリースとして公開できる攻撃面を閉じる。GitHub リポジトリ設定 → Rules → Tag protection rules で `v*.*.*` パターンを maintainer role に限定すること（OWASP A08: 供給チェーン完全性）。出典: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules |
 
 ### 2.3 クラウド・サーバ系項目（該当なし）
 
