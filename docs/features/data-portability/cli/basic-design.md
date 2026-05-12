@@ -48,27 +48,51 @@
 
 | 項目 | 内容 |
 |------|------|
-| 入力 | `repo: &dyn VaultRepository`・`args: ExportArgs`・`vault_dir: &Path`・`now: OffsetDateTime` |
-| 処理 | (1) `args.output` が既存ファイルかつ `args.force == false` → `Err(ExportOutputFileExists)`。(2) `repo.load()` でレコード取得（vault ロック済みの場合は `ExportImportVaultLocked` に変換）。(3) 全レコードを `ExportRecord::try_from((&record, args.export_secrets))?` でシリアライズ可能型に変換。(4) `ExportPayload::new(records, vault_name, now)` でペイロード構築。(5) `serde_json::to_string_pretty` で JSON 文字列化。(6) `tempfile::Builder` で出力先と同一ディレクトリに一時ファイルを作成し、Unix 系では `0600` パーミッションを設定。(7) JSON 書き込み後、`NamedTempFile::persist(output_path)` で atomic rename。|
+| 入力 | `repo: &SqliteVaultRepository`（SQLite 直接アクセス、後述）・`args: &ExportArgs`・`vault_dir: &Path`・`now: OffsetDateTime` |
+| 処理 | (1) `args.output` が既存ファイルかつ `args.force == false` → `Err(ExportOutputFileExists)`。(2) `repo.exists() == false` → 0 件 export（エラーではない。空 vault の export は正常操作）。(3) `repo.load()` でレコード取得——`ProtectionMode::Encrypted` かつ `VEK` 不在（vault ロック済み）の場合は `ExportImportVaultLocked`。(4) 全レコードを `ExportRecord::try_from((&record, args.export_secrets))?` でシリアライズ可能型に変換（`ExportError::VaultLocked` → `ExportImportVaultLocked`）。(5) `ExportPayload::new(records, vault_name, now)` でペイロード構築。(6) `serde_json::to_string_pretty` で JSON 文字列化。(7) `tempfile::Builder` で出力先と同一ディレクトリに一時ファイルを作成し、Unix 系では `0600` パーミッションを設定。(8) JSON 書き込み後、`NamedTempFile::persist(output_path)` で atomic rename。|
 | 出力 | `Ok(ExportSummary { record_count: usize, output_path: PathBuf })` |
-| エラー時 | vault ロック済み → `Err(ExportImportVaultLocked)` / ファイル既存 → `Err(ExportOutputFileExists)` / I/O 失敗 → `Err(Persistence(...))` |
-| 設計原則 | Fail Fast（ファイル存在チェックを先行）/ アトミック性（`tempfile` + `persist` による rename）/ Tell, Don't Ask（`ExportPayload` が自身を JSON 化できる、UseCase は中間状態を持たない）|
+| エラー時 | vault ロック済み → `Err(ExportImportVaultLocked)` / ファイル既存（`--force` なし）→ `Err(ExportOutputFileExists)` / vault 不存在 → `Ok(ExportSummary { record_count: 0, ... })`（エラーなし）/ I/O 失敗 → `Err(Persistence(...))` |
+| 設計原則 | Fail Fast（ファイル存在チェックを先行）/ アトミック性（`tempfile` + `persist` による rename）/ Tell, Don't Ask（`ExportPayload` が自身を JSON 化できる）|
 
-**設計判断**: vault_dir の basename を `vault_name` として `ExportPayload` に含める。`repo.load()` が `CliError::EncryptionUnsupported` を返す場合（Phase 1 平文 vault 非対応経路）も `ExportImportVaultLocked` に変換する——暗号化 vault がロック済みで読めないという意味で同値であるため（`feature-spec.md R1-DP-03`）。
+**`--no-ipc` 経路の設計判断（ペテルギウス指摘 2 対応）**:
+
+Export は **常に SQLite 直接アクセス（`SqliteVaultRepository`）を使用する**。IPC 経路（`IpcVaultRepository`）は `list_summaries()` が返すレコードのペイロードを空文字列（`RecordPayload::Plaintext("")`）で代替しており（daemon 設計 §`VaultRepository` trait 非実装の理由）、実際の平文値を含まない。そのため、`lib.rs::run_export` は `RepositoryHandle` のバリアントに関わらず `vault_dir` から `SqliteVaultRepository` を構築して UseCase に渡す。`--no-ipc` を明示しない場合も動作上の違いはなく、`tracing::warn` でログに記録する。`SHIKOMI_VAULT_DIR` env または `--vault-dir` で vault の場所を解決する（既存 `io::paths::resolve_os_default_vault_dir()` に委譲）。
+
+**`vault.db` 不存在時の設計判断（ペテルギウス指摘 3 対応）**:
+
+`repo.exists() == false` の場合は 0 件の `ExportPayload` を出力する。エラーにしない理由: 「vault が空の状態で export する」ことは有効な操作であり（import 側で `ImportWarning::EmptyImport` が対応）、エラーにすることは YAGNI。`feature-spec.md` はこの場合の exit code を指定していない——0 件 export の成功扱いを採用する。
+
+**`vault_name` の決定**: vault_dir の basename を `vault_name` として `ExportPayload` に含める。`repo.load()` が `CliError::EncryptionUnsupported` を返す場合（Phase 1 平文 vault 非対応経路）も `ExportImportVaultLocked` に変換する（暗号化 vault がロック済みで読めないという意味で同値、`feature-spec.md R1-DP-03`）。
 
 ---
 
 ### REQ-DP-009: `import_records` — インポート UseCase
 
+Import は IPC 経路（`IpcVaultRepository`）と SQLite 直接経路（`SqliteVaultRepository`）の**両方をサポートする**（`feature-spec.md R1-DP-08`）。両経路で入力バリデーション・衝突検出ロジックは共通。書き込みの実装のみ経路で異なる。
+
+**SQLite 経路（`--no-ipc`）**:
+
 | 項目 | 内容 |
 |------|------|
-| 入力 | `repo: &dyn VaultRepository`・`args: ImportArgs`・`now: OffsetDateTime` |
-| 処理 | (1) `args.input` ファイルを `std::fs::read_to_string` で読み込む。(2) `serde_json::from_str::<ImportPayload>` でパース — 失敗時は `ImportDeserializationFailed { reason }`。(3) `repo.load()` または未作成なら空 Vault を準備。(4) vault の全レコード ID を `HashSet<String>` に収集。(5) `ImportValidator::validate(&payload, &existing_ids)` — 失敗時は `ImportValidationFailed(err)`。(6) `args.on_conflict == Error && !report.conflicting_ids.is_empty()` → `ImportConflict { ids }`。(7) 各 `ImportRecord` を domain `Record` に変換しながら衝突戦略を適用して vault に追加・更新。(8) `repo.save(&vault)` で永続化。|
-| 出力 | `Ok(ImportSummary { added: usize, skipped: usize, overwritten: usize })` |
+| 入力 | `repo: &dyn VaultRepository`・`args: &ImportArgs`・`now: OffsetDateTime` |
+| 処理 | (1) `args.input` ファイル読み込み。(2) `serde_json::from_str::<ImportPayload>` でパース。(3) `repo.load()` または未作成なら空 Vault を準備。(4) vault の全レコード ID を `HashSet<String>` に収集。(5) `ImportValidator::validate(&payload, &existing_ids)` — 失敗時は `ImportValidationFailed`。(6) `on_conflict == Error && !conflicting_ids.is_empty()` → `ImportConflict`。(7) 各 `ImportRecord` を `Record::rehydrate(...)` で domain 型に変換し、衝突戦略を適用して vault に追加・更新。(8) `repo.save(&vault)` で永続化。|
+| 出力 | `Ok(ImportSummary { added, skipped, overwritten })` |
 | エラー時 | JSON パース失敗 → `ImportDeserializationFailed` / バリデーション失敗 → `ImportValidationFailed` / 衝突（error 戦略）→ `ImportConflict` / I/O 失敗 → `Persistence(...)` |
-| 設計原則 | Fail Fast（JSON パース → バリデーション → 衝突チェックの順で早期検出）/ 単一責務（衝突戦略の適用は UseCase 責務、`ImportValidator` は衝突 ID の検出のみ）|
 
-**`ImportRecord` → `Record` 変換の責務**: UseCase 内に private な `fn import_record_to_domain(r: &ImportRecord, now: OffsetDateTime) -> Result<Record, CliError>` を定義する。変換失敗（UUID 解析失敗 / RFC 3339 パース失敗 / ラベル不正）は `ImportDeserializationFailed { reason }` として返す。`created_at` / `updated_at` は import ファイルの値をそのまま復元する（`Record` API で対応できない場合は domain 側に `Record::new_with_timestamps` コンストラクタ追加を Sub-B 実装時に確認する）。
+**IPC 経路（デフォルト、`--no-ipc` 未指定）**:
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `ipc: &IpcVaultRepository`・`args: &ImportArgs`・`now: OffsetDateTime` |
+| 処理 | (1)(2) は SQLite 経路と同じ（ファイル読み込み・パース）。(3) `ipc.list_summaries()` で既存レコード ID を収集（daemon が vault の読み取り権限を保持）。(4)(5)(6) バリデーション・衝突チェックは SQLite 経路と同じ。(7) 衝突戦略適用: overwrite は `ipc.remove_record(id)` → `ipc.add_record(...)`、skip は `continue`、新規は `ipc.add_record(...)`。(8) `ipc.add_record` が `IpcErrorCode::VaultLocked` を返した場合 → `ExportImportVaultLocked`。|
+| 出力 | `Ok(ImportSummary { added, skipped, overwritten })` |
+| エラー時 | vault ロック済み → `ExportImportVaultLocked` / JSON パース失敗 → `ImportDeserializationFailed` / 衝突（error 戦略）→ `ImportConflict` |
+
+**設計原則**: Fail Fast（JSON パース → バリデーション → 衝突チェックの順で早期検出）/ 単一責務（衝突戦略の適用は UseCase 責務、`ImportValidator` は衝突 ID の検出のみ）
+
+**`ImportRecord` → `Record` 変換（ペテルギウス指摘 1 対応）**:
+
+`Record::rehydrate` を使用する。**Sub-A 実装確認済み**（`shikomi-core/src/vault/record/aggregate.rs` L78）: `Record::rehydrate(id, kind, label, payload, created_at: OffsetDateTime, updated_at: OffsetDateTime, hotkey: Option<Hotkey>) -> Result<Self, DomainError>` が既存のため **domain 追加 API は不要**。`updated_at < created_at` の場合は `DomainError::VaultConsistencyError(InvalidUpdatedAt)` を返す。import ファイルが不正なタイムスタンプを持つ場合は `ImportDeserializationFailed { reason }` に変換する。UseCase 内 private な `fn import_record_to_domain(r: &ImportRecord) -> Result<Record, CliError>` で変換を実施する。変換失敗（UUID 解析失敗 / RFC 3339 パース失敗 / ラベル不正 / タイムスタンプ順序違反）は全て `ImportDeserializationFailed { reason }` として返す。
 
 ---
 
@@ -217,7 +241,7 @@ warning: エクスポートファイルを安全に保管し、不要になっ�
 | `shikomi-cli` | `src/usecase/portability/mod.rs` | 新規 | `export` / `import` / `error` モジュールの re-export |
 | `shikomi-cli` | `src/usecase/portability/error.rs` | 新規 | `DataPortabilityError` 型定義（UseCase 内部中間エラー）|
 | `shikomi-cli` | `src/usecase/portability/export.rs` | 新規 | `export_records` 関数 + `ExportSummary` 型 |
-| `shikomi-cli` | `src/usecase/portability/import.rs` | 新規 | `import_records` 関数 + `ImportSummary` 型 + `import_record_to_domain` helper |
+| `shikomi-cli` | `src/usecase/portability/import.rs` | 新規 | `import_records_sqlite` / `import_records_ipc` 関数 + `ImportSummary` 型 + `import_record_to_domain` helper |
 | `shikomi-cli` | `src/usecase/mod.rs` | 編集 | `pub mod portability;` を追加 |
 | `shikomi-cli` | `src/presenter/success.rs` | 編集 | `render_exported` / `render_imported` / `render_export_secrets_warning` を追加 |
 | `shikomi-cli` | `src/presenter/error.rs` | 編集 | `lines_for` に 5 種の新 `CliError` バリアントの match arm を追加。`render_error` の dispatch 追加（`ImportValidationFailed(RedactedPayload)` → MSG-CLI-144 専用 helper）|
