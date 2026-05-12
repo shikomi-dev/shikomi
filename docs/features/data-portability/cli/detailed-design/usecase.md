@@ -81,7 +81,22 @@ UseCase 内部の中間エラー型。`From<DataPortabilityError> for CliError` 
 
 **設計判断（IPC 経路を廃止した根拠）**: Import も export と同様に常に `SqliteVaultRepository` を使用する（`feature-spec.md R1-DP-08` / `basic-design.md §REQ-DP-009`）。IPC per-record `add_record()` は 2 つの根本問題を持つ: (1) 途中クラッシュで vault が半書き込み状態になり `R1-DP-09` の atomicity 要件に非適合、(2) `IpcVaultRepository::add_record()` は `created_at` / `updated_at` を受け付けないためタイムスタンプ保存に IPC プロトコル拡張が必要——YAGNI かつ Sub-B 範囲外。SQLite 直接アクセスなら `repo.save()` が atomic write を保証し、`Record::rehydrate` でタイムスタンプを完全復元できる。
 
-**`busy_timeout` の設定（Issue #146）**: `lib.rs::run_import` は `SqliteVaultRepository` の SQLite 接続に `busy_timeout(2000ms)` を設定してから `import_records` に渡す。`import_records` 関数自体は `busy_timeout` を直接操作しないが、渡された `repo` の接続がこの設定を保持している前提で動作する。この設定により daemon の短時間ロック（通常ミリ秒オーダー）は SQLite の内部リトライで透過的に吸収される。
+**`busy_timeout` のカプセル化設計（Issue #146）**:
+
+`SqliteVaultRepository` に `from_directory_with_busy_timeout(path: &Path, timeout: Duration) -> Result<Self, PersistenceError>` コンストラクタを追加する（`shikomi-infra/src/persistence/repository/mod.rs` に追加）。このコンストラクタは `busy_timeout_ms: Option<Duration>` フィールドを持つ `SqliteVaultRepository` を返し、内部で SQLite コネクションを開く際に `connection.busy_timeout(timeout)` を適用する。`lib.rs::run_import` のみがこのコンストラクタを呼び出す。`from_directory` は timeout なし（既存動作を維持）。
+
+この設計により:
+- `busy_timeout` の責務は `SqliteVaultRepository` 内部に閉じる（Tell, Don't Ask。外部から接続を直接いじらない）
+- `import_records` は `&dyn VaultRepository` を受け取るだけで `busy_timeout` を意識しない
+- `from_directory`（daemon / export / 通常操作）は timeout なし動作を維持する（既存の挙動変更なし）
+
+**SQLITE_BUSY の検出経路（Issue #146）**:
+
+rusqlite は `ErrorCode::DatabaseBusy`（SQLITE_BUSY、エラーコード 5）を `rusqlite::Error::SqliteFailure(libsqlite3_sys::Error { code: ErrorCode::DatabaseBusy, .. }, _)` として返す。`busy_timeout(2000ms)` 設定後に `connection.execute()` が依然として `DatabaseBusy` を返した場合、`shikomi-infra` の `PersistenceError` に `DatabaseBusy` 専用バリアントを追加して型安全に伝搬させる。
+
+`shikomi-infra/src/persistence/error.rs` に `PersistenceError::DatabaseBusy` バリアントを追加する。rusqlite の `SqliteFailure` から SQLITE_BUSY を型検査（`error.code == ErrorCode::DatabaseBusy`）で検出し、このバリアントにマッピングする。文字列マッチングは使用しない（エラーコードが実装依存文字列に変化しても壊れない型安全な検出を保証するため）。
+
+`import_records` の `repo.save()` は `PersistenceError::DatabaseBusy` を受けた場合に `DataPortabilityError::VaultBusy` に変換し、それ以外の `PersistenceError` は従来通り `CliError::Persistence(...)` として伝播する。
 
 ### `ImportSummary` 型
 

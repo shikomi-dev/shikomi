@@ -15,7 +15,7 @@
 | ファイル | 変更種別 | 変更内容 |
 |---------|---------|---------|
 | `crates/shikomi-cli/src/cli.rs` | 編集 | `Subcommand::Export(ExportArgs)` / `Subcommand::Import(ImportArgs)` / `ExportArgs` / `ImportArgs` / `OnConflictArg` を追加 |
-| `crates/shikomi-cli/src/error.rs` | 編集 | `CliError` 新バリアント 5 種 + `ExitCode` match arm + `From<DataPortabilityError> for CliError` |
+| `crates/shikomi-cli/src/error.rs` | 編集 | `CliError` 新バリアント 6 種 + `ExitCode` match arm + `From<DataPortabilityError> for CliError` |
 
 ---
 
@@ -70,20 +70,22 @@
 | `ImportConflict { ids: Vec<String> }` | `"import conflict: {} record(s) already exist in vault"` (`.len()` 使用) | MSG-CLI-142 | 1 |
 | `ImportDeserializationFailed { reason: String }` | `"failed to parse import file: {reason}"` | MSG-CLI-143 | 1 |
 | `ImportValidationFailed(shikomi_core::portability::ImportValidationError)` | `"import validation failed: {0}"` | MSG-CLI-143 / MSG-CLI-144 | 1 |
+| `ImportVaultBusy` | `"vault is in use by shikomi-daemon; import aborted after 2 seconds"` | MSG-CLI-146 | 1 |
 
 ### 追加: `ExitCode::from(&CliError)` の match arm
 
-`ExitCode::UserError` の arm に以下 5 バリアントを追加する（既存 `HotkeyParseError { .. }` の後）:
+`ExitCode::UserError` の arm に以下 6 バリアントを追加する（既存 `HotkeyParseError { .. }` の後）:
 
 - `CliError::ExportImportVaultLocked`
 - `CliError::ExportOutputFileExists { .. }`
 - `CliError::ImportConflict { .. }`
 - `CliError::ImportDeserializationFailed { .. }`
 - `CliError::ImportValidationFailed(_)`
+- `CliError::ImportVaultBusy`
 
 全て `Self::UserError`（exit 1）に写像する。
 
-**注意**: `error.rs` に存在する `tc_f_u15_exit_code_ssot_mapping_for_all_cli_error_variants_in_one_matrix` テストの `user_error_cases` Vec にも 5 件を追加する（コンパイル時網羅性確認のため）。
+**注意**: `error.rs` に存在する `tc_f_u15_exit_code_ssot_mapping_for_all_cli_error_variants_in_one_matrix` テストの `user_error_cases` Vec にも 6 件を追加する（コンパイル時網羅性確認のため）。
 
 ### 追加: `From<DataPortabilityError> for CliError` 実装
 
@@ -97,6 +99,7 @@
 | `DeserializationFailed { reason }` | `ImportDeserializationFailed { reason }` |
 | `ValidationFailed(err)` | `ImportValidationFailed(err)` |
 | `IoError(io_err)` | `Persistence(PersistenceError::Internal { reason: io_err.to_string() })` |
+| `VaultBusy` | `ImportVaultBusy` |
 
 `DataPortabilityError` の型パスは `crate::usecase::portability::error::DataPortabilityError`。
 

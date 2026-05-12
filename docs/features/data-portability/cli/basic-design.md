@@ -221,11 +221,11 @@ hint: ソース vault を --export-secrets 付きで再 export し、新しい�
 ```
 error: vault is in use by shikomi-daemon; import aborted after 2 seconds
 error: vault が shikomi-daemon に使用されています。2 秒待機後に import を中断しました
-hint: stop shikomi-daemon, then retry the import
-hint: shikomi-daemon を停止してから import を再実行してください
+hint: stop shikomi-daemon, then retry (to disable autostart: shikomi daemon uninstall)
+hint: shikomi-daemon を停止してから再実行してください（自動起動の無効化: shikomi daemon uninstall）
 ```
 
-**設計判断**: `shikomi daemon stop` コマンドは存在しない（daemon は OS サービス経由で起動するため手動停止手段は OS 依存）。hint は OS 固有のコマンドを列挙せず「停止してから再実行」のみを案内する（KISS）。`--no-ipc` フラグは `import` の経路選択に影響しない（import は常に SQLite 直接アクセス）ため hint に含めない。エラー文に「2 秒」を明示することで、ユーザーが「コマンドがフリーズした」と誤認することを防ぐ。
+**設計判断**: `shikomi daemon stop` コマンドは存在しない（daemon は OS サービス経由で起動するため手動停止手段は OS 依存）。hint に OS 固有のプロセス停止コマンドは含めない（パス情報漏洩・環境依存のリスクを排除）。代わりに `shikomi daemon uninstall` を案内することで autostart を無効化する手段を提示し、アクショナブルにする（KISS）。`--no-ipc` フラグは `import` の経路選択に影響しない（import は常に SQLite 直接アクセス）ため hint に含めない。エラー文に「2 秒」を明示することで、ユーザーが「コマンドがフリーズした」と誤認することを防ぐ。
 
 ---
 
