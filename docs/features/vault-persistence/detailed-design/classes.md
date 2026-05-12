@@ -212,21 +212,21 @@ classDiagram
 - **`AtomicWriteSession { conn, new_path }`**: SQLite 書込中の状態（開いた `Connection` + `.new` のパス）を保持するセッション型。`new(paths, vault)` でセッション開始、`finalize(self, retry_policy)` の所有権消費で全工程（クローズ → サイドカー DACL → fsync → rename）を順序固定で完結（Tell, Don't Ask、型レベルでクローズ順序を強制）
 - **`AtomicWriter`（ZST 残存）**: `detect_orphan` / `cleanup_new` / `#[cfg(test)] write_new_only` の 3 静的メソッドの名前空間として機能。`write_new` は `AtomicWriteSession::new` に昇格した
 
-**3.1 `AtomicWriter` のクローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `write_new` 内で SQLite `Connection` を扱う際、以下の順序を**契約**として固定する。順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast し、本契約は型では強制できないため doc コメント（`atomic.rs`）と本設計書 SSoT で二重管理する（`./flows.md` §`save` step 6.10〜6.13 と整合）:
+**3.1 クローズ順序契約**（Issue #65 由来、Win file-handle semantics 対応）: `AtomicWriteSession::new` 内で SQLite `Connection` を取得し、以下の順序を**契約**として固定する。Phase 8 で `AtomicWriteSession::finalize(self, ...)` の所有権消費パターンにより**型レベルで強制**できるようになった（§3.2 参照）。各ステップは `./flows.md` §`save` step 7.1〜7.3 に対応し、順序逸脱は `AtomicWriteFailed { stage: WriteTemp }` で fail fast する:
 
-1. 全 `INSERT` を含むトランザクションを `tx.commit()` で締める
-2. **`PRAGMA wal_checkpoint(TRUNCATE)`** を発行（WAL 採用時のサイドカー強制空化、DELETE 採用時は no-op で害なし）
-3. **`PRAGMA journal_mode = DELETE`** を発行（残存サイドカーを close 時に物理削除する契約に切替）
-4. **`Connection::close()` を明示呼出**（`Drop` 任せ禁止）。失敗は `WriteTemp` stage で fail fast
-5. 以降 `fsync_and_rename` 段で `.new` を再 open してフラッシュ → rename
+1. 全 `INSERT` を含むトランザクションを `tx.commit()` で締める（`AtomicWriteSession::new` 最終処理）
+2. **`PRAGMA wal_checkpoint(TRUNCATE)`** を発行（WAL 採用時のサイドカー強制空化、DELETE 採用時は no-op で害なし）— `finalize` step 7.1
+3. **`PRAGMA journal_mode = DELETE`** を発行（残存サイドカーを close 時に物理削除する契約に切替）— `finalize` step 7.2
+4. **`Connection::close()` を明示呼出**（`Drop` 任せ禁止）。失敗は `WriteTemp` stage で fail fast — `finalize` step 7.3
+5. 以降 `finalize` 内の FsyncTemp / FsyncDir / rename 段（`./flows.md` §`save` step 7.5〜7.7）で `.new` を再 open してフラッシュ → rename
 
 **契約違反例**（PR レビューで却下対象、`../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合）:
 
 - `tx.commit()` 後に `drop(conn)` のみで `Connection::close()` 明示呼出を省く（`sqlite3_close_v2` の遅延クローズ semantics で Win rename が race する温床、rusqlite docs https://docs.rs/rusqlite/latest/rusqlite/struct.Connection.html#method.close 参照）
 - `PRAGMA wal_checkpoint(TRUNCATE)` / `journal_mode = DELETE` を省く（`-wal` / `-shm` / `-journal` サイドカー残存で Win Indexer が触りに行き rename 競合の温床）
-- `cfg(windows)` rename retry を「根本対策なし」で挿入する（`./flows.md` §`save` step 7.3 / `../basic-design/error.md` §Windows rename PermissionDenied 行で禁止）
+- `cfg(windows)` rename retry を「根本対策なし」で挿入する（`../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 で明記）
 
-**3.2 `AtomicWriteSession` 構造体化（Phase 8 実装済）**: クローズ順序契約（§3.1）を型レベルで強制するため、`AtomicWriteSession { conn: rusqlite::Connection, new_path: PathBuf }` セッション型を実装した。`paths: &VaultPaths` は参照として `new` / `finalize` に渡す（所有権を持たない）。
+**3.2 `AtomicWriteSession` 構造体化（Phase 8 実装済）**: クローズ順序契約（§3.1）を型レベルで強制するため、`AtomicWriteSession { conn: rusqlite::Connection, new_path: PathBuf }` セッション型を実装した。`paths: &VaultPaths` は `new` のみに渡す（`finalize` は `self` と `retry_policy` のみを受け取る。`new_path` は `new` 内で `paths.vault_db_new()` から `PathBuf` としてコピーし `AtomicWriteSession` フィールドに格納、`finalize` はそこを参照する）。
 
 - `AtomicWriteSession::new(paths: &VaultPaths, vault: &Vault) -> Result<AtomicWriteSession>`: `.new` 作成 → パーミッション設定 → `Connection::open` → PRAGMA/DDL → `vault_header` + `records` を 1 トランザクションで INSERT → `COMMIT` までを実行し、**`conn` を保持したまま** `AtomicWriteSession` を返す
 - `AtomicWriteSession::finalize(self, retry_policy: &dyn RetryPolicy) -> Result<()>`: 所有権を消費する形で以下を順序固定で実行する
