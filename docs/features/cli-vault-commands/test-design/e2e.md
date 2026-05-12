@@ -478,8 +478,8 @@
 
 | モード | env | 観測対象 |
 |---|---|---|
-| 日本語 | `LANG=ja_JP.UTF-8` | MSG-S03「vault をアンロックしました」/ MSG-S04「VEK はメモリから消去」/ MSG-S05「VEK は不変のため再 unlock は不要」|
-| 英語 | `LANG=C` | MSG-S03「vault unlocked」/ MSG-S04「VEK zeroed from memory」/ MSG-S05「VEK unchanged; daemon cache maintained」|
+| 日本語 | `LANG=ja_JP.UTF-8` | MSG-S03「vault をアンロックしました」/ MSG-S04「vault をロックしました（鍵情報は消去済）」/ MSG-S05「VEK は不変のため再 unlock は不要」|
+| 英語 | `LANG=C` | MSG-S03「vault unlocked」/ MSG-S04「vault locked (VEK zeroized)」/ MSG-S05「VEK unchanged; daemon cache maintained」|
 
 ### 13.6 証跡方針
 

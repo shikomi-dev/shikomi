@@ -168,14 +168,15 @@ if [[ -f "$PRESENTER_SUCCESS_RS" ]]; then
     fi
 
     # MSG-S04: vault lock 成功文言（render_locked）
+    # SSoT: e2e.md §13.5 — en: "vault locked (VEK zeroized)" / ja: "vault をロックしました（鍵情報は消去済）"
     if ! grep -qE "^pub fn render_locked" "$PRESENTER_SUCCESS_RS"; then
         failures+=("MSG-S04: render_locked 関数が見当たらない")
     else
-        if ! grep -qE '"vault locked' "$PRESENTER_SUCCESS_RS"; then
-            failures+=("MSG-S04: 英語文言 'vault locked' が render_locked 周辺に見当たらない")
+        if ! grep -qE '"vault locked \(VEK zeroized\)' "$PRESENTER_SUCCESS_RS"; then
+            failures+=("MSG-S04: 英語文言 'vault locked (VEK zeroized)' が render_locked 周辺に見当たらない")
         fi
-        if ! grep -qE 'vault.*ロック.*しました|ロック.*消去|zeroize' "$PRESENTER_SUCCESS_RS"; then
-            failures+=("MSG-S04: 日本語文言（vault をロックしました 等）が render_locked 周辺に見当たらない")
+        if ! grep -qE 'vault をロックしました' "$PRESENTER_SUCCESS_RS"; then
+            failures+=("MSG-S04: 日本語文言 'vault をロックしました' が render_locked 周辺に見当たらない")
         fi
     fi
 
@@ -304,16 +305,38 @@ fi
 if [[ -f "$DAEMON_LIB_RS" ]]; then
     failures_s06=()
 
-    # (a) allowlist 3 定数の存在
+    # (a) allowlist 3 定数の存在確認（設計書 SSoT §TC-F-S06: 3 件のみ）
     for const_name in \
         "SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS" \
         "SHIKOMI_DAEMON_POLL_INTERVAL_SECS" \
         "SHIKOMI_DAEMON_FORCE_RELOCK_FAIL"
     do
-        if ! grep -qE "$const_name" "$DAEMON_LIB_RS"; then
+        if ! grep -qE "\"$const_name\"" "$DAEMON_LIB_RS"; then
             failures_s06+=("(a) allowlist 定数 $const_name が daemon lib.rs に見当たらない")
         fi
     done
+
+    # (a') ALLOWLIST 完全一致確認: 設計外の SHIKOMI_DAEMON_* が混入していないか
+    # ALLOWLIST 定数ブロック内の "SHIKOMI_DAEMON_..." 文字列を抽出し期待集合と比較。
+    allowlist_actual=$(awk '
+        /const ALLOWLIST/ { in_al=1; next }
+        in_al && /\];/ { in_al=0; exit }
+        in_al && /"SHIKOMI_DAEMON_[^"]*"/ {
+            match($0, /"SHIKOMI_DAEMON_[^"]*"/)
+            s = substr($0, RSTART+1, RLENGTH-2)
+            print s
+        }
+    ' "$DAEMON_LIB_RS" | sort)
+    allowlist_expected=$(printf '%s\n' \
+        "SHIKOMI_DAEMON_FORCE_RELOCK_FAIL" \
+        "SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS" \
+        "SHIKOMI_DAEMON_POLL_INTERVAL_SECS" \
+        | sort)
+    if [[ "$allowlist_actual" != "$allowlist_expected" ]]; then
+        failures_s06+=("(a') ALLOWLIST 完全一致失敗: 設計外 SHIKOMI_DAEMON_* var が混入している可能性がある (C-40 OWASP A03)")
+        failures_s06+=("  actual:   $(echo "$allowlist_actual" | tr '\n' ' ')")
+        failures_s06+=("  expected: $(echo "$allowlist_expected" | tr '\n' ' ')")
+    fi
 
     # (b) 未知 env 検出時の panic! または process::exit 経路
     if ! grep -qE 'panic!|std::process::exit|process::exit' "$DAEMON_LIB_RS"; then

@@ -57,13 +57,10 @@ fn shikomi(dir: &Path) -> Command {
 // -----------------------------------------------------------------------
 #[test]
 #[cfg(target_os = "linux")]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "expectrl PTY not available on Windows (test-design e2e.md §13.3)"
-)]
-#[ignore = "requires: (1) daemon V2 Encrypt IPC handler — not yet implemented \
-            (test-design e2e.md §13, vault_subcommands.rs TC-F-I01 unlock condition); \
-            (2) daemon V2 ChangePassword IPC handler (TC-F-I05 unlock condition); \
+#[ignore = "requires: (1) daemon V2 Encrypt IPC handler not yet implemented \
+            (sub-f-daemon-v2-handler gate, test-design e2e.md §13, TC-F-I01 unlock condition); \
+            (2) daemon V2 ChangePassword IPC handler \
+            (sub-f-daemon-v2-handler gate, test-design e2e.md §13, TC-F-I05 unlock condition); \
             (3) real encrypted vault fixture with known passphrase; \
             unlock condition: all TC-F-I01/I04/I05 #[ignore] resolved + seed vault available"]
 fn tc_f_e01_english_tanaka_persona_7step_idle_lock() {
@@ -137,13 +134,13 @@ fn tc_f_e01_english_tanaka_persona_7step_idle_lock() {
 // -----------------------------------------------------------------------
 #[test]
 #[cfg(target_os = "linux")]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "expectrl PTY not available on Windows (test-design e2e.md §13.3)"
-)]
-#[ignore = "requires: same as tc_f_e01_english_tanaka_persona_7step_idle_lock; \
-            test-design e2e.md §13.5 i18n 2モード; \
-            unlock condition: all TC-F-I01/I04/I05 #[ignore] resolved"]
+#[ignore = "requires: (1) daemon V2 Encrypt IPC handler not yet implemented \
+            (sub-f-daemon-v2-handler gate, test-design e2e.md §13.5, TC-F-I01 unlock condition); \
+            (2) daemon V2 ChangePassword IPC handler \
+            (sub-f-daemon-v2-handler gate, test-design e2e.md §13.5, TC-F-I05 unlock condition); \
+            (3) known-passphrase encrypted vault fixture; \
+            i18n 2モード LANG=ja_JP.UTF-8: MSG-S03/S04/S05 日本語文言確認 (e2e.md §13.5); \
+            unlock condition: all TC-F-I01/I04/I05 #[ignore] resolved + seed vault available"]
 fn tc_f_e01_japanese_tanaka_persona_7step_idle_lock() {
     // §13.5: LANG=ja_JP.UTF-8 モードで MSG-S03/S04/S05 日本語文言を確認する
     let vault_dir = TempDir::new().expect("tempdir");

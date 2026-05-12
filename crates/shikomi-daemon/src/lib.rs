@@ -296,8 +296,11 @@ fn single_instance_exit_code(err: &lifecycle::single_instance::SingleInstanceErr
 
 /// C-40: `#[cfg(debug_assertions)]` 限定 env seam。
 ///
-/// `SHIKOMI_DAEMON_*` で始まる環境変数を allowlist（下記 3 定数 + `SHIKOMI_DAEMON_LOG`）で
-/// 検証し、未知 env を発見したら `panic!` で即終了する（攻撃面拡大防止 / TC-F-S06）。
+/// `SHIKOMI_DAEMON_*` で始まる環境変数を allowlist（下記 3 定数）で検証し、
+/// 未知 env を発見したら `panic!` で即終了する（攻撃面拡大防止 / TC-F-S06）。
+///
+/// `SHIKOMI_DAEMON_LOG` は Sub-A 以前から存在する tracing 専用 env（`init_tracing` で読む）。
+/// C-40 テスト用 seam の範囲外であり ALLOWLIST に列挙しない。ループ前に明示的に除外する。
 ///
 /// release build にはコンパイルされないため本番バイナリへの env seam 漏洩はない（TC-F-S05(a)）。
 ///
@@ -307,15 +310,20 @@ fn single_instance_exit_code(err: &lifecycle::single_instance::SingleInstanceErr
 #[cfg(debug_assertions)]
 fn read_debug_env_seam() -> Option<(u64, u64)> {
     /// C-40 allowlist: 許可する `SHIKOMI_DAEMON_*` 環境変数（TC-F-S06(a)）。
+    /// 設計書 SSoT 通り 3 定数のみ。`SHIKOMI_DAEMON_LOG` は tracing 専用で別枠扱い。
     const ALLOWLIST: &[&str] = &[
         "SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS",
         "SHIKOMI_DAEMON_POLL_INTERVAL_SECS",
         "SHIKOMI_DAEMON_FORCE_RELOCK_FAIL",
-        "SHIKOMI_DAEMON_LOG",
     ];
+    /// tracing 専用 env（Sub-A 以前から存在、C-40 allowlist 対象外）。
+    const TRACING_LOG_ENV: &str = "SHIKOMI_DAEMON_LOG";
 
     for (key, _) in std::env::vars() {
-        if key.starts_with("SHIKOMI_DAEMON_") && !ALLOWLIST.contains(&key.as_str()) {
+        if key.starts_with("SHIKOMI_DAEMON_")
+            && key != TRACING_LOG_ENV
+            && !ALLOWLIST.contains(&key.as_str())
+        {
             // 未知 env は攻撃面拡大防止のため即終了（TC-F-S06(b)）。
             panic!("unknown SHIKOMI_DAEMON_* env var rejected: {key} (C-40 allowlist)");
         }
