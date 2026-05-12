@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use nix::unistd::getuid;
+
 use super::{resolve_daemon_path, truncate_stderr, AutostartBackend, AutostartError};
 
 // plist テンプレート（{daemon_path} / {log_dir} を文字列置換する）
@@ -44,8 +46,8 @@ impl LaunchdBackend {
     }
 
     fn uid() -> u32 {
-        // SAFETY: getuid は常に安全
-        unsafe { libc::getuid() }
+        // nix::unistd::getuid() は unsafe 不要（POSIX getuid の safe wrapper）
+        getuid().as_raw()
     }
 
     fn gui_service_target() -> String {
