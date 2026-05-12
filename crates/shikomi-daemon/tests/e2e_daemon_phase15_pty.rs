@@ -197,7 +197,6 @@ fn tc_e2e_017_ipc_edit_stdin_does_not_echo_typed_marker_on_pty() {
         xdg.path(),
         vault_dir.path(),
         &[
-            "--ipc",
             "add",
             "--kind",
             "text",
@@ -220,7 +219,7 @@ fn tc_e2e_017_ipc_edit_stdin_does_not_echo_typed_marker_on_pty() {
     let mut cmd = Command::new(bin);
     cmd.env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--ipc", "edit", "--id", &id, "--stdin"]);
+        .args(["edit", "--id", &id, "--stdin"]);
 
     let mut session = Session::spawn(cmd).expect("spawn pty session");
     // 個別 expect は 5 秒、全体タイムアウトは expectrl の expect 側に委譲（CI 余裕）
@@ -295,7 +294,7 @@ fn tc_e2e_017_ipc_edit_stdin_does_not_echo_typed_marker_on_pty() {
     // master output に出てしまう罠を回避、ペガサス Boy Scout note 対応）。
     drop(session); // pty session を畳んでから別プロセスで list
     let (list_stdout, _list_stderr, list_code) =
-        run_shikomi(xdg.path(), vault_dir.path(), &["--ipc", "list"]);
+        run_shikomi(xdg.path(), vault_dir.path(), &["list"]);
     assert_eq!(
         list_code,
         Some(0),

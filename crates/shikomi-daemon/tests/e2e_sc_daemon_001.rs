@@ -168,20 +168,21 @@ fn sc_daemon_001_ac_001_daemon_creates_vault_db_on_first_launch() {
         "AC-001: vault.db が SHIKOMI_VAULT_DIR に生成されるべき"
     );
 
-    // `shikomi --ipc list` で空リストが返ること（エラーなし）
+    // `shikomi list` で空リストが返ること（エラーなし）
+    // Phase 2 (Issue #126): --ipc フラグは廃止。IPC が既定経路。
     let shikomi_bin = assert_cmd::cargo::cargo_bin("shikomi");
     let output = Command::new(&shikomi_bin)
         .env("XDG_RUNTIME_DIR", xdg.path())
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--ipc", "list"])
+        .args(["list"])
         .output()
-        .expect("shikomi --ipc list を実行");
+        .expect("shikomi list を実行");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr_cli = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "AC-001: `shikomi --ipc list` は exit 0 で成功するべき。\
+        "AC-001: `shikomi list` は exit 0 で成功するべき。\
          exit={:?} stdout={stdout} stderr={stderr_cli}",
         output.status.code()
     );

@@ -507,4 +507,33 @@ mod tests {
         let _: fn(&[RecordView], ProtectionModeBanner, bool, Locale) -> String =
             crate::presenter::list::render_list;
     }
+
+    // --- TC-UT-150~152: --no-ipc parse / TC-IT-126 ---
+
+    /// TC-UT-150 (REQ-DDM-001 / AC-DDM-01): `--no-ipc` フラグが `args.no_ipc == true` にパースされる。
+    #[test]
+    fn tc_ut_150_no_ipc_flag_parses_to_true() {
+        let args = CliArgs::try_parse_from(["shikomi", "--no-ipc", "list"]).unwrap();
+        assert!(args.no_ipc, "--no-ipc should set no_ipc=true");
+    }
+
+    /// TC-UT-151 (REQ-DDM-001 / AC-DDM-05): フラグなしで `args.no_ipc == false`（IPC 既定）。
+    #[test]
+    fn tc_ut_151_no_flag_defaults_no_ipc_to_false() {
+        let args = CliArgs::try_parse_from(["shikomi", "list"]).unwrap();
+        assert!(!args.no_ipc, "default no_ipc should be false (IPC is default)");
+    }
+
+    /// TC-UT-152 (REQ-DDM-001 / AC-DDM-04): 廃止された `--ipc` フラグを渡すと clap エラー。
+    #[test]
+    fn tc_ut_152_ipc_flag_is_unknown_arg_error() {
+        let result = CliArgs::try_parse_from(["shikomi", "--ipc", "list"]);
+        assert!(result.is_err(), "--ipc should be rejected as unknown argument");
+        let err = result.unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("--ipc") || rendered.contains("ipc"),
+            "error message should reference '--ipc', got: {rendered}"
+        );
+    }
 }
