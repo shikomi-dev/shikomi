@@ -298,15 +298,19 @@ fn tc_f_i11a_sql_injection_label_rejected() {
               unlock condition: add Windows-specific traversal boundary TC)"
 )]
 fn tc_f_i11b_path_traversal_via_env_var_rejected() {
-    // 前提: daemon 不要。SHIKOMI_VAULT_DIR に `..` を含む非絶対パスを設定する。
-    // VaultPaths::new が NotAbsolute / PathTraversal で弾き、/etc/ 配下に vault.db が
-    // 生成されないことを確認する（OWASP A03 パストラバーサル防衛）。
+    // 前提: daemon 不要。`--no-ipc` で SQLite 直接経路を使用し、SHIKOMI_VAULT_DIR に
+    // `..` を含む非絶対パスを設定する。VaultPaths::new が NotAbsolute / PathTraversal で
+    // 弾き、/etc/ 配下に vault.db が生成されないことを確認する（OWASP A03 パストラバーサル防衛）。
+    // NOTE: IPC 既定化（Issue #126）以降、`--no-ipc` なしだと daemon 未起動 → DaemonNotRunning
+    // (exit 1) が先に返り、パス検証まで到達しない。パストラバーサル防衛を検証するには
+    // `--no-ipc` で SQLite 経路を通すことが必要。
 
     // --- ① 相対パス（`..` を含む）はパストラバーサル境界として拒否される ---
     let out = Command::cargo_bin("shikomi")
         .expect("cargo_bin")
         .env("SHIKOMI_VAULT_DIR", "../../../../etc/passwd")
         .env_remove("LANG")
+        .arg("--no-ipc")
         .arg("list")
         .output()
         .expect("shikomi spawn");
@@ -334,6 +338,7 @@ fn tc_f_i11b_path_traversal_via_env_var_rejected() {
         .expect("cargo_bin")
         .env("SHIKOMI_VAULT_DIR", "$(echo /tmp/evil)")
         .env_remove("LANG")
+        .arg("--no-ipc")
         .arg("list")
         .output()
         .expect("shikomi spawn");

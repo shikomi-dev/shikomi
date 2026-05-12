@@ -77,16 +77,24 @@ async fn serve_connection(stream: UnixStream) {
     let mut framed: Framed<UnixStream, LengthDelimitedCodec> = Framed::new(stream, codec());
     // Handshake
     if let Some(Ok(frame)) = framed.next().await {
-        let Ok(req) = rmp_serde::from_slice::<IpcRequest>(&frame) else { return };
+        let Ok(req) = rmp_serde::from_slice::<IpcRequest>(&frame) else {
+            return;
+        };
         if matches!(req, IpcRequest::Handshake { .. }) {
-            let resp = IpcResponse::Handshake { server_version: IpcProtocolVersion::V2 };
+            let resp = IpcResponse::Handshake {
+                server_version: IpcProtocolVersion::V2,
+            };
             let bytes = rmp_serde::to_vec(&resp).unwrap();
-            if framed.send(Bytes::from(bytes)).await.is_err() { return; }
+            if framed.send(Bytes::from(bytes)).await.is_err() {
+                return;
+            }
         }
     }
     // ListRecords (or any other request)
     if let Some(Ok(frame)) = framed.next().await {
-        let Ok(req) = rmp_serde::from_slice::<IpcRequest>(&frame) else { return };
+        let Ok(req) = rmp_serde::from_slice::<IpcRequest>(&frame) else {
+            return;
+        };
         if matches!(req, IpcRequest::ListRecords) {
             let resp = IpcResponse::Records {
                 records: vec![],
@@ -112,7 +120,7 @@ fn tc_e2e_120_list_without_ipc_flag_uses_ipc_default_and_exits_zero() {
         .env_remove("SHIKOMI_VAULT_DIR")
         .env_remove("LANG")
         .env("XDG_RUNTIME_DIR", xdg_dir.path())
-        .args(["list"])  // --ipc フラグを明示しない
+        .args(["list"]) // --ipc フラグを明示しない
         .assert()
         .success()
         // AC-DDM-01: MSG-CLI-051 非出力
@@ -132,7 +140,9 @@ fn tc_e2e_121_no_ipc_list_without_daemon_succeeds_via_sqlite() {
         .expect("cargo_bin")
         .env_remove("LANG")
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--no-ipc", "add", "--kind", "text", "--label", "init", "--value", "val"])
+        .args([
+            "--no-ipc", "add", "--kind", "text", "--label", "init", "--value", "val",
+        ])
         .assert()
         .success();
 
@@ -169,8 +179,7 @@ fn tc_e2e_122_list_without_daemon_fails_with_msg_cli_110_and_no_ipc_in_hint() {
         .code(1)
         // MSG-CLI-110 内容確認
         .stderr(
-            predicate::str::contains("not running")
-                .or(predicate::str::contains("shikomi-daemon")),
+            predicate::str::contains("not running").or(predicate::str::contains("shikomi-daemon")),
         )
         .stderr(predicate::str::contains("hint:"))
         // Phase 2: hint に "--ipc" が含まれない
@@ -256,8 +265,7 @@ fn tc_e2e_125_no_ipc_vault_encrypt_outputs_msg_cli_052_before_msg_cli_110() {
         ))
         // MSG-CLI-110 が含まれる
         .stderr(
-            predicate::str::contains("not running")
-                .or(predicate::str::contains("shikomi-daemon")),
+            predicate::str::contains("not running").or(predicate::str::contains("shikomi-daemon")),
         )
         .get_output()
         .clone();

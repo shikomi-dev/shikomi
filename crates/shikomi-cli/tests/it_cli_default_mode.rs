@@ -154,7 +154,9 @@ fn tc_it_111_no_ipc_list_uses_sqlite_directly() {
         .expect("cargo_bin")
         .env_remove("LANG")
         .env("SHIKOMI_VAULT_DIR", vault_dir.path())
-        .args(["--no-ipc", "add", "--kind", "text", "--label", "L0", "--value", "V0"])
+        .args([
+            "--no-ipc", "add", "--kind", "text", "--label", "L0", "--value", "V0",
+        ])
         .assert()
         .success();
     // --no-ipc list 実行（daemon 不在でも成功するはず）
@@ -191,8 +193,7 @@ fn tc_it_112_list_without_daemon_fails_with_msg_cli_110() {
         .code(1)
         // MSG-CLI-110 原因文
         .stderr(
-            predicate::str::contains("not running")
-                .or(predicate::str::contains("shikomi-daemon")),
+            predicate::str::contains("not running").or(predicate::str::contains("shikomi-daemon")),
         )
         // hint に daemon 起動コマンド案内
         .stderr(predicate::str::contains("hint:"))
@@ -226,8 +227,7 @@ fn tc_it_114_no_ipc_vault_encrypt_forces_ipc_with_msg_cli_052_first() {
         ))
         // MSG-CLI-110 が含まれる
         .stderr(
-            predicate::str::contains("not running")
-                .or(predicate::str::contains("shikomi-daemon")),
+            predicate::str::contains("not running").or(predicate::str::contains("shikomi-daemon")),
         )
         .get_output()
         .clone();

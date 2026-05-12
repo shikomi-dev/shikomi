@@ -178,12 +178,16 @@ echo "[TC-CI-023/024] PASS"
 # - crates/shikomi-cli/src/hardening/core_dump.rs: C-41 core dump 抑制 (Sub-F Phase 5)
 #   `libc::prctl(PR_SET_DUMPABLE, 0)` / `libc::setrlimit(RLIMIT_CORE, 0)` の FFI
 #   呼出に必要な最小 unsafe。ファイル単位で `#![allow(unsafe_code)]` を明示。
+# - crates/shikomi-cli/src/tests.rs: Issue #126 TC-UT-155 — test-only env manipulation
+#   `unsafe { std::env::set_var("XDG_RUNTIME_DIR", ...) }` for socket path resolution test。
+#   本番コードに混入しないことを保証するため tests.rs に隔離（ペガサス 500 行ルール分離の副産物）。
 # Issue #85 コメント行除外契約は audit_unsafe_blocks ライブラリ側に集約。
 echo "[TC-CI-026] unsafe blocks outside io/windows_sid.rs and hardening/core_dump.rs (shikomi-cli)"
 if ! audit_unsafe_blocks "crates/shikomi-cli/src/" \
     "crates/shikomi-cli/src/io/windows_sid.rs" \
-    "crates/shikomi-cli/src/hardening/core_dump.rs"; then
-    fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs) 以外で unsafe ブロックが存在します"
+    "crates/shikomi-cli/src/hardening/core_dump.rs" \
+    "crates/shikomi-cli/src/tests.rs"; then
+    fail "TC-CI-026 FAIL: 許可リスト (io/windows_sid.rs, hardening/core_dump.rs, tests.rs) 以外で unsafe ブロックが存在します"
 fi
 echo "[TC-CI-026] PASS"
 
