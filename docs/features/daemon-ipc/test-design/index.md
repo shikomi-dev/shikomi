@@ -11,7 +11,7 @@
 | 対象 feature | daemon-ipc（shikomi-daemon 骨格 + IPC プロトコル + `shikomi-cli --ipc` オプトイン） |
 | 対象 PR | [#28](https://github.com/shikomi-dev/shikomi/pull/28)（Phase 1）/ **[#31](https://github.com/shikomi-dev/shikomi/pull/31)（Phase 1.5、`feat/issue-30-ipc-mutations` → `develop`、Issue #30）** |
 | 対象ブランチ | `feature/26-daemon-ipc`（Phase 1、merged ae4df15）/ **`feat/issue-30-ipc-mutations`（Phase 1.5、commit `a04e952` 以降）** |
-| 上位設計 | `../requirements-analysis.md`（受入基準 18 項目）/ `../requirements.md`（REQ-DAEMON-001〜023, **027 = Phase 1.5 reject 撤去**）/ `../basic-design/` 全 5 ファイル（Phase 1.5 で flows.md / error.md / ipc-protocol.md 改訂）/ `../detailed-design/` 全 7 ファイル（**Phase 1.5 で `ipc-vault-repository.md` 全面書換 = 案 D 確定**） |
+| 上位設計 | `../requirements-analysis.md`（受入基準 18 項目）/ `../basic-design/module-contracts.md`（REQ-DAEMON-001〜028、旧 `requirements.md` を統合）/ `../basic-design/` 全 6 ファイル（Phase 1.5 で flows.md / error.md / ipc-protocol.md 改訂、Issue #80 で module-contracts.md 追加）/ `../detailed-design/` 全 7 ファイル（**Phase 1.5 で `ipc-vault-repository.md` 全面書換 = 案 D 確定**） |
 | MVP フェーズ | Phase 2（daemon 経由）**オプトイン限定**（`--ipc` 指定時のみ）。既定は Phase 1（SQLite 直結）を維持。**Phase 1.5（Issue #30）で 4 サブコマンド全て（list/add/edit/remove）が `--ipc` 経由で透過動作**（PR #29 の runtime reject 撤去） |
 | 対応 vault モード | 平文モードのみ。暗号化 vault は daemon 側で Fail Fast（exit 3）、`--ipc add/edit/remove` 経路では `IpcErrorCode::EncryptionUnsupported` |
 | テスト実行タイミング | 実装担当が `feat/issue-30-ipc-mutations` に CLI 経路接続（`RepositoryHandle` enum + 専用メソッド 3 種 + reject 撤去）を積み上げた直後、`develop` マージ前 |

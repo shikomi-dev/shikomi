@@ -19,6 +19,7 @@
   - **[Phase 1.5 追加]** `RepositoryHandle` enum dispatch の網羅性検査（§2.14）
   - **[Phase 1.5 追加]** 嘘 ID 不在の契約検証（§2.15、案 D の核）
   - **[Phase 1.5 追加]** `IpcVaultRepository` が `VaultRepository` trait を実装しない型契約（§2.16、`compile_fail` doctest）
+  - **[Issue #80 追加]** `SqliteVaultRepository::load_or_create_plaintext` の vault.db 不在・存在・書き込み不可の 3 ケース（§2.18）
 - **粒度**: 1 テスト 1 アサーション。命名 `test_<対象>_<状況>_<期待>`
 - **モック**: I/O バウンダリのみ。`PeerCredentialSource` trait（後述）でピア取得を抽象化し、in-test 実装で固定値を返す。**Phase 1.5 の専用メソッド UT では `tokio::io::duplex` でクライアント-サーバ stream を作り、サーバ側を**手書きスタブ（受信記録 + 固定応答）**として注入する**（factory ではなく構造体ベース）
 - **配置**: Rust 慣習、`#[cfg(test)] mod tests` でソースモジュール内
@@ -296,6 +297,28 @@
 - **案 Y（UT-135 廃止、E2E のみで担保）**: 本番コード無変更、pty テスト 1〜2 件で実機観測
 
 E2E（TC-E2E-017）が pty で実観測する以上、案 Y でも fail-secure 経路の振る舞いは網羅される。**本 Issue では案 Y を許容**し、UT-135 は trait 抽出が他の利用（後続 feature）で発生したタイミングで実装する。
+
+### 2.18 [Issue #80 追加] `SqliteVaultRepository::load_or_create_plaintext` — vault.db 不在挙動（REQ-DAEMON-028）
+
+**目的**: Bug-F-008 の設計（REQ-DAEMON-028）が正しく実装されることを担保する。「vault.db 不在 → 空 plaintext vault 自動生成」のロジックが `run()` に `ErrorKind::NotFound` 分岐を持ち込まず `load_or_create_plaintext` に閉じていることを、生成後の返り値・ログ出力・冪等性の 3 軸で検証する。
+
+**配置**: `crates/shikomi-infra/src/persistence/repository.rs` の `#[cfg(test)] mod tests`。
+
+**dev-dependencies 追加（実装 PR で `shikomi-infra/Cargo.toml` に追記）**:
+
+| crate | バージョン | 用途 |
+|-------|----------|------|
+| `tracing-test` | `0.2`（新規追加）| `#[traced_test]` マクロまたは in-memory layer でログ観測を可能にする（TC-UT-141 のログ検証）|
+| `tempfile` | `3`（既存 workspace dep）| `tempfile::TempDir` による一時ディレクトリ生成（TC-UT-140〜142）|
+
+| TC-ID | 種別 | 入力（前提条件） | 期待結果 |
+|-------|------|-----------------|---------|
+| TC-UT-140 | 正常（vault.db 存在） | `tempfile::TempDir` に有効な vault.db があり（`self.save(&Vault::new_plaintext())` で事前書き込み済み）、`load_or_create_plaintext` を呼ぶ | `Ok(vault)` が返る。既存エントリが保持される（または空で一致）。`tracing::info!(target: "shikomi_daemon::init", "vault not found; ...")` が**出力されない**（`tracing_test` layer で観測） |
+| TC-UT-141 | 正常（vault.db 不在） | `tempfile::TempDir` に vault.db を**生成しない**状態で `load_or_create_plaintext` を呼ぶ | `Ok(vault)` が返る。`vault.entries().is_empty()` が `true`（空 plaintext vault）。`tracing::info!(target: "shikomi_daemon::init", ...)` に `"vault not found; created new plaintext vault at "` が出力される |
+| TC-UT-142 | 異常（書き込み不可、`#[cfg(unix)]`） | `tempfile::TempDir` のパーミッションを `0o500`（読み取り専用ディレクトリ）に変更後に `load_or_create_plaintext` を呼ぶ | `Err(PersistenceError::Io(_))` が返る |
+| TC-UT-142w | **Windows 対応** — 除外根拠 | Windows では `fs::set_permissions` でディレクトリの書き込みを禁止するには管理者権限が必要で、CI 環境（非 admin runner）での再現が構造的に困難。同等のエラー経路（`EACCES` 相当の `std::io::Error`）は OS が `PersistenceError::Io(_)` に写像されることを TC-UT-142 の実装内の型検証（`Err(PersistenceError::Io(_))` にパターンマッチ）で代替検証済みとみなす | 除外根拠: CI 非 admin 制約。実装担当は `#[cfg(windows)]` で `// NOTE: write-protected directory test skipped on Windows (requires admin privileges)` を残すこと |
+
+**横串アサート（TC-UT-141 内）**: TC-UT-141 の成功後に同じ `TempDir` で再度 `load_or_create_plaintext` を呼ぶと `Ok(vault)` が返り vault.db が空の状態を維持する（冪等性確認、二重生成による破壊がないこと）。
 
 ---
 

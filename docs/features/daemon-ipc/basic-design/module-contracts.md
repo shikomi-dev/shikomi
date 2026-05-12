@@ -1,7 +1,8 @@
-# 要件定義書
+# モジュール契約（機能要件）— daemon-ipc
 
-<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) -->
-<!-- 配置先: docs/features/daemon-ipc/requirements.md -->
+<!-- feature: daemon-ipc / Issue #26 (Phase 1: list) / Issue #30 (Phase 1.5: add/edit/remove) / Issue #80 (Bug-F-008) -->
+<!-- 旧ファイル名: docs/features/daemon-ipc/requirements.md — Boy Scout Rule により basic-design 配下に移動（Issue #80 PR で対応）-->
+<!-- 配置先: docs/features/daemon-ipc/basic-design/module-contracts.md -->
 
 ## Phase 区分（Issue #30 で確定）
 
@@ -253,6 +254,16 @@
 | 3 | 暗号化 vault 検出（本 feature 未対応） | 起動時の `repo.load()` で `Vault::protection_mode() == Encrypted` |
 | 101 | panic（Rust ランタイム既定）| 想定外バグ |
 
+### REQ-DAEMON-028: vault.db 不在時の空 plaintext vault 自動生成（Issue #80 / Bug-F-008）
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `SqliteVaultRepository::load_or_create_plaintext(&self)` の呼び出し。前提: `SqliteVaultRepository::from_directory` で repo は既に構築済み |
+| 処理 | (1) vault.db ファイルが存在する場合 → `self.load()` を呼び既存 `Vault` を返す（生成ログ出力なし）/ (2) vault.db ファイルが存在しない場合（`ErrorKind::NotFound` 相当）→ `Vault::new_plaintext()` で空 vault を生成 → `self.save(&vault)` で永続化 → `tracing::info!(target: "shikomi_daemon::init", "vault not found; created new plaintext vault at {path}")` + `tracing::info!(target: "shikomi_daemon::init", "hint: to enable encryption, run \`shikomi vault encrypt\` after the daemon has started")` の 2 行出力 → `Ok(vault)` を返す |
+| 出力 | `Ok(Vault)` — 既存ロードまたは新規生成した空 plaintext vault |
+| エラー時 | vault.db ファイルの読み込み失敗（`NotFound` 以外の `IoError`）/ 新規生成時の `save` 失敗 → `Err(PersistenceError::Io(_))` を返す。呼び出し元 `run()` が `tracing::error!(target: "shikomi_daemon::init", "failed to load or create vault: {}", err)` → `ExitCode::from(1)` で early return |
+| 設計原則 | **Tell, Don't Ask**: `run()` が `ErrorKind::NotFound` を外部でマッチせず、生成ロジックを `SqliteVaultRepository::load_or_create_plaintext` に閉じる。**冪等性**: 生成後に同一パスで再度呼ぶと既存 vault がロードされて返る（二重生成・破壊なし）。**ログ対象ペルソナ**: 2 行の `tracing::info!` は**ペルソナ B（技術者）向け補助ログ**。ペルソナ A/C のオンボーディングは GUI の `VaultStatusBanner`（`docs/features/shikomi-gui/ui/basic-design.md §REQ-UI-03`）が担う |
+
 ## 画面・CLI仕様
 
 ### `shikomi-daemon` バイナリの起動
@@ -395,7 +406,7 @@ shikomi list                    # 既定（Phase 1、SQLite 直結、本 feature
 | MSG-CLI-110 | `error: shikomi-daemon is not running (socket {path} unreachable)` | `error: shikomi-daemon が起動していません（ソケット {path} に接続できません）` | 3 OS の起動コマンドを並記した複数行 hint（`basic-design/error.md §MSG-CLI-110 確定文面`）| `--ipc` 指定で接続失敗 | 1 |
 | MSG-CLI-111 | `error: protocol version mismatch (server={server}, client={client})` | `error: プロトコルバージョン不一致（server={server}, client={client}）` | `hint: rebuild shikomi-cli and shikomi-daemon to the same version` / `hint: shikomi-cli と shikomi-daemon を同一バージョンにビルドし直してください` | ハンドシェイク不一致 | 1 |
 
-**MSG-CLI-110 / 111 の確定文面は `basic-design/error.md` を単一真実源とする**。本 `requirements.md` 表は表示条件・終了コードの規約のみ扱い、文面の版ズレを避ける。
+**MSG-CLI-110 / 111 の確定文面は `basic-design/error.md` を単一真実源とする**。本 `module-contracts.md` 表は表示条件・終了コードの規約のみ扱い、文面の版ズレを避ける。
 
 ### daemon 側のログメッセージ（`tracing::info!` / `warn!` / `error!`）
 
