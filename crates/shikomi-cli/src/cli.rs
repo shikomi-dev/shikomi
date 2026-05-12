@@ -91,6 +91,37 @@ pub enum Subcommand {
     /// 設計根拠: `docs/features/shikomi-gui/feature-spec.md` R1-GUI-01
     #[command(about = "Launch the graphical interface")]
     Gui,
+
+    /// OS 自動起動の管理と daemon 稼働状態確認（Sub-B Issue #127）。
+    ///
+    /// 設計根拠: docs/features/daemon-default-mode/autostart/basic-design.md
+    #[command(
+        subcommand,
+        about = "Manage daemon autostart registration and check daemon status"
+    )]
+    Daemon(DaemonSubcommand),
+}
+
+// -------------------------------------------------------------------
+// DaemonSubcommand（Sub-B Issue #127）
+// -------------------------------------------------------------------
+
+/// `shikomi daemon {subcommand}` の 3 サブコマンド group。
+///
+/// 設計根拠: docs/features/daemon-default-mode/autostart/basic-design.md §DaemonSubcommand の CLI 仕様
+#[derive(ClapSubcommand, Debug)]
+pub enum DaemonSubcommand {
+    /// OS の自動起動機能に shikomi-daemon を登録する。
+    #[command(about = "Register shikomi-daemon as an OS autostart service")]
+    Install,
+
+    /// OS の自動起動登録を解除する。
+    #[command(about = "Unregister shikomi-daemon from OS autostart")]
+    Uninstall,
+
+    /// daemon の稼働状態と自動起動登録状態を表示する。
+    #[command(about = "Show daemon running status and autostart registration")]
+    Status,
 }
 
 // -------------------------------------------------------------------
