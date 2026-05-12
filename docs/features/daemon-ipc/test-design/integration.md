@@ -314,11 +314,18 @@ cargo test -p shikomi-daemon --test it_vault_init
 
 ---
 
-## 11. [Issue #80 追加] vault.db 不在での daemon 起動 — in-process 検証（REQ-DAEMON-024）
+## 11. [Issue #80 追加] vault.db 不在での daemon 起動 — in-process 検証（REQ-DAEMON-028）
 
 **対象**: `SqliteVaultRepository::load_or_create_plaintext`（`shikomi-infra` 実装）と daemon `run()` ステップ 6 の連携。初回起動時に vault.db が存在しない状態でも空の plaintext vault が生成され、続く IPC リクエスト処理が正常に完了することを in-process で検証する。
 
 **配置**: `crates/shikomi-daemon/tests/it_vault_init.rs`（新設）。`common/mod.rs` の `fresh_repo()` ヘルパー（`tempfile::TempDir` + `SqliteVaultRepository` 組み立て）を流用する。
+
+**dev-dependencies 追加（実装 PR で `shikomi-daemon/Cargo.toml` の `[dev-dependencies]` に追記）**:
+
+| crate | バージョン | 用途 |
+|-------|----------|------|
+| `tracing-test` | `0.2`（新規追加）| `#[traced_test]` マクロで TC-IT-102 の `shikomi_daemon::init` target ログ観測を可能にする |
+| `tempfile` | `3`（既存 workspace dep）| `tempfile::TempDir` による一時 vault ディレクトリ生成（TC-IT-100〜102）|
 
 ### 11.1 正常系
 

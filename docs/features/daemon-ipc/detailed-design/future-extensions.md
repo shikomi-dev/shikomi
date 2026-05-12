@@ -186,7 +186,7 @@ PR #29（Phase 1）で確立した経路に対し、Phase 1.5 では以下の追
 ### 撤去項目（PR #29 で導入された暫定経路）
 
 - **`crates/shikomi-cli/src/lib.rs:119-` の runtime reject 分岐**: `if args.ipc && !matches!(args.subcommand, Subcommand::List) { return CliError::UsageError("--ipc currently supports only the `list` subcommand; for add/edit/remove, omit --ipc to use direct vault file access") }` の if ブロック全体を削除
-- **`MSG-CLI-051` の旧文言「Phase 2 移行のオプトイン」**: Phase 1.5 で「daemon 経由経路（プレビュー）」に変更（`../basic-design/error.md` および `../requirements.md §ユーザー向けメッセージ一覧` を参照）
+- **`MSG-CLI-051` の旧文言「Phase 2 移行のオプトイン」**: Phase 1.5 で「daemon 経由経路（プレビュー）」に変更（`../basic-design/error.md` および `../basic-design/module-contracts.md §ユーザー向けメッセージ一覧` を参照）
 
 ### 追加項目（Phase 1.5 で実装する経路）
 

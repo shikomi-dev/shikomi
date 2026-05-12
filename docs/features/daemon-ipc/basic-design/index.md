@@ -11,11 +11,12 @@
 ソースコードと二重管理になりメンテナンスコストしか生まない。
 ここでは Rust の関数シグネチャは**プレーンテキスト（インライン `code`）**で示し、実装本体は一切書かない。Mermaid 図 + 表 + 箇条書きで設計判断を記述する。
 
-`basic-design.md` 単一ファイルの 500 行超えを避けるため、本基本設計は次の 5 ファイルに分割する（`cli-vault-commands` の前例を踏襲、ipc-protocol は本 feature 固有）:
+`basic-design.md` 単一ファイルの 500 行超えを避けるため、本基本設計は次の 6 ファイルに分割する（`cli-vault-commands` の前例を踏襲、ipc-protocol は本 feature 固有）:
 
 | ファイル | 担当領域 |
 |---------|---------|
 | `index.md` | モジュール構成 / クラス設計（概要）/ アーキテクチャへの影響 / 外部連携 / UX設計（DX観点）/ ER 図 |
+| `module-contracts.md` | **§モジュール契約（機能要件）**: REQ-DAEMON-001〜028（入力 / 処理 / 出力 / エラー時）。旧 `requirements.md` を統合（Boy Scout Rule / Issue #80）|
 | `flows.md` | 処理フロー / シーケンス図 |
 | `security.md` | セキュリティ設計 / 脅威モデル / OWASP Top 10 / 依存 crate の CVE 確認 / `expose_secret` 経路監査 / `SecretBytes` シリアライズ契約 |
 | `error.md` | エラーハンドリング方針 / 禁止事項 / Fail Fast 集約 |
@@ -74,7 +75,7 @@ crates/shikomi-core/src/
 | REQ-DAEMON-007〜010, 013, 023 | `ipc::handler` | `crates/shikomi-daemon/src/ipc/handler.rs` | `IpcRequest` → `IpcResponse` の pure 写像（`Mutex<Vault>` / `&dyn VaultRepository` 注入）|
 | REQ-DAEMON-005 | `permission::peer_credential` | `crates/shikomi-daemon/src/permission/peer_credential.rs` | OS 別ピア UID / SID 取得（`unix.rs` / `windows.rs` 分割）|
 | REQ-DAEMON-022 | `panic_hook` | `crates/shikomi-daemon/src/panic_hook.rs` | fixed-message panic hook（CLI と同型）|
-| REQ-DAEMON-024 | `SqliteVaultRepository::load_or_create_plaintext` | `crates/shikomi-infra/src/persistence/repository.rs`（`shikomi-infra` 実装、daemon `run()` ステップ 6 から呼ぶ）| vault.db が存在しない場合に空の plaintext vault を生成して返す（Issue #80 / Bug-F-008）。呼び出し元 `run()` が `ErrorKind::NotFound` を外部で分岐しない——生成ロジックを `SqliteVaultRepository` に閉じる（**Tell, Don't Ask**）。生成時は `tracing::info!(target: "shikomi_daemon::init", ...)` で vault パスとオンボーディングヒントを出力（詳細は `../detailed-design/composition-root.md §処理順序 ステップ 6`）|
+| REQ-DAEMON-028 | `SqliteVaultRepository::load_or_create_plaintext` | `crates/shikomi-infra/src/persistence/repository.rs`（`shikomi-infra` 実装、daemon `run()` ステップ 6 から呼ぶ）| vault.db が存在しない場合に空の plaintext vault を生成して返す（Issue #80 / Bug-F-008）。呼び出し元 `run()` が `ErrorKind::NotFound` を外部で分岐しない——生成ロジックを `SqliteVaultRepository` に閉じる（**Tell, Don't Ask**）。生成時は `tracing::info!(target: "shikomi_daemon::init", ...)` で vault パスと暗号化ヒントを出力（**ペルソナ B 向け補助ログ**。ペルソナ A/C の初回案内は GUI `VaultStatusBanner`〔`REQ-UI-03`〕が担う。詳細は `../detailed-design/composition-root.md §処理順序 ステップ 6`）|
 
 ```
 ディレクトリ構造:
