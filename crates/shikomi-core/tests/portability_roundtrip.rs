@@ -106,18 +106,9 @@ fn tc_ut_185_export_payload_roundtrip_via_json() {
     assert_eq!(import_payload.records[0].payload, export_record.payload);
 }
 
-// --- TC-UT-186: ImportValidator — format_version=1 は受理 ---
+// --- TC-UT-186: ImportValidator — format_version=2 は UnknownFormatVersion ---
 #[test]
-fn tc_ut_186_format_version_one_is_accepted() {
-    let json_str = r#"{"format_version":1,"exported_at":"1970-01-01T00:00:00Z","vault_name":"v","records":[]}"#;
-    let payload: ImportPayload = serde_json::from_str(json_str).unwrap();
-    let report = ImportValidator::validate(&payload, &HashSet::new()).unwrap();
-    assert!(report.conflicting_ids.is_empty());
-}
-
-// --- TC-UT-187: ImportValidator — format_version=2 は UnknownFormatVersion ---
-#[test]
-fn tc_ut_187_format_version_two_is_rejected() {
+fn tc_ut_186_format_version_two_is_rejected() {
     let json_str = r#"{"format_version":2,"exported_at":"1970-01-01T00:00:00Z","vault_name":"v","records":[]}"#;
     let payload: ImportPayload = serde_json::from_str(json_str).unwrap();
     let result = ImportValidator::validate(&payload, &HashSet::new());
@@ -125,4 +116,13 @@ fn tc_ut_187_format_version_two_is_rejected() {
         result,
         Err(ImportValidationError::UnknownFormatVersion { found: 2 })
     ));
+}
+
+// --- TC-UT-187: ImportValidator — format_version=1 は受理 ---
+#[test]
+fn tc_ut_187_format_version_one_is_accepted() {
+    let json_str = r#"{"format_version":1,"exported_at":"1970-01-01T00:00:00Z","vault_name":"v","records":[]}"#;
+    let payload: ImportPayload = serde_json::from_str(json_str).unwrap();
+    let report = ImportValidator::validate(&payload, &HashSet::new()).unwrap();
+    assert!(report.conflicting_ids.is_empty());
 }
