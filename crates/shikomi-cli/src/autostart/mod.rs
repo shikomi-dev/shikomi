@@ -148,10 +148,7 @@ mod tests {
 
         let result = resolve_daemon_path_from(dir.path());
         assert!(result.is_ok(), "daemon 存在時は Ok を返すべき: {result:?}");
-        assert!(
-            result.unwrap().exists(),
-            "返却パスが実際に存在すること"
-        );
+        assert!(result.unwrap().exists(), "返却パスが実際に存在すること");
     }
 
     /// TC-UT-165: daemon バイナリ不在時に `AutostartError::IoError(NotFound)` を返すこと
