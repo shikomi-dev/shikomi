@@ -69,7 +69,7 @@ fn tight_tempdir() -> TempDir { ... }
 | TC-IT-113 | REQ-DDM-003 | AC-DDM-05 | セキュリティ | MSG-CLI-051 文言が stderr に含まれない |
 | TC-IT-114 | REQ-DDM-005 | AC-DDM-06 | 正常 | `--no-ipc vault encrypt` → vault IPC 強制 |
 
-上位トレーサビリティ: `TC-IT-110〜114` → `ST-DDM-001〜006`（system-test-design.md）→ `SC-DDM-001`（acceptance-tests/scenarios/SC-DDM-001-ipc-default-mode.md）→ `AC-DDM-01〜06`（feature-spec.md §5）
+上位トレーサビリティ: `TC-IT-110〜114` → `ST-DDM-010〜015`（system-test-design.md）→ `SC-DDM-001`（acceptance-tests/scenarios/SC-DDM-001-ipc-default-mode.md）→ `AC-DDM-01〜06`（feature-spec.md §5）
 
 ---
 
@@ -136,9 +136,9 @@ fn tight_tempdir() -> TempDir { ... }
 | 前提 | daemon 未起動（IPC 強制の証明に最適: `--no-ipc` が無視されれば IPC 試行 → daemon 未起動 → MSG-CLI-110）|
 | 操作 | `Command::cargo_bin("shikomi").env("XDG_RUNTIME_DIR", empty_xdg).args(["--no-ipc", "vault", "encrypt"]).assert()` |
 | 期待（exit）| `failure()` / exit 1 |
-| 期待（stderr）| MSG-CLI-110（`"not running"` 等）— `--no-ipc` が vault 経路に影響しないことを証明 |
+| 期待（stderr 順序）| (1) **MSG-CLI-052**（`"note: vault commands always use IPC; --no-ipc does not apply"`）が**先行出力** → (2) **MSG-CLI-110**（`"not running"` 等）の順で出力されること |
 | 期待（挙動）| vault.db が**変更されていない**こと（SQLite 直結フォールバックが起きていない）|
-| 補足 | `--no-ipc` 無視 → IPC 試行 → daemon 未起動 → MSG-CLI-110 の 3 段論法 |
+| 補足 | `--no-ipc` 検出 → MSG-CLI-052 出力 → IPC 試行 → daemon 未起動 → MSG-CLI-110 の 4 段論法 |
 
 ---
 
@@ -149,4 +149,4 @@ fn tight_tempdir() -> TempDir { ... }
 | IT 全件通過 | `just test-daemon` | 1 件でも FAILED |
 | MSG-CLI-051 残存なし | `grep -rn "MSG-CLI-051\|render_ipc_opt_in" crates/shikomi-cli/src/` が 0 件 | 1 件でも HIT |
 | `--ipc` フラグ参照なし | `grep -rn 'args\.ipc\b' crates/shikomi-cli/src/` が 0 件 | 1 件でも HIT |
-| `no_ipc` が build_handle 外に漏れない | `grep -n "no_ipc" crates/shikomi-cli/src/lib.rs` が `build_handle` 内 1 件のみ | 2 件以上 HIT |
+| `no_ipc` が正確に 2 箇所のみ参照 | `grep -n "no_ipc" crates/shikomi-cli/src/lib.rs` が **2 件のみ**（① `build_handle` 内の IPC/SQLite 分岐 / ② vault dispatch の MSG-CLI-052 出力判定）| 1 件以下（MSG-CLI-052 出力消滅）または 3 件以上（vault 経路への漏れ）|

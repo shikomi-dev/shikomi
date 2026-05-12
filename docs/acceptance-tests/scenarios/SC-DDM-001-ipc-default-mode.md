@@ -71,6 +71,7 @@
 **When**: `shikomi --no-ipc vault encrypt` を実行する  
 **Then**:
 - コマンドが exit 1 で失敗すること（daemon 未起動）
+- stderr に `MSG-CLI-052`（`"note: vault commands always use IPC; --no-ipc does not apply"`）が **MSG-CLI-110 より先に**出力されること
 - stderr に `MSG-CLI-110`（daemon 未起動エラー）が出力されること
 - **`--no-ipc` が指定されていても vault サブコマンドは SQLite 直結にフォールバックしない**こと
 - vault.db が変更されていないこと（直接アクセスが行われない）
@@ -83,7 +84,7 @@
 |-------|-------|------------|
 | ユニットテスト | TC-UT-150〜TC-UT-159（`cli/test-design/unit.md`）| 実装担当 |
 | 結合テスト | TC-IT-110〜TC-IT-114（`cli/test-design/integration.md`）| 実装担当 |
-| システムテスト | ST-DDM-001〜ST-DDM-006（`daemon-default-mode/system-test-design.md`）| テスト担当 |
+| システムテスト | ST-DDM-010〜ST-DDM-015（`daemon-default-mode/system-test-design.md`）| テスト担当 |
 | 受入テスト（E2E 自動化）| TC-E2E-120〜TC-E2E-125（`crates/shikomi-cli/tests/e2e_sc_ddm_001.rs`）| テスト担当 |
 | 受入テスト（手動確認）| AC-DDM-02・AC-DDM-06（`--no-ipc` エスケープハッチ操作）| QA / オーナー |
 
@@ -96,7 +97,7 @@
 | AC-DDM-03 | ✅ TC-E2E-122 | daemon 未起動 + stderr 文言検証 |
 | AC-DDM-04 | ✅ TC-E2E-123 | clap exit 2 検証 |
 | AC-DDM-05 | ✅ TC-E2E-124 | stderr 非出力検証 |
-| AC-DDM-06 | ✅ TC-E2E-125 | `--no-ipc vault encrypt` + daemon 未起動 → MSG-CLI-110 |
+| AC-DDM-06 | ✅ TC-E2E-125 | `--no-ipc vault encrypt` + daemon 未起動 → MSG-CLI-052 先行出力 → MSG-CLI-110 |
 
 ---
 
@@ -105,7 +106,7 @@
 ```
 AC-DDM-01〜06 (feature-spec.md §5 受入基準)
    └── SC-DDM-001 (本ファイル — 受入シナリオ)
-         ├── ST-DDM-001〜006 (system-test-design.md — システムテスト)
+         ├── ST-DDM-010〜015 (system-test-design.md — システムテスト)
          │     ├── TC-IT-110〜114 (cli/test-design/integration.md — 結合テスト)
          │     │     └── TC-UT-150〜159 (cli/test-design/unit.md — ユニットテスト)
          │     └── [E2E 自動化] TC-E2E-120〜125 (e2e_sc_ddm_001.rs)
@@ -120,5 +121,5 @@ AC-DDM-01〜06 (feature-spec.md §5 受入基準)
 - `docs/features/daemon-default-mode/cli/basic-design.md §モジュール契約`（REQ-DDM-001〜005）
 - `docs/features/daemon-default-mode/cli/detailed-design.md`（変更対象ファイル一覧・実装詳細）
 - `docs/features/daemon-default-mode/cli/security.md`（`--no-ipc` 脅威モデル・OWASP 対応）
-- `docs/features/daemon-default-mode/system-test-design.md`（ST-DDM-001〜006 システムテスト戦略）
+- `docs/features/daemon-default-mode/system-test-design.md`（ST-DDM-010〜015 システムテスト戦略）
 - `docs/analysis/personas.md §ペルソナ B`（山田 美咲 — 本シナリオの主ペルソナ）

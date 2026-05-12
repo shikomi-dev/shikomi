@@ -56,9 +56,9 @@
 | TC-UT-156 | REQ-DDM-003 | AC-DDM-05 | 契約 | `render_ipc_opt_in_notice` 廃止（grep ゼロ件）|
 | TC-UT-157 | REQ-DDM-003 | AC-DDM-05 | セキュリティ | IPC 経路で MSG-CLI-051 非出力 |
 | TC-UT-158 | REQ-DDM-004 | AC-DDM-03 | 正常 | MSG-CLI-110 hint に `--ipc` 非含有 |
-| TC-UT-159 | REQ-DDM-005 | AC-DDM-06 | 正常 | vault 経路は `no_ipc` を参照しない（grep 1 件のみ）|
+| TC-UT-159 | REQ-DDM-005 | AC-DDM-06 | 正常 | vault 経路は `no_ipc` を参照しない（grep 2 件のみ: vault dispatch + build_handle）|
 
-上位トレーサビリティ: `TC-UT-150〜159` → `TC-IT-110〜114`（integration.md）→ `ST-DDM-001〜006`（system-test-design.md）→ `SC-DDM-001`（acceptance-tests/scenarios/）→ `AC-DDM-01〜06`（feature-spec.md §5）
+上位トレーサビリティ: `TC-UT-150〜159` → `TC-IT-110〜114`（integration.md）→ `ST-DDM-010〜015`（system-test-design.md）→ `SC-DDM-001`（acceptance-tests/scenarios/）→ `AC-DDM-01〜06`（feature-spec.md §5）
 
 ---
 
@@ -182,7 +182,7 @@
 | 種別 | 正常系（静的検査）|
 | 前提 | なし |
 | 操作 | `grep -n "no_ipc" crates/shikomi-cli/src/lib.rs` |
-| 期待 | `build_handle` 関数内の 1 件のみ（`run_vault` / `connect_vault_ipc` では参照しない）|
+| 期待 | **2 件のみ**（① `build_handle` 内の IPC/SQLite 分岐 / ② vault サブコマンド dispatch の `args.no_ipc && !quiet` による MSG-CLI-052 出力判定）。3 件以上は `no_ipc` が vault 経路に漏れた証拠。1 件以下は MSG-CLI-052 出力が消えた証拠 |
 
 ---
 
