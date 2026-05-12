@@ -389,4 +389,74 @@ TC-F-I10a〜d のうち Windows で skip するものおよび TC-F-I11b も同�
 
 ---
 
+## 11. Sub-F vault アクセシビリティ出力 結合テスト（TC-F-A01〜A05）
+
+> Issue #78 / #74-D。  
+> SSoT: `vault-encryption/test-design/sub-f-cli-subcommands/index.md §15.7`（Rev1）
+
+### 11.1 設計方針
+
+- **テスト対象**: `shikomi vault encrypt --output {print,braille,audio}` のアクセシビリティ出力経路 + `SHIKOMI_ACCESSIBILITY=1` 自動切替 + umask 077 ファイル権限
+- **エントリポイント**: §10 同様、`assert_cmd::Command::cargo_bin("shikomi")` で実バイナリ呼び出し（clap パース込み）
+- **daemon 依存**: `vault encrypt` は IPC V2 経由で daemon が暗号化処理を担うため、全 TC で `DaemonSpawn` を使用（§10.2 と同一セットアップ）
+- **TTY 入力**: C-38 stdin パイプ拒否により、パスフレーズは `expectrl` PTY 経由で入力する
+- **ファイルガード**: `crates/shikomi-cli/tests/accessibility_paths.rs` の先頭に `#![cfg(unix)]` を付与。`expectrl` PTY は Unix 専用かつ `umask` が Unix 固有であるため、Windows CI はファイル全体がコンパイル対象外となる（3-OS matrix のうち ubuntu + macOS でのみ実行）
+- **stdout バイナリキャプチャ**: `--output print`（PDF）/ `--output braille`（BRF）はバイナリ出力のため、`assert_cmd::Output.stdout: Vec<u8>` を直接参照してバイト列でアサートする（`predicates::str::contains` ではない）
+- **liblouis FFI 不採用**: braille 変換は `shikomi-daemon` 内の自前 wordlist テーブルで実装（SSoT §15.2 確定。FFI 依存・外部共有ライブラリ不要）
+
+### 11.2 外部 I/O 依存マップ
+
+| 外部 I/O | 方針 | characterization 状態 |
+|---|---|---|
+| **`shikomi-daemon` プロセス** | §10.2 と同一: `DaemonSpawn` で実子プロセス起動 + socket 親 `0700` + `Drop` で `kill()`→`wait()` | 既存資産再利用 |
+| **TTY（passphrase）** | `expectrl` PTY 経由で passphrase を入力（C-38 前提、§10.3 TTY 行と同じ dev-dep 再利用）| 既存資産再利用 |
+| **PDF 出力（--output print）** | `assert_cmd::Output.stdout` の `Vec<u8>` でキャプチャ。magic byte / EOF marker をバイト列 assert | 不要（stdout キャプチャ）|
+| **BRF 出力（--output braille）** | 同上。Unicode braille 範囲（U+2800..U+28FF）または ASCII `.brf` 行末でアサート。liblouis FFI なし（自前 wordlist）| 不要（stdout キャプチャ）|
+| **Audio 出力（--output audio）** | CI では fake `say` / `espeak` バイナリを `PATH` 先頭に配置して spawn を観測。実スピーカー出力は要求しない | fake バイナリ用フィクスチャ要整備 |
+| **umask（TC-F-A05）** | `Command::new` 等で `0o077` を設定した子プロセス内で CLI 実行。出力一時ファイルの mode を `metadata().permissions().mode()` で assert | Unix 専用（ファイルガードで保護）|
+
+### 11.3 CI スキップ条件と `#[ignore]` reason 文字列規約
+
+**ファイルレベルガード（全 TC）**: `#![cfg(unix)]` により Windows CI では全 TC が自動的にコンパイル対象外となる（`#[ignore]` 個別付与不要）。
+
+**TC-F-A03 個別スキップ**: CI 環境に `say`（macOS）/ `espeak`（Linux）が PATH 未登録の場合、fake バイナリフィクスチャが未整備として skip。reason 文字列（v8.4 規約 §10.3 準拠）:
+
+```
+"requires fake TTS binary in PATH (audio spawn gate,
+ test-design integration.md §11.3,
+ unlock condition: add fake_say fixture to tests/helpers/ and register in CI workflow)"
+```
+
+**TC-F-A04 スキップ候補**: `SHIKOMI_ACCESSIBILITY=1` の自動切替先が OS オーディオパスに依存する場合、CI 環境によってはスキップが必要。実装担当（銀時）が確定後、同規約で reason 文字列を追加する（実装の責務）。
+
+### 11.4 テストケース一覧（TC-F-A01〜A05 / SSoT §15.7 1:1 対応）
+
+> **共通前提条件**: `DaemonSpawn::new()` によるセキュリティ契約（socket 親 `0700` + stat fail fast）が全 TC に適用される（§10.4 冒頭と同一）。
+
+| TC-ID | SSoT 受入基準 | 前提条件 | 操作 | 期待結果 |
+|-------|-------------|---------|------|---------|
+| TC-F-A01 | EC-F1 / SSoT §15.7 A01 | plaintext vault + `DaemonSpawn` | `shikomi vault encrypt --output print`（`expectrl` PTY 経由 passphrase）| exit 0 + `stdout` バイト列が `%PDF-1.7`（magic byte）および `%%EOF`（終端 marker）を含む。24 語ニーモニックが 36pt 相当のコンテンツとして PDF 本文に埋め込まれている（テキスト抽出 / 構造解析で確認）|
+| TC-F-A02 | EC-F1 / SSoT §15.7 A02 | plaintext vault + `DaemonSpawn` | `shikomi vault encrypt --output braille`（`expectrl` PTY 経由）| exit 0 + `stdout` バイト列が U+2800..U+28FF Unicode braille 範囲のコードポイントを含む（または ASCII BRF 行末 `\r\n` 形式）。Grade 2 短縮形エンコード（例: "the" → `⠮`）が自前 wordlist テーブルで正しく生成されている |
+| TC-F-A03 | SSoT §15.7 A03 | plaintext vault + `DaemonSpawn` + fake `say`/`espeak` を `PATH` 先頭配置（`#[ignore]` 付き）| `shikomi vault encrypt --output audio`（`expectrl` PTY 経由）| exit 0 + fake TTS バイナリが spawn された証跡（fake バイナリが受信した引数を一時ファイルに記録し、テストで読み取り確認）|
+| TC-F-A04 | SSoT §15.7 A04 | plaintext vault + `DaemonSpawn` + `SHIKOMI_ACCESSIBILITY=1` env | `shikomi vault encrypt`（`--output` フラグなし、`expectrl` PTY 経由）| exit 0。stdout / stderr に print / braille / audio いずれかの出力形式が現れること。レコード内容が平文で stdout / stderr に露出しないこと（grep 0 件）|
+| TC-F-A05 | SSoT §15.7 A05 | plaintext vault + `DaemonSpawn` + プロセス umask `0o077` 設定 | `shikomi vault encrypt --output print`（`expectrl` PTY 経由）| exit 0。出力先一時ファイルの mode が `0o600`（owner read/write のみ）。`/tmp` 以下に vault.db 関連の中間ファイルが生成されない（`/tmp` の mtime 変化なし、または stat で確認）|
+
+### 11.5 `accessibility_paths.rs` 責務分割
+
+| テストファイル | TC | 責務 |
+|-------------|-----|------|
+| `crates/shikomi-cli/tests/accessibility_paths.rs` | TC-F-A01〜A05 | vault encrypt アクセシビリティ出力（PDF / BRF / Audio）+ `SHIKOMI_ACCESSIBILITY=1` 自動切替 + umask 077 権限検証。`#![cfg(unix)]` ファイルガード |
+
+**共通インフラ**: §10.6 と同一（`DaemonSpawn` / `common/mod.rs` / `common/fixtures.rs`）。TC-F-A03 用の fake TTS バイナリフィクスチャは `tests/helpers/fake_tts.rs` として工程3（銀時実装）で追加する（`#[ignore]` 解除条件）。
+
+### 11.6 カバレッジ対象（Sub-F アクセシビリティ、SSoT §15.3 対応）
+
+| 受入基準 / 契約 | カバー TC |
+|--------------|----------|
+| EC-F1（encrypt）アクセシビリティ出力 3 形式（PDF / BRF / Audio）| TC-F-A01, TC-F-A02, TC-F-A03 |
+| `SHIKOMI_ACCESSIBILITY=1` 自動切替 + exit 0 + 情報漏洩なし | TC-F-A04 |
+| umask 077 出力権限 `0o600` + `/tmp` 中間ファイル生成禁止 | TC-F-A05 |
+
+---
+
 *この文書は `index.md` の分割成果。ユニットテストは `unit.md`、E2E は `e2e.md`、CI は `ci.md` を参照*
