@@ -273,7 +273,10 @@ mod tests {
             hotkey: None,
         }]);
         let result = ImportValidator::validate(&payload, &HashSet::new());
-        assert!(result.is_ok(), "plaintext payload should be accepted: {result:?}");
+        assert!(
+            result.is_ok(),
+            "plaintext payload should be accepted: {result:?}"
+        );
     }
 
     // --- TC-UT-192: バリデーション順序: format_version=999 + ID 重複 → UnknownFormatVersion 優先 ---
@@ -283,10 +286,7 @@ mod tests {
             format_version: 999,
             exported_at: "2026-05-12T00:00:00Z".to_owned(),
             vault_name: "test".to_owned(),
-            records: vec![
-                make_plaintext_record("id-1"),
-                make_plaintext_record("id-1"),
-            ],
+            records: vec![make_plaintext_record("id-1"), make_plaintext_record("id-1")],
         };
         let result = ImportValidator::validate(&payload, &HashSet::new());
         assert!(matches!(

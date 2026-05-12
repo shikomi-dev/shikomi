@@ -8,7 +8,9 @@ use shikomi_core::portability::{
     ExportPayload, ExportRecord, ExportRecordPayload, ImportPayload, ImportValidationError,
     ImportValidator, EXPORT_FORMAT_VERSION,
 };
-use shikomi_core::{Hotkey, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString};
+use shikomi_core::{
+    Hotkey, Record, RecordId, RecordKind, RecordLabel, RecordPayload, SecretString,
+};
 use time::OffsetDateTime;
 
 fn make_record(kind: RecordKind, label: &str, value: &str) -> Record {
@@ -24,7 +26,10 @@ fn tc_ut_180_redacted_serializes_to_tagged_union() {
     let r = ExportRecordPayload::Redacted;
     let json = serde_json::to_value(&r).unwrap();
     assert_eq!(json["kind"], "redacted");
-    assert!(json.get("value").is_none(), "Redacted must not contain 'value' field");
+    assert!(
+        json.get("value").is_none(),
+        "Redacted must not contain 'value' field"
+    );
 }
 
 // --- TC-UT-181: Plaintext JSON 表現 ---
@@ -45,8 +50,14 @@ fn tc_ut_182_export_record_try_from_record_with_hotkey() {
     let label = RecordLabel::try_new("my-label".to_owned()).unwrap();
     let payload = RecordPayload::Plaintext(SecretString::from_string("my-value".to_owned()));
     let hotkey = Hotkey::parse("ctrl+1").unwrap();
-    let record = Record::new(id, RecordKind::Text, label, payload, OffsetDateTime::UNIX_EPOCH)
-        .with_hotkey(hotkey);
+    let record = Record::new(
+        id,
+        RecordKind::Text,
+        label,
+        payload,
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .with_hotkey(hotkey);
 
     let export = ExportRecord::try_from((&record, false)).unwrap();
 
