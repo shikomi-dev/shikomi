@@ -82,9 +82,24 @@ chmod +x shikomi_*_amd64.AppImage
 
 #### Linux 追加セットアップ
 
-Wayland 環境でグローバルホットキーを使用するには、XDG Portal `org.freedesktop.impl.portal.GlobalShortcuts` をサポートするデスクトップ環境（GNOME 44+ / KDE Plasma 6+）が必要です。
+##### 1. daemon 自動起動を有効化（必須）
 
-X11 環境では追加セットアップは不要です。
+apt / dnf でインストール直後は自動起動が有効化されていません。下記コマンドで systemd user service を登録してください:
+
+```bash
+shikomi daemon install
+```
+
+これでログイン時に `shikomi-daemon` が自動起動し、`shikomi-gui` がホットキーを利用可能になります。
+
+##### 2. グローバルホットキー（X11 / Wayland 別対応）
+
+| 環境 | 対応状況 |
+|---|---|
+| X11 | ✅ v0.1.1 から動作 |
+| Wayland (GNOME 44+ / KDE Plasma 6+) | ⚠ v0.1.1 では未対応（v0.1.2 で `org.freedesktop.portal.GlobalShortcuts` 対応予定 — Issue #160 関連）|
+
+Wayland セッションでもアプリ起動・CLI・GUI からのエントリ管理は動作しますが、グローバルホットキー押下による投入機能は X11 セッションでログインし直すまで利用できません。
 
 ## 権限要件（Permissions）
 
@@ -94,8 +109,8 @@ shikomi はユーザー権限のみで動作します。**管理者権限・`set
 
 | OS | デフォルト設定 | 説明 |
 |----|-------------|------|
-| Unix（Linux / macOS） | `0600`（所有者のみ読み書き可） | `~/.local/share/shikomi/vault.json` に自動適用 |
-| Windows | NTFS ACL: 所有者 SID のみフルコントロール | `%APPDATA%\shikomi\vault.json` に自動適用 |
+| Unix（Linux / macOS） | `0600`（所有者のみ読み書き可） | `~/.local/share/shikomi/vault.db` に自動適用 |
+| Windows | NTFS ACL: 所有者 SID のみフルコントロール | `%APPDATA%\shikomi\vault.db` に自動適用 |
 
 > **注意（平文モード）**: デフォルトの平文 vault は OS のファイルパーミッションのみで保護されています。同一ユーザー権限で動作する他プロセス・マルウェアからは読取・書換が可能です。パスワード等の高度な機密情報を保管する場合は `shikomi vault encrypt` で暗号化保護を有効化してください。
 
@@ -111,18 +126,20 @@ shikomi vault encrypt
 
 ### デーモン起動
 
-shikomi はバックグラウンドデーモンとしてホットキーを監視します。インストール時に OS の自動起動に登録されます。
+shikomi はバックグラウンドデーモン (`shikomi-daemon`) としてホットキーを監視します。**インストール直後は自動起動が無効**なので、初回 1 回だけ下記を実行してください:
 
 ```bash
-# 手動起動
-shikomi daemon start
+# OS 自動起動に登録（systemd user service / launchd / Windows スタートアップ）
+shikomi daemon install
 
-# 状態確認
+# 状態確認（daemon プロセス + 自動起動登録の両方）
 shikomi daemon status
 
-# 停止
-shikomi daemon stop
+# 自動起動を解除
+shikomi daemon uninstall
 ```
+
+`install` 後はログイン時に daemon が自動起動します。手動で起動・停止する場合は OS 側の機構（Linux: `systemctl --user start/stop shikomi-daemon`）を使用してください。
 
 ### エントリ管理（CLI）
 
@@ -131,10 +148,11 @@ shikomi daemon stop
 shikomi list
 
 # エントリ登録（ホットキー: Ctrl+Alt+1、ラベル: メールアドレス）
-shikomi add --hotkey "ctrl+alt+1" --label "メールアドレス" --value "user@example.com"
+# ホットキー文字列は大文字必須: Ctrl+Alt+[1-9]
+shikomi add --kind text --hotkey "Ctrl+Alt+1" --label "メールアドレス" --value "user@example.com"
 
-# パスワード等の機密文字列（自動クリア有効）
-shikomi add --hotkey "ctrl+alt+2" --label "パスワード" --secret
+# パスワード等の機密文字列（自動クリア有効）— stdin から値を入力
+shikomi add --kind secret --hotkey "Ctrl+Alt+2" --label "パスワード"
 
 # エントリ編集
 shikomi edit 1

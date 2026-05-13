@@ -64,6 +64,8 @@ const App: Component = () => {
 
   const handleFormSuccess = () => {
     setFormMode(null);
+    // エントリ追加・編集後に一覧を再取得（UI auto-refresh）
+    refreshEntries();
   };
 
   const resetTab = (view: ActiveView) => {
