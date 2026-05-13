@@ -89,44 +89,39 @@ flowchart TB
 | macOS 署名 | Developer ID + Notarization / Ad-hoc / 未署名 | **Developer ID + Notarization（MVP後、Issue #130 で追加予定）** | MVP段階では `APPLE_CERTIFICATE` シークレット未設定のため unsigned build を許容（`bundler.yml` / `release.yml` の `HAS_APPLE_CERT` ガードで制御）。unsigned 時は Gatekeeper の「壊れています」警告が発生——ユーザーはシステム設定 → プライバシーとセキュリティ → 許可ボタンで手動許可が必要。Issue #130 で署名追加後に secrets 設定のみで解消。製品リリース（非 MVP）では署名必須（`nfr.md §9` 署名要件）<br/>出典: https://v2.tauri.app/distribute/sign/macos/ |
 | Linux 配布形式 | AppImage / deb / rpm / Flatpak / Snap / tarball | **deb + rpm + AppImage（初期）、Flatpak は後続** | Ubuntu/Debian・Fedora/RHEL・distro 非依存の 3 本で主要ユーザをカバー。Flatpak は XDG Portal 前提でホットキー実装の再確認が必要なため MVP スコープ外<br/>出典: https://v2.tauri.app/distribute/appimage/ / debian/ / rpm/ |
 | 配布チャネル | GitHub Releases / winget / Homebrew / APT repo / snap store | **GitHub Releases（主）+ winget + Homebrew Cask（副）** | OSS 初期は GitHub Releases を SSoT、winget と Homebrew Cask は YAML マニフェスト更新のみで低コスト<br/>出典: https://github.com/microsoft/winget-pkgs |
-| CI/CD | GitHub Actions / CircleCI / 自前 | **GitHub Actions** | リポジトリ所在と同一、matrix build で Win/Mac/Linux ランナーを標準提供、`taiki-e/upload-rust-binary-action` 等のエコシステム。PR/ブランチ CI は `bundler.yml`、タグトリガーの GitHub Releases 公開は `release.yml`（Issue #136）として分離する |
-| リリースパイプライン | tag-triggered / manual / `release-drafter` 自動化 | **`v*.*.*` タグ push トリガー（`release.yml`）** | セマンティックバージョンタグ `v[0-9]+.[0-9]+.[0-9]+` の push で自動発火。`bundler.yml` は変更しない（PR/ブランチ CI と release pipeline を独立させることで、CI 失敗がリリースフローに影響しない）。 共通セットアップは `.github/actions/tauri-build-setup` composite action を再利用（DRY）。macOS 署名スキップガード: `secrets.APPLE_CERTIFICATE` 未設定時は署名ステップを `if: env.HAS_APPLE_CERT == 'true'` でスキップ（unsigned build でワークフロー正常完了。Issue #130 で署名追加後に secrets 設定のみで有効化）。リリース公開フロー: 3 OS ビルド成功後に `gh release create --draft` → 全 artifact を `gh release upload` でアタッチ → `gh release edit --draft=false` で公開（draft を挟むことで artifacts 欠落の状態で誤公開しない）。`permissions: contents: write` は `release-publish` ジョブにのみ付与（最小権限）。SBOM（`cargo-cyclonedx`）は本 Issue スコープ外（リリース pipeline 安定後に別 Issue で追加）|
+| CI/CD | GitHub Actions / CircleCI / 自前 | **GitHub Actions** | リポジトリ所在と同一、matrix build で Win/Mac/Linux ランナーを標準提供、`taiki-e/upload-rust-binary-action` 等のエコシステム |
 | 依存監査 | `cargo-audit` / `cargo-deny` / Dependabot | **`cargo-deny` + Dependabot** | `cargo-deny` でライセンス / advisory / 重複バージョン / 禁止 crate を CI で fail fast、Dependabot で自動 PR |
 | SBOM | `cargo-cyclonedx` / `syft` | **`cargo-cyclonedx`** | Rust ネイティブ、CycloneDX 1.5 形式をリリースに添付 |
 
-### 2.2.1 `release.yml` ジョブ構成（Issue #136）
+#### 2.2.1 リリースパイプライン設計判断テーブル（`release.yml`）
+
+`release.yml` は `bundler.yml`（PR CI）と完全に独立したワークフローとして実装する。各設計判断の根拠を以下に記録する。
 
 ```mermaid
 flowchart TD
-    Tag["push: tags v*.*.*"]
-    Linux["build-linux\n(ubuntu-22.04)\ndeb + rpm + AppImage"]
-    Mac["build-macos\n(macos-latest)\nDMG\n(HAS_APPLE_CERT=false → unsigned)"]
-    Win["build-windows\n(windows-latest)\nMSI + NSIS exe"]
-    UL["upload-artifact\n(linux, 1d)"]
-    UM["upload-artifact\n(macos, 1d)"]
-    UW["upload-artifact\n(windows, 1d)"]
-    Publish["release-publish\n(ubuntu-22.04)\nneeds: [build-linux, build-macos, build-windows]\ngh release create --draft\nsha256sum → SHA256SUMS.txt\ngh release upload ×3 OS + SHA256SUMS.txt\ngh release edit --draft=false"]
-
-    Tag --> Linux & Mac & Win
-    Linux --> UL --> Publish
-    Mac --> UM --> Publish
-    Win --> UW --> Publish
+    Tag["semver タグ push\n（v*.*.*）"]
+    Tag --> Linux["build-linux\nubuntu-latest"]
+    Tag --> macOS["build-macos\nmacos-latest"]
+    Tag --> Windows["build-windows\nwindows-latest"]
+    Linux --> Publish["release-publish\nneeds: [build-linux, build-macos, build-windows]"]
+    macOS --> Publish
+    Windows --> Publish
+    Publish --> Draft["gh release create --draft\n+ artifacts upload\n+ cargo cyclonedx（SBOM）\n+ SHA256SUMS.txt"]
+    Draft --> Published["gh release edit --draft=false"]
 ```
 
-**設計判断の articulate**:
-
-| 判断 | 選択 | 根拠 |
-|------|------|------|
-| `bundler.yml` 変更の有無 | **変更しない** | PR CI と release pipeline を独立させる。`bundler.yml` の `workflow_call` 化はリファクタリング（別 Issue）|
-| macOS 署名スキップ | **`HAS_APPLE_CERT` job-level env で guard** | `secrets` コンテキストは step の `if` 式で参照不可（GitHub Actions 制約）。job-level env に昇格してから `if: env.HAS_APPLE_CERT == 'true'` でガードする（`bundler.yml` と同一パターン）。出典: https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/contexts#context-availability |
-| draft → published フロー | **draft 経由** | 3 OS ビルド全成功後に `gh release create --draft` → artifact アタッチ → `--draft=false`。直接 published にすると artifact アタッチ前の空 Release が瞬間的に外部公開される欠陥を防ぐ |
-| `permissions: contents: write` の付与範囲 | **`release-publish` ジョブのみ** | `gh release create` に必要な write 権限を build ジョブには与えない（最小権限原則）。ワークフローデフォルトは `contents: read` を維持する |
-| タグパターン | **`v[0-9]+.[0-9]+.[0-9]+`** | pre-release タグ（`v1.0.0-alpha.1` 等）は本ワークフローの自動リリース対象外。pre-release は別途 `workflow_dispatch` で手動対応（将来拡張）|
-| artifact 保持期間（release.yml）| **1 日** | release-publish job 完了時点で GitHub Releases に永続保存済みのため、一時 artifact の長期保持は不要。ストレージコスト最小化（`bundler.yml` PR: 7 日 / main: 30 日 とは別ポリシー）|
-| `release-publish` ジョブの `needs` 設定 | **`needs: [build-linux, build-macos, build-windows]` — 3 OS 全成功必須** | 1 OS でも失敗すれば `release-publish` は実行されず、Release draft も含めて作成されない（Fail Fast / partial release 防止）。Linux のみ成功した状態で Release が公開されるような事態を構造的に防ぐ |
-| リリース成果物整合性検証（OWASP A08）| **SHA256 チェックサムを `SHA256SUMS.txt` として Release に同梱** | `release-publish` ジョブが `gh release upload` 前に `sha256sum *.dmg *.exe *.deb *.rpm *.AppImage > SHA256SUMS.txt` を生成し、バイナリと共に Release にアタッチする。GitHub アカウント侵害・CDN 改ざん・MITM に対してダウンロード後の整合性検証手段を提供する（パスワードマネージャとして必須。`threat-model.md` A08 対応）。将来は `minisign` による署名を追加可能（自動更新 pipeline が公開鍵バンドルを要求する場合）|
-| タグ push 認可（供給チェーン攻撃対策）| **GitHub Tag protection rules で maintainer ロールのみに制限** | `v[0-9]+.[0-9]+.[0-9]+` タグ push で release pipeline が自動発火するため、write 権限を持つ任意のコラボレーターが悪意あるビルドをリリースとして公開できる攻撃面を閉じる。GitHub リポジトリ設定 → Rules → Tag protection rules で `v*.*.*` パターンを maintainer role に限定すること（OWASP A08: 供給チェーン完全性）。出典: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules |
-| リリースノート生成戦略 | **`gh release create --generate-notes` で自動生成** | タグ間のコミット・PR タイトルを GitHub が自動列挙する。手動編集の運用負担を排除しつつ、リリースマネージャーは GitHub UI から事後編集も可能。MVP 期間は技術的 PR タイトルがそのまま表示される制約あり（「feat(cli): data-portability Sub-B」等）、正式リリース時は手動 CHANGELOG 編集を検討。CHANGELOG.md との二重管理は回避（CHANGELOG.md は別 Issue でフォーマット策定）出典: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes |
+| 設計判断 | 採用方針 | 根拠 |
+|---------|---------|------|
+| `bundler.yml` 変更 | **変更なし**。`release.yml` を独立した新規ワークフローとして追加 | PR CI（`bundler.yml`）と release pipeline は責務が異なる。同一ファイルに混在させると `on: push` トリガと `on: tags` トリガが競合し、PR CI の安定性を損なう。Separation of Concerns |
+| macOS 署名スキップ | **`HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}` を job-level env に定義し `if: env.HAS_APPLE_CERT == 'true'` でスキップ** | GitHub Actions では `secrets` context は step の `if` 条件で直接参照不可（`secrets` は `env` / `with` のみ）。job-level env に boolean 文字列として展開してから条件評価する必要がある<br/>出典: https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/evaluate-expressions-in-workflows-and-actions#about-expressions |
+| draft → published フロー | **`gh release create --draft` でドラフト作成 → artifacts アップロード → `gh release edit --draft=false` で公開** | artifacts アップロード前に公開すると「空リリース」がユーザに露出する。draft 段階で全アップロードを完了してから公開することで UX 悪化を防止<br/>出典: https://cli.github.com/manual/gh_release_create |
+| `permissions: contents: write` | **release-publish job にのみ付与** | 最小権限の原則（OWASP A01）。build-* jobs は artifacts の upload のみで write 権限不要 |
+| タグパターン | **`v[0-9]+.[0-9]+.[0-9]+`**（SemVer 厳格） | プレリリース suffix（`-alpha`, `-rc`）を意図せず publish させないための防衛設計。pre-release は別途 `--prerelease` フラグ付きワークフローを追加する |
+| artifact 保持期間 | **`retention-days: 1`** | release-publish job が完了すれば GitHub Releases に永続保存されるため、一時 artifact の長期保持は不要。ストレージコスト最小化 |
+| `release-publish` needs | **`needs: [build-linux, build-macos, build-windows]`** | 3 OS ビルドが全て成功した場合のみ publish する。一部 OS のビルド失敗で不完全なリリースが公開されることを防止（Fail Fast / 部分リリース防止） |
+| SHA256 整合性検証 | **`sha256sum` でバイナリ名のみ（パス除去）を記録した `SHA256SUMS.txt` を添付** | ユーザが `sha256sum -c SHA256SUMS.txt` で検証できるよう、ファイル名のみ記録する。フルパスが含まれると `sha256sum -c` がパスミスで失敗する（OWASP A08: Software and Data Integrity Failures）<br/>出典: https://man7.org/linux/man-pages/man1/sha256sum.1.html |
+| タグ push 認可 | **GitHub Repository Rules で `v*.*.*` パターンへの push を maintainer ロール以上に制限** | 悪意ある contributor による偽 tag push でリリースパイプラインが誤発動するサプライチェーン攻撃を防止<br/>出典: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets |
+| リリースノート生成戦略 | **`gh release create --generate-notes` で自動生成** | タグ間のコミット・PR タイトルを GitHub が自動列挙する。手動編集の運用負担を排除しつつ、リリースマネージャーは GitHub UI から事後編集も可能。MVP 期間は技術的 PR タイトルがそのまま表示される制約あり（「feat(cli): data-portability Sub-B」等）、正式リリース時は手動 CHANGELOG 編集を検討。CHANGELOG.md との二重管理は回避（CHANGELOG.md は別 Issue でフォーマット策定）<br/>出典: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes |
 
 ### 2.3 クラウド・サーバ系項目（該当なし）
 
