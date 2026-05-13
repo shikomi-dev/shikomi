@@ -4158,7 +4158,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4194,7 +4194,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "rmp-serde",
@@ -4210,7 +4210,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "assert_cmd",
@@ -4243,7 +4243,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-infra"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "argon2",

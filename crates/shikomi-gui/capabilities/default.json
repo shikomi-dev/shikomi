@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "shikomi-gui default capabilities — core API + daemon 再起動用 shell scope",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "shikomi",
+          "cmd": "shikomi",
+          "args": [{ "validator": "^start$" }]
+        }
+      ]
+    }
+  ]
+}

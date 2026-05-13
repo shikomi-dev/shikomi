@@ -10,7 +10,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["shikomi-dev"]
 license = "MIT"
 repository = "https://github.com/shikomi-dev/shikomi"
@@ -41,8 +41,8 @@ cfg-if          = "1"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 dirs            = "5"
-shikomi-core    = { path = "crates/shikomi-core", version = "0.1.0" }
-shikomi-infra   = { path = "crates/shikomi-infra", version = "0.1.0" }
+shikomi-core    = { path = "crates/shikomi-core", version = "0.1.1" }
+shikomi-infra   = { path = "crates/shikomi-infra", version = "0.1.1" }
 # CLI 層の依存（cli-vault-commands feature で追加）
 clap            = { version = "4",    features = ["derive", "env", "wrap_help"] }
 anyhow          = "1"
