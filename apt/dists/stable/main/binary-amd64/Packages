@@ -4,7 +4,7 @@ Architecture: amd64
 Maintainer: shikomi-dev
 Installed-Size: 16458
 Depends: libappindicator3-1, libwebkit2gtk-4.1-0, libgtk-3-0
-Filename: binary-amd64/shikomi_0.1.0_amd64.deb
+Filename: pool/main/s/shikomi/shikomi_0.1.0_amd64.deb
 Size: 5894954
 MD5sum: 3852296f0b82132a573dbbcfb7838abf
 SHA1: be40e380af2daeff931f29282d18d0c9976afb59
