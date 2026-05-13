@@ -230,10 +230,37 @@ async fn worker_main(
     };
     let mut activated_stream = std::pin::pin!(activated_stream);
 
-    // 現在登録済みコンボの集合（BindShortcuts は全置換なので、増減を管理）
-    let mut bound: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-
+    // session 作成 + Activated stream 取得まで完了したのでバックエンドを ready 通知。
+    // BindShortcuts は portal が permission UI を出して user 操作を待つため
+    // 数秒〜数十秒かかる場合がある。ready 通知前に同期的に await すると
+    // daemon 起動全体がブロックされるため、ready 後に async で実行する。
     let _ = ready_tx.send(Ok(()));
+
+    // XDG Portal `BindShortcuts` は session 作成直後に 1 回だけ呼ぶ仕様
+    // (https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)
+    // 後から追加 bind しても compositor が静かに無視するため、shikomi の
+    // 取りうる全コンボ (Ctrl+Alt+[1-9]) を起点で一括 bind する。
+    // entry に対する combo の活性/非活性は vault 側の hotkey_combo で表現。
+    let prebind: Vec<NewShortcut> = (1..=9)
+        .map(|n| {
+            let id = format!("alt+ctrl+{n}");
+            // GNOME の BindShortcuts は GTK accelerator 形式 (例 `<Ctrl><Alt>1`)
+            // を preferred_trigger として受け付ける。受け付けられない場合は
+            // ユーザーが portal の設定 UI から手動で割り当てる。
+            let trigger = format!("<Ctrl><Alt>{n}");
+            NewShortcut::new(id.clone(), format!("shikomi: {id}"))
+                .preferred_trigger(Some(trigger.as_str()))
+        })
+        .collect();
+    match gs
+        .bind_shortcuts(&session, &prebind, None, BindShortcutsOptions::default())
+        .await
+    {
+        Ok(_) => tracing::info!(count = 9, "XdgPortalBackend: pre-bound Ctrl+Alt+1..9"),
+        Err(e) => {
+            tracing::error!(error = %e, "XdgPortalBackend: initial bind_shortcuts failed (hotkeys disabled)")
+        }
+    }
 
     // メインループ: cmd 受信 と Activated signal を同時に待つ
     loop {
@@ -251,14 +278,17 @@ async fn worker_main(
                 };
                 match cmd {
                     BackendCmd::Register { combo, reply } => {
-                        bound.insert(combo);
-                        let result = bind_all(&gs, &session, &bound).await;
-                        let _ = reply.send(result);
+                        // 既に session 作成時に Ctrl+Alt+1..9 を全 bind 済み。
+                        // BindShortcuts を session 作成後に再呼出すると compositor が
+                        // 静かに無視する仕様 (XDG Portal spec)。よってここは no-op。
+                        tracing::debug!(combo = %combo, "XdgPortalBackend: register noop (pre-bound)");
+                        let _ = reply.send(Ok(()));
                     }
                     BackendCmd::Unregister { combo, reply } => {
-                        bound.remove(&combo);
-                        let result = bind_all(&gs, &session, &bound).await;
-                        let _ = reply.send(result);
+                        // 同上 (no-op)。vault 側で hotkey_combo=NULL にすれば、
+                        // Activated signal が来ても上位 (HotkeyEventLoop) が無視する。
+                        tracing::debug!(combo = %combo, "XdgPortalBackend: unregister noop (pre-bound)");
+                        let _ = reply.send(Ok(()));
                     }
                     BackendCmd::Shutdown => {
                         tracing::info!("XdgPortalBackend: shutdown signal received");
@@ -281,31 +311,7 @@ fn handle_activated(
     }
 }
 
-/// 現在 `bound` 集合に含まれる全ショートカットを Portal に再登録する。
-///
-/// `BindShortcuts` は呼び出しごとに引数の集合で「全置換」される（部分更新の API がない）。
-/// `shortcut_id` は HotkeyEvent.combo で照合するため正規化済み文字列を直接使う。
-async fn bind_all(
-    gs: &GlobalShortcuts,
-    session: &ashpd::desktop::Session<GlobalShortcuts>,
-    bound: &std::collections::BTreeSet<String>,
-) -> Result<(), HotkeyError> {
-    let shortcuts: Vec<NewShortcut> = bound
-        .iter()
-        .map(|combo| {
-            NewShortcut::new(combo.clone(), format!("shikomi: {combo}"))
-                .preferred_trigger(Some(combo.as_str()))
-        })
-        .collect();
-
-    gs.bind_shortcuts(session, &shortcuts, None, BindShortcutsOptions::default())
-        .await
-        .map_err(|e| HotkeyError::RegisterFailed {
-            combo: bound.iter().next_back().cloned().unwrap_or_default(),
-            reason: format!("XDG Portal BindShortcuts failed: {e}"),
-        })?;
-    Ok(())
-}
+// NOTE: 旧 `bind_all` 関数は session 作成時の一括 prebind に置き換えたため削除。
 
 // ---------------------------------------------------------------------------
 // Availability check (使う側 = backend/mod.rs::detect() が呼ぶ)
