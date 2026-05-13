@@ -1,0 +1,5 @@
+[shikomi]
+name=shikomi
+baseurl=https://shikomi-dev.github.io/shikomi/rpm
+enabled=1
+gpgcheck=0
