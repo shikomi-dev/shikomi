@@ -136,13 +136,19 @@ jobs:
         # ubuntu-22.04 ランナーには dpkg-scanpackages / apt-ftparchive が初期導入されていない
         run: sudo apt-get update -y && sudo apt-get install -y apt-utils dpkg-dev
 
-      - name: clean stale apt layout (migration from pre-fix structure)
-        # 過去 run が apt/stable/ に書いた残骸を削除（apt 規約は dists/stable/）
-        run: rm -rf apt/stable apt/dists
+      - name: clean stale apt layout (migration from pre-pool structure)
+        # 過去 run が apt/stable/ や apt/dists/stable/main/binary-amd64/*.deb に
+        # 置いた残骸を削除（pool レイアウトでは deb は apt/pool/main/<letter>/<pkg>/）
+        run: rm -rf apt/stable apt/dists apt/pool
 
-      - name: setup apt repo directory
-        # apt 規約: dists/<suite>/<component>/binary-<arch>/Packages
-        run: mkdir -p apt/dists/stable/main/binary-amd64
+      - name: setup apt repo directory (Debian pool layout)
+        # Debian 規約:
+        #   - 実 deb: pool/<component>/<first-letter>/<package>/<deb>
+        #   - メタ:   dists/<suite>/<component>/binary-<arch>/{Packages,Packages.gz}
+        #   - Release: dists/<suite>/Release（Suite/Codename/Architectures/Components 必須）
+        run: |
+          mkdir -p apt/pool/main/s/shikomi
+          mkdir -p apt/dists/stable/main/binary-amd64
 
       - name: download deb package
         env:
@@ -152,16 +158,29 @@ jobs:
           gh release download "${TAG}" \
             --repo shikomi-dev/shikomi \
             --pattern "*.deb" \
-            --dir apt/dists/stable/main/binary-amd64
+            --dir apt/pool/main/s/shikomi \
+            --clobber
 
       - name: generate Packages and Release metadata
         run: |
-          cd apt/dists/stable/main
-          dpkg-scanpackages binary-amd64 /dev/null > binary-amd64/Packages 2>/dev/null
-          gzip -kf binary-amd64/Packages
+          # dpkg-scanpackages を apt/ から呼び、pool/... を引数に渡すと
+          # Filename: pool/main/s/shikomi/<deb> が出力される（apt が repo base
+          # からの相対 URL として正しく解決する）
+          cd apt
+          dpkg-scanpackages pool/main/s/shikomi /dev/null \
+            > dists/stable/main/binary-amd64/Packages 2>/dev/null
+          gzip -kf dists/stable/main/binary-amd64/Packages
 
-          cd "${GITHUB_WORKSPACE}"
-          apt-ftparchive release apt/dists/stable > apt/dists/stable/Release
+          # Release は Suite/Codename/Architectures/Components を明示しないと
+          # apt が「期待 stable に対し空文字を取得」と警告し検証を弾く
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=amd64 \
+            -o APT::FTPArchive::Release::Components=main \
+            -o APT::FTPArchive::Release::Origin=shikomi-dev \
+            -o APT::FTPArchive::Release::Label=shikomi \
+            release dists/stable > dists/stable/Release
 
       - name: commit and push to gh-pages
         env:
