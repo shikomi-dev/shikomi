@@ -37,13 +37,15 @@
       "deb": {
         "files": {
           "/usr/bin/shikomi": "../../target/release/shikomi",
-          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon"
+          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon",
+          "/usr/share/applications/dev.shikomi.daemon.desktop": "../shikomi-daemon/dist/dev.shikomi.daemon.desktop"
         }
       },
       "rpm": {
         "files": {
           "/usr/bin/shikomi": "../../target/release/shikomi",
-          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon"
+          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon",
+          "/usr/share/applications/dev.shikomi.daemon.desktop": "../shikomi-daemon/dist/dev.shikomi.daemon.desktop"
         }
       }
     }

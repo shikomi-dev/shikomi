@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=shikomi-daemon
+Comment=shikomi credential vault daemon (background service)
+Exec=/usr/bin/shikomi-daemon
+Icon=shikomi-gui
+Terminal=false
+NoDisplay=true
+Categories=System;

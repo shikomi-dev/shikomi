@@ -184,6 +184,20 @@ async fn worker_main(
         })
         .expect("cmd bridge thread spawn failed");
 
+    // ashpd: アプリ ID を host portal registry に登録（GlobalShortcuts CreateSession の必須前提）。
+    // AppID は `/usr/share/applications/dev.shikomi.daemon.desktop` の basename と一致させる必要がある
+    // (xdg-desktop-portal が App info 検索に使う規約 + 2 セグメント以上の制約)。
+    // `.desktop` ファイルは tauri.conf.json の bundle.linux.{deb,rpm}.files で同梱。
+    match ashpd::AppID::try_from("dev.shikomi.daemon") {
+        Ok(app_id) => match ashpd::register_host_app(app_id).await {
+            Ok(()) => tracing::info!("XdgPortalBackend: register_host_app(dev.shikomi.daemon) ok"),
+            Err(e) => {
+                tracing::warn!(error = %e, "XdgPortalBackend: register_host_app failed (dev 環境では .desktop 未配置の可能性)")
+            }
+        },
+        Err(e) => tracing::warn!(error = %e, "XdgPortalBackend: AppID parse failed"),
+    }
+
     // ashpd: GlobalShortcuts proxy + session 作成
     let gs = match GlobalShortcuts::new().await {
         Ok(g) => g,
