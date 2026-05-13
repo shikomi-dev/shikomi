@@ -34,7 +34,7 @@ clippy:
 
 # 全 workspace テスト (確定 C: --all-features は付けない)
 test:
-    cargo test --workspace
+    cargo test --workspace --features "shikomi-daemon/test-fixtures,shikomi-infra/test-fixtures"
 
 test-core:
     cargo test -p shikomi-core

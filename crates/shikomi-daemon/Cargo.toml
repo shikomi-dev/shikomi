@@ -47,6 +47,11 @@ global-hotkey      = { workspace = true }
 arboard            = { workspace = true }
 notify-rust        = { workspace = true }
 
+# Issue #160: Wayland グローバルホットキー対応（XDG Portal GlobalShortcuts）
+# Linux Wayland セッションでは global-hotkey が動作しないため、Portal 経由で登録する。
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd              = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 nix                = { workspace = true }
 
