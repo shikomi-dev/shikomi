@@ -1,6 +1,6 @@
 {
   "productName": "shikomi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "dev.shikomi.app",
   "build": {
     "frontendDist": "ui/dist",
@@ -22,17 +22,7 @@
       }
     ]
   },
-  "plugins": {
-    "shell": {
-      "scope": [
-        {
-          "name": "shikomi",
-          "cmd": "shikomi",
-          "args": [{ "validator": "^start$" }]
-        }
-      ]
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "targets": ["deb", "rpm", "appimage", "nsis", "msi", "dmg"],
@@ -42,6 +32,22 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/shikomi": "../../target/release/shikomi",
+          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon",
+          "/usr/share/applications/dev.shikomi.daemon.desktop": "../shikomi-daemon/dist/dev.shikomi.daemon.desktop"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/shikomi": "../../target/release/shikomi",
+          "/usr/bin/shikomi-daemon": "../../target/release/shikomi-daemon",
+          "/usr/share/applications/dev.shikomi.daemon.desktop": "../shikomi-daemon/dist/dev.shikomi.daemon.desktop"
+        }
+      }
+    }
   }
 }

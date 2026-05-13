@@ -164,7 +164,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -186,6 +186,20 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
+name = "ashpd"
+version = "0.13.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3118453e020b8e3e0da25ef9a1d0d51d668874358af11aded9d91a8b9c25f323"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "getrandom 0.4.2",
+ "serde",
+ "tokio",
+ "zbus",
+]
 
 [[package]]
 name = "assert_cmd"
@@ -4158,7 +4172,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4194,7 +4208,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "rmp-serde",
@@ -4210,9 +4224,10 @@ dependencies = [
 
 [[package]]
 name = "shikomi-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
+ "ashpd",
  "assert_cmd",
  "async-trait",
  "bytes",
@@ -4243,7 +4258,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -4267,7 +4282,7 @@ dependencies = [
 
 [[package]]
 name = "shikomi-infra"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5009,6 +5024,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -6552,6 +6568,7 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

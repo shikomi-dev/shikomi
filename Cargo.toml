@@ -10,7 +10,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["shikomi-dev"]
 license = "MIT"
 repository = "https://github.com/shikomi-dev/shikomi"
@@ -41,8 +41,8 @@ cfg-if          = "1"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 dirs            = "5"
-shikomi-core    = { path = "crates/shikomi-core", version = "0.1.0" }
-shikomi-infra   = { path = "crates/shikomi-infra", version = "0.1.0" }
+shikomi-core    = { path = "crates/shikomi-core", version = "0.1.1" }
+shikomi-infra   = { path = "crates/shikomi-infra", version = "0.1.1" }
 # CLI 層の依存（cli-vault-commands feature で追加）
 clap            = { version = "4",    features = ["derive", "env", "wrap_help"] }
 anyhow          = "1"
@@ -103,6 +103,9 @@ async-trait     = { version = "0.1", default-features = false }
 global-hotkey    = { version = "0.8", default-features = false }
 arboard          = { version = "3.6", default-features = false }
 notify-rust      = { version = "4.11", default-features = false, features = ["z"] }
+# Issue #160: Wayland グローバルホットキー対応 — XDG Portal GlobalShortcuts wrapper。
+# tokio feature: 内部の zbus を tokio runtime にバインド。
+ashpd            = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 # Sub-C (#41) test-design TC-C-P01 / TC-C-P02 用 proptest。1000 ケースで
 # AAD 入れ替え検出 + encrypt/decrypt 往復不変条件を property 検証する。
 # Bug-C-001 顛末: 銀ちゃん impl は単発 fixture 検証のみで proptest 不在、

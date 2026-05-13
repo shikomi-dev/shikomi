@@ -6,3 +6,4 @@ target/
 
 # OS specific
 .DS_Store
+crates/shikomi-gui/gen/

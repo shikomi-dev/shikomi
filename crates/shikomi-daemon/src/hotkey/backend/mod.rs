@@ -6,6 +6,9 @@ use futures_util::stream::BoxStream;
 
 pub(crate) mod global_hotkey;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod xdg_portal;
+
 // -------------------------------------------------------------------
 // HotkeyEvent
 // -------------------------------------------------------------------
@@ -77,8 +80,11 @@ pub trait HotkeyBackend: Send + Sync + 'static {
 /// `dyn HotkeyBackend` の代わりに enum で実装することで、ホットキーイベントループの
 /// hot path でのヒープアロケーションを避ける。
 pub enum BackendEnum {
-    /// `global-hotkey` crate を使用するクロスプラットフォームバックエンド。
+    /// `global-hotkey` crate を使用するクロスプラットフォームバックエンド（X11 / macOS / Windows）。
     GlobalHotkey(global_hotkey::GlobalHotkeyBackend),
+    /// XDG Desktop Portal `org.freedesktop.portal.GlobalShortcuts` 経由（Linux Wayland 専用）。
+    #[cfg(target_os = "linux")]
+    XdgPortal(xdg_portal::XdgPortalBackend),
     /// バックエンド未対応環境向け noop 実装（tracing::warn のみ）。
     Null(NullBackend),
     /// **テスト専用**。イベント注入チャンネルを持つモックバックエンド。
@@ -89,8 +95,28 @@ pub enum BackendEnum {
 impl BackendEnum {
     /// OS / セッションを検出して適切なバックエンドを構築する。
     ///
-    /// `global-hotkey` バックエンドの初期化に失敗した場合は `NullBackend` にフォールバック。
+    /// 検出順:
+    /// 1. Linux Wayland (`WAYLAND_DISPLAY` set) → XDG Portal GlobalShortcuts (Issue #160)
+    /// 2. それ以外 → `global-hotkey` crate (X11 / macOS / Windows)
+    /// 3. 全て失敗 → `NullBackend` フォールバック
     pub fn detect() -> Arc<Self> {
+        // Linux Wayland: XDG Portal バックエンドを優先
+        #[cfg(target_os = "linux")]
+        if xdg_portal::is_wayland() {
+            match xdg_portal::XdgPortalBackend::new() {
+                Ok(backend) => {
+                    tracing::info!("HotkeyBackend: using XDG Portal (Wayland) backend");
+                    return Arc::new(Self::XdgPortal(backend));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "HotkeyBackend: XDG Portal init failed on Wayland, falling back to global-hotkey (will likely fail)"
+                    );
+                }
+            }
+        }
+
         match global_hotkey::GlobalHotkeyBackend::new() {
             Ok(backend) => {
                 tracing::info!("HotkeyBackend: using global-hotkey backend");
@@ -111,6 +137,8 @@ impl HotkeyBackend for BackendEnum {
     fn register(&self, combo: &str) -> Result<(), HotkeyError> {
         match self {
             Self::GlobalHotkey(b) => b.register(combo),
+            #[cfg(target_os = "linux")]
+            Self::XdgPortal(b) => b.register(combo),
             Self::Null(b) => b.register(combo),
             Self::Mock(b) => b.register(combo),
         }
@@ -119,6 +147,8 @@ impl HotkeyBackend for BackendEnum {
     fn unregister(&self, combo: &str) -> Result<(), HotkeyError> {
         match self {
             Self::GlobalHotkey(b) => b.unregister(combo),
+            #[cfg(target_os = "linux")]
+            Self::XdgPortal(b) => b.unregister(combo),
             Self::Null(b) => b.unregister(combo),
             Self::Mock(b) => b.unregister(combo),
         }
@@ -127,6 +157,8 @@ impl HotkeyBackend for BackendEnum {
     fn event_stream(&self) -> BoxStream<'static, HotkeyEvent> {
         match self {
             Self::GlobalHotkey(b) => b.event_stream(),
+            #[cfg(target_os = "linux")]
+            Self::XdgPortal(b) => b.event_stream(),
             Self::Null(b) => b.event_stream(),
             Self::Mock(b) => b.event_stream(),
         }

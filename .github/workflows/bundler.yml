@@ -51,6 +51,12 @@ jobs:
             libssl-dev \
             pkg-config
 
+      - name: build CLI/daemon binaries (must precede tauri bundle for files inclusion)
+        # tauri.conf.json bundle.linux.{deb,rpm}.files が target/release/shikomi
+        # と target/release/shikomi-daemon を参照するため、tauri build より先にビルド。
+        # release.yml と同パターン (Issue #160 v0.1.1)。
+        run: cargo build --release -p shikomi-cli -p shikomi-daemon
+
       - name: tauri build (linux)
         # 設計根拠: jobs.md §2.4
         working-directory: crates/shikomi-gui

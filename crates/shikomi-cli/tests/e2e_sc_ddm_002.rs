@@ -55,11 +55,28 @@ fn expected_autostart_file(home: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
+/// テスト用 isolated 環境で shikomi コマンドを構築する。
+///
+/// HOME を temp dir に置き換えるだけでなく、`DBUS_SESSION_BUS_ADDRESS` も
+/// 削除する（これを残すと SystemdBackend::is_available() が真になり、
+/// XDG Autostart fallback ではなく実 systemd を呼んでしまい、dev 機の
+/// 既存 systemd ユーザーセッションを汚染しテストも fail する）。
+///
+/// CI ランナー（GitHub Actions ubuntu-22.04）は元々 D-Bus 未設定で
+/// 自然と XDG が選択されるが、開発機（GNOME/KDE 等）では明示 unset 必須。
+fn isolated_shikomi_cmd(home_dir: &std::path::Path) -> Command {
+    let mut cmd = Command::cargo_bin("shikomi").expect("shikomi binary");
+    cmd.env("HOME", home_dir)
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR");
+    cmd
+}
+
 /// `shikomi daemon <args>` を `HOME=home_dir` 環境で実行して結果を返す。
 fn run_daemon_cmd(home_dir: &std::path::Path, args: &[&str]) -> assert_cmd::assert::Assert {
-    Command::cargo_bin("shikomi")
-        .expect("shikomi binary")
-        .env("HOME", home_dir)
+    isolated_shikomi_cmd(home_dir)
         .arg("daemon")
         .args(args)
         .assert()
@@ -183,6 +200,8 @@ fn sc_ddm_002_tc003_ac09_daemon_status_no_ipc_always_exit_0() {
         let output = Command::cargo_bin("shikomi")
             .expect("shikomi binary")
             .env("HOME", home.path())
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .args(["daemon", "status", "--no-ipc"])
             .output()
             .expect("実行失敗");
@@ -222,6 +241,8 @@ fn sc_ddm_002_tc003_ac09_daemon_status_no_ipc_always_exit_0() {
         let output = Command::cargo_bin("shikomi")
             .expect("shikomi binary")
             .env("HOME", home.path())
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .args(["daemon", "status", "--no-ipc"])
             .output()
             .expect("実行失敗");
@@ -257,6 +278,8 @@ fn sc_ddm_002_tc003b_ac09_daemon_status_not_running_when_no_daemon() {
     let output = Command::cargo_bin("shikomi")
         .expect("shikomi binary")
         .env("HOME", home.path())
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR")
         .env("XDG_RUNTIME_DIR", fake_xdg.path())
         .args(["daemon", "status"])
         .output()
@@ -334,6 +357,8 @@ fn tc_it_127_quiet_flag_suppresses_install_success_message() {
     let output = Command::cargo_bin("shikomi")
         .expect("shikomi binary")
         .env("HOME", home.path())
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR")
         .args(["daemon", "install", "--quiet"])
         .output()
         .expect("実行失敗");
@@ -376,6 +401,8 @@ fn tc_it_128_quiet_flag_suppresses_uninstall_success_message() {
     let output = Command::cargo_bin("shikomi")
         .expect("shikomi binary")
         .env("HOME", home.path())
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR")
         .args(["daemon", "uninstall", "--quiet"])
         .output()
         .expect("実行失敗");
@@ -436,6 +463,8 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
         let output = Command::cargo_bin("shikomi")
             .expect("shikomi binary")
             .env("HOME", home.path())
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .args(["daemon", "status", "--no-ipc"])
             .output()
             .expect("実行失敗");
@@ -452,6 +481,8 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
         let output = Command::cargo_bin("shikomi")
             .expect("shikomi binary")
             .env("HOME", home.path())
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .args(["daemon", "status", "--no-ipc"])
             .output()
             .expect("実行失敗");
@@ -468,6 +499,8 @@ fn tc_it_132_status_reflects_install_uninstall_cycle() {
         let output = Command::cargo_bin("shikomi")
             .expect("shikomi binary")
             .env("HOME", home.path())
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .args(["daemon", "status", "--no-ipc"])
             .output()
             .expect("実行失敗");

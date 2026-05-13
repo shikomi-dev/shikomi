@@ -41,7 +41,7 @@ export function resolveError(err: GUIError): ErrorResult {
     case "daemon_not_running":
       return {
         type: "message",
-        text: "daemon が起動していません。shikomi start を実行してください",
+        text: "daemon が起動していません。`shikomi daemon install` で自動起動を有効化するか、`systemctl --user start shikomi-daemon` で手動起動してください",
       };
 
     case "not_connected":

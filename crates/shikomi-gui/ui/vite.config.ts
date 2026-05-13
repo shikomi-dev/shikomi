@@ -15,6 +15,15 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
   },
   clearScreen: false,
+  // Vite 6 dev サーバの esbuild prebundle は build.target を参照せず、
+  // 既定で古い browserslist 互換ターゲットを使うため、solid-js 内の
+  // destructuring が "not supported yet" で失敗する。
+  // 依存プリバンドル側のみ esnext に引き上げる（本番ビルド target は build.target を維持）。
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "esnext",
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
