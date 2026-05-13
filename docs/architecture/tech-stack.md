@@ -102,9 +102,9 @@ flowchart TD
     Linux["build-linux\n(ubuntu-22.04)\ndeb + rpm + AppImage"]
     Mac["build-macos\n(macos-latest)\nDMG\n(HAS_APPLE_CERT=false → unsigned)"]
     Win["build-windows\n(windows-latest)\nMSI + NSIS exe"]
-    UL["upload-artifact\n(linux, 90d)"]
-    UM["upload-artifact\n(macos, 90d)"]
-    UW["upload-artifact\n(windows, 90d)"]
+    UL["upload-artifact\n(linux, 1d)"]
+    UM["upload-artifact\n(macos, 1d)"]
+    UW["upload-artifact\n(windows, 1d)"]
     Publish["release-publish\n(ubuntu-22.04)\nneeds: [build-linux, build-macos, build-windows]\ngh release create --draft\nsha256sum → SHA256SUMS.txt\ngh release upload ×3 OS + SHA256SUMS.txt\ngh release edit --draft=false"]
 
     Tag --> Linux & Mac & Win
@@ -122,10 +122,11 @@ flowchart TD
 | draft → published フロー | **draft 経由** | 3 OS ビルド全成功後に `gh release create --draft` → artifact アタッチ → `--draft=false`。直接 published にすると artifact アタッチ前の空 Release が瞬間的に外部公開される欠陥を防ぐ |
 | `permissions: contents: write` の付与範囲 | **`release-publish` ジョブのみ** | `gh release create` に必要な write 権限を build ジョブには与えない（最小権限原則）。ワークフローデフォルトは `contents: read` を維持する |
 | タグパターン | **`v[0-9]+.[0-9]+.[0-9]+`** | pre-release タグ（`v1.0.0-alpha.1` 等）は本ワークフローの自動リリース対象外。pre-release は別途 `workflow_dispatch` で手動対応（将来拡張）|
-| artifact 保持期間（release.yml）| **90 日** | `bundler.yml`（PR: 7 日 / main: 30 日）より長期。GitHub Release にも添付済みのため artifact は補助的位置づけだが、デバッグ用途で 90 日確保 |
+| artifact 保持期間（release.yml）| **1 日** | release-publish job 完了時点で GitHub Releases に永続保存済みのため、一時 artifact の長期保持は不要。ストレージコスト最小化（`bundler.yml` PR: 7 日 / main: 30 日 とは別ポリシー）|
 | `release-publish` ジョブの `needs` 設定 | **`needs: [build-linux, build-macos, build-windows]` — 3 OS 全成功必須** | 1 OS でも失敗すれば `release-publish` は実行されず、Release draft も含めて作成されない（Fail Fast / partial release 防止）。Linux のみ成功した状態で Release が公開されるような事態を構造的に防ぐ |
 | リリース成果物整合性検証（OWASP A08）| **SHA256 チェックサムを `SHA256SUMS.txt` として Release に同梱** | `release-publish` ジョブが `gh release upload` 前に `sha256sum *.dmg *.exe *.deb *.rpm *.AppImage > SHA256SUMS.txt` を生成し、バイナリと共に Release にアタッチする。GitHub アカウント侵害・CDN 改ざん・MITM に対してダウンロード後の整合性検証手段を提供する（パスワードマネージャとして必須。`threat-model.md` A08 対応）。将来は `minisign` による署名を追加可能（自動更新 pipeline が公開鍵バンドルを要求する場合）|
 | タグ push 認可（供給チェーン攻撃対策）| **GitHub Tag protection rules で maintainer ロールのみに制限** | `v[0-9]+.[0-9]+.[0-9]+` タグ push で release pipeline が自動発火するため、write 権限を持つ任意のコラボレーターが悪意あるビルドをリリースとして公開できる攻撃面を閉じる。GitHub リポジトリ設定 → Rules → Tag protection rules で `v*.*.*` パターンを maintainer role に限定すること（OWASP A08: 供給チェーン完全性）。出典: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/configuring-tag-protection-rules |
+| リリースノート生成戦略 | **`gh release create --generate-notes` で自動生成** | タグ間のコミット・PR タイトルを GitHub が自動列挙する。手動編集の運用負担を排除しつつ、リリースマネージャーは GitHub UI から事後編集も可能。MVP 期間は技術的 PR タイトルがそのまま表示される制約あり（「feat(cli): data-portability Sub-B」等）、正式リリース時は手動 CHANGELOG 編集を検討。CHANGELOG.md との二重管理は回避（CHANGELOG.md は別 Issue でフォーマット策定）出典: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes |
 
 ### 2.3 クラウド・サーバ系項目（該当なし）
 
