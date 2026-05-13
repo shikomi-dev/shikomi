@@ -51,9 +51,9 @@ jobs:
         with:
           name: shikomi-installer-${{ github.ref_name }}-linux
           path: |
-            crates/shikomi-gui/target/release/bundle/deb/*.deb
-            crates/shikomi-gui/target/release/bundle/rpm/*.rpm
-            crates/shikomi-gui/target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
           retention-days: 1
 
   # ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4 as of 2026-05-11
         with:
           name: shikomi-installer-${{ github.ref_name }}-macos
-          path: crates/shikomi-gui/target/release/bundle/dmg/*.dmg
+          path: target/release/bundle/dmg/*.dmg
           retention-days: 1
 
   # ---------------------------------------------------------------------------
@@ -141,8 +141,8 @@ jobs:
         with:
           name: shikomi-installer-${{ github.ref_name }}-windows
           path: |
-            crates/shikomi-gui/target/release/bundle/msi/*.msi
-            crates/shikomi-gui/target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
           retention-days: 1
 
   # ---------------------------------------------------------------------------
