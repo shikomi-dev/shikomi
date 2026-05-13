@@ -15,48 +15,70 @@
 | OS | 対応バージョン |
 |----|--------------|
 | Windows | 10 21H2 以降、11 |
-| macOS | 12 Monterey 以降（Apple Silicon / Intel 両対応）|
+| macOS | 12 Monterey 以降（Apple Silicon） |
 | Linux | X11 / Wayland 両対応（Ubuntu 22.04+、Arch、その他 glibc 2.35+ ディストリ）|
 
 ## インストール（Install）
 
 ### Windows
 
+**winget（Windows Package Manager）**
+
 ```powershell
 winget install shikomi-dev.shikomi
 ```
 
-または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から `shikomi-windows-x86_64.msi` をダウンロードして実行。
+または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から最新の `.msi` または `.exe` をダウンロードして実行。
 
-> **Windows SmartScreen について**: shikomi のインストーラは EV/OV コード署名済みです。インストール時に「Windows によって PC が保護されました」という SmartScreen の警告が表示された場合は、次の手順で続行できます:
-> 1. 「詳細情報」をクリック
-> 2. 発行元が **`shikomi-dev`** であることを確認
-> 3. 「実行」をクリック
->
-> 署名元が `shikomi-dev` 以外の場合は実行しないでください。
+> **Windows SmartScreen について（v0.1.0）**: v0.1.0 はコード署名なしのビルドです（Issue #130 で対応予定）。
+> インストール時に SmartScreen の警告が表示された場合は「詳細情報」→「実行」で続行できます。
+> 発行元が `shikomi-dev` であることを確認してください。
 
 ### macOS
 
+**Homebrew（推奨）**
+
 ```bash
+brew tap shikomi-dev/homebrew-shikomi
 brew install --cask shikomi
 ```
 
-または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から `shikomi-macos-universal.dmg` をダウンロードして開く。
+または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から最新の `.dmg` をダウンロードして開く。
 
-**Apple Developer ID 署名済み・Notarization 済みのため、Gatekeeper の警告は発生しない。**
+> **Gatekeeper について（v0.1.0）**: v0.1.0 は Apple Developer ID 署名なしのビルドです（Issue #130 で対応予定）。
+> 初回起動時に警告が出た場合は、右クリック → 「開く」で起動できます。
+
+> **アーキテクチャ**: v0.1.0 は Apple Silicon (arm64) 専用です。Intel Mac 対応は Issue #130 の署名対応後に追加予定。
 
 ### Linux
 
-```bash
-# apt（Ubuntu / Debian）
-sudo apt install shikomi
+**apt（Ubuntu / Debian）**
 
-# AppImage（汎用）
-chmod +x shikomi-linux-x86_64.AppImage
-./shikomi-linux-x86_64.AppImage
+```bash
+# shikomi apt リポジトリを追加
+echo "deb [trusted=yes] https://shikomi-dev.github.io/shikomi/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/shikomi.list
+sudo apt update
+sudo apt install shikomi
 ```
 
-または [GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から各パッケージをダウンロード。
+**dnf / yum（Fedora / RHEL / CentOS）**
+
+```bash
+# shikomi DNF リポジトリを追加
+sudo dnf config-manager --add-repo \
+  https://shikomi-dev.github.io/shikomi/rpm/shikomi.repo
+sudo dnf install shikomi
+```
+
+**AppImage（汎用）**
+
+[GitHub Releases](https://github.com/shikomi-dev/shikomi/releases) から `shikomi_VERSION_amd64.AppImage` をダウンロード:
+
+```bash
+chmod +x shikomi_*_amd64.AppImage
+./shikomi_*_amd64.AppImage
+```
 
 #### Linux 追加セットアップ
 
