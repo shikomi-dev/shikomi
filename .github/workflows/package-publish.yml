@@ -121,6 +121,7 @@ jobs:
   # ---------------------------------------------------------------------------
   apt-publish:
     name: apt-publish
+    needs: rpm-publish  # gh-pages の同時 push レース回避 — rpm 完了後に実行
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -135,8 +136,13 @@ jobs:
         # ubuntu-22.04 ランナーには dpkg-scanpackages / apt-ftparchive が初期導入されていない
         run: sudo apt-get update -y && sudo apt-get install -y apt-utils dpkg-dev
 
+      - name: clean stale apt layout (migration from pre-fix structure)
+        # 過去 run が apt/stable/ に書いた残骸を削除（apt 規約は dists/stable/）
+        run: rm -rf apt/stable apt/dists
+
       - name: setup apt repo directory
-        run: mkdir -p apt/stable/main/binary-amd64
+        # apt 規約: dists/<suite>/<component>/binary-<arch>/Packages
+        run: mkdir -p apt/dists/stable/main/binary-amd64
 
       - name: download deb package
         env:
@@ -146,16 +152,16 @@ jobs:
           gh release download "${TAG}" \
             --repo shikomi-dev/shikomi \
             --pattern "*.deb" \
-            --dir apt/stable/main/binary-amd64
+            --dir apt/dists/stable/main/binary-amd64
 
       - name: generate Packages and Release metadata
         run: |
-          cd apt/stable/main
+          cd apt/dists/stable/main
           dpkg-scanpackages binary-amd64 /dev/null > binary-amd64/Packages 2>/dev/null
           gzip -kf binary-amd64/Packages
 
           cd "${GITHUB_WORKSPACE}"
-          apt-ftparchive release apt/stable > apt/stable/Release
+          apt-ftparchive release apt/dists/stable > apt/dists/stable/Release
 
       - name: commit and push to gh-pages
         env:
