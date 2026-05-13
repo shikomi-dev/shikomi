@@ -1,5 +1,7 @@
 # package-publish.yml — パッケージマネージャー配布パイプライン（Issue #154）
-# トリガ: GitHub Release が published になった時点で起動
+# トリガ:
+#   release: published     — 通常運用。新リリース公開時に自動実行
+#   workflow_dispatch      — 手動再実行用（過去リリースへの遡及適用、初回構築など）
 # 担当:
 #   winget-publish   : winget-pkgs へ自動 PR（Microsoft 審査は外部依存）
 #   homebrew-publish : homebrew-shikomi tap の formula を自動更新
@@ -11,6 +13,12 @@ name: Package Publish
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '対象リリースタグ (例: v0.1.0)。release イベントから起動された場合は自動補完'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -29,16 +37,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: submit to winget-pkgs
-        uses: vedantmgoyal9/winget-releaser@main
+        # vedantmgoyal9/winget-releaser v2 (2025-01-27) — supply chain pinning
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e
         with:
           identifier: shikomi-dev.shikomi
-          version: ${{ github.ref_name }}
-          release-tag: ${{ github.ref_name }}
+          version: ${{ inputs.tag || github.ref_name }}
+          release-tag: ${{ inputs.tag || github.ref_name }}
           installers-regex: \_x64\_en-US\.msi$|\_x64-setup\.exe$
           token: ${{ secrets.WINGET_TOKEN }}
-        # WINGET_TOKEN: winget-pkgs リポジトリへの PR 権限を持つ PAT
-        # secrets に未設定の場合はスキップ（MVP フェーズ: 手動提出）
-        continue-on-error: true
 
   # ---------------------------------------------------------------------------
   # homebrew-publish
@@ -54,47 +60,56 @@ jobs:
       - name: update homebrew tap formula
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${TAG#v}"
 
           # DMG の SHA256 を release から取得
-          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern SHA256SUMS.txt             --output SHA256SUMS.txt
+          gh release download "${TAG}" \
+            --repo shikomi-dev/shikomi \
+            --pattern SHA256SUMS.txt \
+            --output SHA256SUMS.txt
           DMG_SHA=$(grep "aarch64.dmg" SHA256SUMS.txt | awk '{print $1}')
 
           # homebrew-shikomi の現在の formula を取得して更新
           FORMULA_PATH="Casks/shikomi.rb"
-          CURRENT=$(gh api             "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}"             --jq '.sha')
+          CURRENT=$(gh api \
+            "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}" \
+            --jq '.sha')
 
-          # 新しい formula 内容を生成
-          FORMULA=$(cat << RUBY
-cask "shikomi" do
-  version "${VERSION}"
-  sha256 "${DMG_SHA}"
+          # 新しい formula 内容を生成（heredoc 終端 RUBY は列 0 に配置）
+          FORMULA=$(cat <<RUBY
+          cask "shikomi" do
+            version "${VERSION}"
+            sha256 "${DMG_SHA}"
 
-  url "https://github.com/shikomi-dev/shikomi/releases/download/v\#{version}/shikomi_\#{version}_aarch64.dmg"
-  name "shikomi"
-  desc "Global hotkey clipboard manager --- paste registered strings into any app instantly"
-  homepage "https://github.com/shikomi-dev/shikomi"
+            url "https://github.com/shikomi-dev/shikomi/releases/download/v\#{version}/shikomi_\#{version}_aarch64.dmg"
+            name "shikomi"
+            desc "Global hotkey clipboard manager --- paste registered strings into any app instantly"
+            homepage "https://github.com/shikomi-dev/shikomi"
 
-  depends_on macos: ">= :monterey"
+            depends_on macos: ">= :monterey"
 
-  app "shikomi.app"
+            app "shikomi.app"
 
-  uninstall quit: "dev.shikomi.gui"
+            uninstall quit: "dev.shikomi.gui"
 
-  zap trash: [
-    "~/Library/Application Support/dev.shikomi.gui",
-    "~/.local/share/shikomi",
-  ]
-end
-RUBY
+            zap trash: [
+              "~/Library/Application Support/dev.shikomi.gui",
+              "~/.local/share/shikomi",
+            ]
+          end
+          RUBY
           )
 
           ENCODED=$(echo "${FORMULA}" | base64 -w 0)
 
           # formula を更新コミット
-          gh api -X PUT             "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}"             --field message="chore: update shikomi to ${VERSION}"             --field content="${ENCODED}"             --field sha="${CURRENT}"
+          gh api -X PUT \
+            "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}" \
+            --field message="chore: update shikomi to ${VERSION}" \
+            --field content="${ENCODED}" \
+            --field sha="${CURRENT}"
 
   # ---------------------------------------------------------------------------
   # apt-publish
@@ -116,15 +131,22 @@ RUBY
           ref: gh-pages
           fetch-depth: 0
 
+      - name: install apt-utils and dpkg-dev
+        # ubuntu-22.04 ランナーには dpkg-scanpackages / apt-ftparchive が初期導入されていない
+        run: sudo apt-get update -y && sudo apt-get install -y apt-utils dpkg-dev
+
       - name: setup apt repo directory
         run: mkdir -p apt/stable/main/binary-amd64
 
       - name: download deb package
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern "*.deb"             --dir apt/stable/main/binary-amd64
+          gh release download "${TAG}" \
+            --repo shikomi-dev/shikomi \
+            --pattern "*.deb" \
+            --dir apt/stable/main/binary-amd64
 
       - name: generate Packages and Release metadata
         run: |
@@ -132,15 +154,17 @@ RUBY
           dpkg-scanpackages binary-amd64 /dev/null > binary-amd64/Packages 2>/dev/null
           gzip -kf binary-amd64/Packages
 
-          cd /home/runner/work/shikomi/shikomi
+          cd "${GITHUB_WORKSPACE}"
           apt-ftparchive release apt/stable > apt/stable/Release
 
       - name: commit and push to gh-pages
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add apt/
-          git commit -m "chore: update apt repo for ${{ github.ref_name }}" || echo "no changes"
+          git commit -m "chore: update apt repo for ${TAG}" || echo "no changes"
           git push origin gh-pages
 
   # ---------------------------------------------------------------------------
@@ -164,7 +188,7 @@ RUBY
           fetch-depth: 0
 
       - name: install createrepo_c
-        run: sudo apt-get install -y createrepo-c
+        run: sudo apt-get update -y && sudo apt-get install -y createrepo-c
 
       - name: setup rpm repo directory
         run: mkdir -p rpm/packages
@@ -172,26 +196,31 @@ RUBY
       - name: download rpm package
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern "*.rpm"             --dir rpm/packages
+          gh release download "${TAG}" \
+            --repo shikomi-dev/shikomi \
+            --pattern "*.rpm" \
+            --dir rpm/packages
 
       - name: generate repodata and repo file
         run: |
           createrepo_c rpm/
 
-          cat > rpm/shikomi.repo << EOF
-[shikomi]
-name=shikomi
-baseurl=https://shikomi-dev.github.io/shikomi/rpm
-enabled=1
-gpgcheck=0
-EOF
+          cat > rpm/shikomi.repo <<EOF
+          [shikomi]
+          name=shikomi
+          baseurl=https://shikomi-dev.github.io/shikomi/rpm
+          enabled=1
+          gpgcheck=0
+          EOF
 
       - name: commit and push to gh-pages
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add rpm/
-          git commit -m "chore: update rpm repo for ${{ github.ref_name }}" || echo "no changes"
+          git commit -m "chore: update rpm repo for ${TAG}" || echo "no changes"
           git push origin gh-pages
