@@ -1,0 +1,197 @@
+# package-publish.yml — パッケージマネージャー配布パイプライン（Issue #154）
+# トリガ: GitHub Release が published になった時点で起動
+# 担当:
+#   winget-publish   : winget-pkgs へ自動 PR（Microsoft 審査は外部依存）
+#   homebrew-publish : homebrew-shikomi tap の formula を自動更新
+#   apt-publish      : GitHub Pages に Debian apt リポジトリを更新
+#   rpm-publish      : GitHub Pages に YUM/DNF リポジトリを更新
+
+name: Package Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # winget-publish
+  # microsoft/winget-pkgs へ自動 PR を作成する
+  # ⚠️ winget-pkgs へのマージは Microsoft の人間レビューが必要（外部依存）
+  # ---------------------------------------------------------------------------
+  winget-publish:
+    name: winget-publish
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: submit to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: shikomi-dev.shikomi
+          version: ${{ github.ref_name }}
+          release-tag: ${{ github.ref_name }}
+          installers-regex: \_x64\_en-US\.msi$|\_x64-setup\.exe$
+          token: ${{ secrets.WINGET_TOKEN }}
+        # WINGET_TOKEN: winget-pkgs リポジトリへの PR 権限を持つ PAT
+        # secrets に未設定の場合はスキップ（MVP フェーズ: 手動提出）
+        continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # homebrew-publish
+  # shikomi-dev/homebrew-shikomi tap の Cask formula を更新する
+  # ---------------------------------------------------------------------------
+  homebrew-publish:
+    name: homebrew-publish
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: update homebrew tap formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+
+          # DMG の SHA256 を release から取得
+          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern SHA256SUMS.txt             --output SHA256SUMS.txt
+          DMG_SHA=$(grep "aarch64.dmg" SHA256SUMS.txt | awk '{print $1}')
+
+          # homebrew-shikomi の現在の formula を取得して更新
+          FORMULA_PATH="Casks/shikomi.rb"
+          CURRENT=$(gh api             "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}"             --jq '.sha')
+
+          # 新しい formula 内容を生成
+          FORMULA=$(cat << RUBY
+cask "shikomi" do
+  version "${VERSION}"
+  sha256 "${DMG_SHA}"
+
+  url "https://github.com/shikomi-dev/shikomi/releases/download/v\#{version}/shikomi_\#{version}_aarch64.dmg"
+  name "shikomi"
+  desc "Global hotkey clipboard manager --- paste registered strings into any app instantly"
+  homepage "https://github.com/shikomi-dev/shikomi"
+
+  depends_on macos: ">= :monterey"
+
+  app "shikomi.app"
+
+  uninstall quit: "dev.shikomi.gui"
+
+  zap trash: [
+    "~/Library/Application Support/dev.shikomi.gui",
+    "~/.local/share/shikomi",
+  ]
+end
+RUBY
+          )
+
+          ENCODED=$(echo "${FORMULA}" | base64 -w 0)
+
+          # formula を更新コミット
+          gh api -X PUT             "repos/shikomi-dev/homebrew-shikomi/contents/${FORMULA_PATH}"             --field message="chore: update shikomi to ${VERSION}"             --field content="${ENCODED}"             --field sha="${CURRENT}"
+
+  # ---------------------------------------------------------------------------
+  # apt-publish
+  # GitHub Pages に Debian apt リポジトリを構築・更新する
+  # ユーザー手順:
+  #   echo "deb [trusted=yes] https://shikomi-dev.github.io/shikomi/apt stable main" \
+  #     | sudo tee /etc/apt/sources.list.d/shikomi.list
+  #   sudo apt update && sudo apt install shikomi
+  # ---------------------------------------------------------------------------
+  apt-publish:
+    name: apt-publish
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write  # gh-pages ブランチへの push に必要
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: setup apt repo directory
+        run: mkdir -p apt/stable/main/binary-amd64
+
+      - name: download deb package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern "*.deb"             --dir apt/stable/main/binary-amd64
+
+      - name: generate Packages and Release metadata
+        run: |
+          cd apt/stable/main
+          dpkg-scanpackages binary-amd64 /dev/null > binary-amd64/Packages 2>/dev/null
+          gzip -kf binary-amd64/Packages
+
+          cd /home/runner/work/shikomi/shikomi
+          apt-ftparchive release apt/stable > apt/stable/Release
+
+      - name: commit and push to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apt/
+          git commit -m "chore: update apt repo for ${{ github.ref_name }}" || echo "no changes"
+          git push origin gh-pages
+
+  # ---------------------------------------------------------------------------
+  # rpm-publish
+  # GitHub Pages に YUM/DNF リポジトリを構築・更新する
+  # ユーザー手順:
+  #   sudo dnf config-manager --add-repo \
+  #     https://shikomi-dev.github.io/shikomi/rpm/shikomi.repo
+  #   sudo dnf install shikomi
+  # ---------------------------------------------------------------------------
+  rpm-publish:
+    name: rpm-publish
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: install createrepo_c
+        run: sudo apt-get install -y createrepo-c
+
+      - name: setup rpm repo directory
+        run: mkdir -p rpm/packages
+
+      - name: download rpm package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "${TAG}"             --repo shikomi-dev/shikomi             --pattern "*.rpm"             --dir rpm/packages
+
+      - name: generate repodata and repo file
+        run: |
+          createrepo_c rpm/
+
+          cat > rpm/shikomi.repo << EOF
+[shikomi]
+name=shikomi
+baseurl=https://shikomi-dev.github.io/shikomi/rpm
+enabled=1
+gpgcheck=0
+EOF
+
+      - name: commit and push to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add rpm/
+          git commit -m "chore: update rpm repo for ${{ github.ref_name }}" || echo "no changes"
+          git push origin gh-pages
