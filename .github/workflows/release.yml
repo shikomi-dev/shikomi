@@ -218,8 +218,8 @@ jobs:
             -o -name "*.dmg" \
             -o -name "*.msi" \
             -o -name "*.exe" \
-          \) | sort | xargs gh release upload "${{ github.ref_name }}"
-          gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt
+          \) | sort | xargs gh release upload "${{ github.ref_name }}" --clobber
+          gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
