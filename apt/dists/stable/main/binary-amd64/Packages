@@ -1,14 +1,14 @@
 Package: shikomi
-Version: 0.1.0
+Version: 0.1.1
 Architecture: amd64
 Maintainer: shikomi-dev
-Installed-Size: 16458
+Installed-Size: 37659
 Depends: libappindicator3-1, libwebkit2gtk-4.1-0, libgtk-3-0
-Filename: pool/main/s/shikomi/shikomi_0.1.0_amd64.deb
-Size: 5894954
-MD5sum: 3852296f0b82132a573dbbcfb7838abf
-SHA1: be40e380af2daeff931f29282d18d0c9976afb59
-SHA256: 4c21610396f1f34c1f6c25e981463272f794f80278071afe7f730b5022933f25
+Filename: pool/main/s/shikomi/shikomi_0.1.1_amd64.deb
+Size: 14141128
+MD5sum: 16416c52a2fe693f5bf35ef62ed7861a
+SHA1: 34301a1dcb39809efa0cb97947f873140934eb91
+SHA256: 11038701a52338f8220a9ef0df464209cb8b949903d6c8cbb24f517952c8c5b8
 Priority: optional
 Description: (none)
  (none)

@@ -1,23 +1,23 @@
 Architectures: amd64
 Codename: stable
 Components: main
-Date: Wed, 13 May 2026 05:33:21 +0000
+Date: Wed, 13 May 2026 07:57:28 +0000
 Label: shikomi
 Origin: shikomi-dev
 Suite: stable
 MD5Sum:
- d134f8b8660b2765a08e1dee9e7ac3a9              142 Release
- afaa52ce7b6faa34651ce3557d5d9645              436 main/binary-amd64/Packages
- 7ea6c0f2a841315ba3a10e7f02168f7d              338 main/binary-amd64/Packages.gz
+ 47b6fcdcee4360c4b7e7543e6ed2418e              142 Release
+ 8bac12bc2d54e16419af3bdf2657029b              437 main/binary-amd64/Packages
+ 00b7bcae461dfd85f89710e4cc53cd66              337 main/binary-amd64/Packages.gz
 SHA1:
- f7fdad47a695d4b494cdcd1fe2eccceee43b1caa              142 Release
- a35f460f0b5fb28e6803ea9767ee74b9c9068ae3              436 main/binary-amd64/Packages
- 2aeb0be206224294f779ad7becaf6ab6d91855d2              338 main/binary-amd64/Packages.gz
+ 16230cac36d86e4e4159a75217418a8eeff75a40              142 Release
+ 98235a59c8f829c52ceec04695e58d786f20a891              437 main/binary-amd64/Packages
+ 23f0b2a098d817ab4cb5faa2e4abb89b190d7120              337 main/binary-amd64/Packages.gz
 SHA256:
- e53a87c5ba668bad20b1012a524cd9ba59347efdc6d4a439c4b4afdae74bc237              142 Release
- 5fdbaaa7996c6eb2df49b89c784aa7e5384830fd2c5dc46361f11d6abba55f64              436 main/binary-amd64/Packages
- 349541004dcf455d2f0c2d0af557147021c3cbe7c8ffe94049eaad82a96144b5              338 main/binary-amd64/Packages.gz
+ 7a9c60564fad0679af882dc7ce1b8e8068c648c3a69a06a5c23f4465675335df              142 Release
+ 48b555fa1dd6abbf29356884d99c0981300fdc40b589da9dc6e4936cb4de29a4              437 main/binary-amd64/Packages
+ df95a9e202a70c4056b9865939d026f794d57d48b65217e5dbd2664b42ab0574              337 main/binary-amd64/Packages.gz
 SHA512:
- da13ea8df8500663b007ca8228f3cbc465941dbc5c89cf0d1f475296cf497b71ac0c3424cec5f89dfb9c3b21869a52b1756086cbc3364ef81965c50a26095dfe              142 Release
- a224d60958217ff6e84cc65a3c84708dda6f5266700fcb1d7eb1879cabc45883dfb057897034efcc16e6a45496ef7e1e93a85c4c3bff64962bb376e55ad99035              436 main/binary-amd64/Packages
- 82e9ded6b65713ab1e92477cc69934f18ad1addfcc123ab457b47945716088f5c439b2bc183372d720218cf1631d0e2a94214faa5f38b29ee364cf3b76c55d86              338 main/binary-amd64/Packages.gz
+ e7e0dc0963491f9566bc039a676fc2086f0b09c6555905ced7c7d134fe0118107516be4293e0fcd167dff81cea6130671f931f8e4e0ee40bcb9d5a9d140c3ad0              142 Release
+ e89321b6b8cf7fd2c7ebaf75c2990cecf5bbaeedf582b938b040998d7bc77ccec7f6ad0f412f5dc7fb3502d367c54f5dc8355746848d830c9015ffd01df73c75              437 main/binary-amd64/Packages
+ e709a1a5206bd8a7097f26c8e353465c06ebe1067ae0452273ca406f75b1e5ae8f8674cc3ea74a9dcbaeb011a4fcfa0d327652eb464dc03f318359bd8b76dfc4              337 main/binary-amd64/Packages.gz
