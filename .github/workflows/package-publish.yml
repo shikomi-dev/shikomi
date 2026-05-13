@@ -196,6 +196,10 @@ jobs:
       - name: install createrepo_c
         run: sudo apt-get update -y && sudo apt-get install -y createrepo-c
 
+      - name: clean stale rpm packages (force re-download from release)
+        # 過去 run の rpm/packages/ が残っていると gh release download が衝突
+        run: rm -rf rpm/packages
+
       - name: setup rpm repo directory
         run: mkdir -p rpm/packages
 
@@ -207,7 +211,8 @@ jobs:
           gh release download "${TAG}" \
             --repo shikomi-dev/shikomi \
             --pattern "*.rpm" \
-            --dir rpm/packages
+            --dir rpm/packages \
+            --clobber
 
       - name: generate repodata and repo file
         run: |
