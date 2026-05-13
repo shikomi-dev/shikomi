@@ -1,0 +1,536 @@
+//! `shikomi_cli` — CLI 内部公開 API（lib target）。
+//!
+//! 本 crate は `[lib] + [[bin]]` の 2 ターゲット構成。lib の公開項目は全て
+//! `#[doc(hidden)]` で `cargo doc` から隠し、外部契約化しない（`publish = false`）。
+//! 結合テスト（`tests/`）からは通常通り参照可能（`#[doc(hidden)]` は可視性を制限しない）。
+//!
+//! 設計根拠: docs/features/cli-vault-commands/detailed-design/public-api.md
+//! §前提: crate 構成、composition-root.md §処理順序
+
+#[doc(hidden)]
+pub mod accessibility;
+#[doc(hidden)]
+pub mod cli;
+#[doc(hidden)]
+pub mod error;
+#[doc(hidden)]
+pub mod hardening;
+#[doc(hidden)]
+pub mod input;
+#[doc(hidden)]
+pub mod io;
+#[doc(hidden)]
+pub mod presenter;
+// 工程5 ペガサス指摘 (lib.rs 500 行ルール超過) 解消: レコード CRUD dispatcher 群を
+// `record_runners` モジュールに切り出し。lib.rs はコンポジションルート + IPC
+// handshake + vault サブコマンド経路に責務を集約する。
+#[doc(hidden)]
+pub mod record_runners;
+#[doc(hidden)]
+pub mod usecase;
+#[doc(hidden)]
+pub mod view;
+// Sub-B (#127): OS 自動起動バックエンド群。
+#[doc(hidden)]
+pub mod autostart;
+// Sub-B (#127): daemon サブコマンド dispatcher 群（lib.rs 500 行ルール対応）。
+#[doc(hidden)]
+pub mod daemon_runners;
+
+pub use error::{CliError, ExitCode};
+
+use std::io::Write;
+use std::path::Path;
+use std::sync::OnceLock;
+
+use shikomi_infra::persistence::SqliteVaultRepository;
+
+use cli::{CliArgs, Subcommand, VaultSubcommand};
+use io::ipc_vault_repository::IpcVaultRepository;
+use presenter::Locale;
+
+// -------------------------------------------------------------------
+// グローバル Locale キャッシュ（panic hook から参照される）
+// -------------------------------------------------------------------
+
+/// `run()` 起動時に 1 度だけ設定される Locale。
+///
+/// panic hook 内で `Locale` を参照するために用いる。`Locale` は `Copy + Clone` な
+/// 単純列挙のため、hook 内での副作用なし参照が成立する。
+///
+/// 設計根拠: docs/features/cli-vault-commands/basic-design/error.md §i18n 扱い、
+/// detailed-design/composition-root.md §`static LOCALE_CACHE: OnceLock<Locale>` の配置
+#[doc(hidden)]
+pub static LOCALE_CACHE: OnceLock<Locale> = OnceLock::new();
+
+// -------------------------------------------------------------------
+// panic hook（secret 漏洩経路の遮断）
+// -------------------------------------------------------------------
+
+/// Secret 混入リスクを避けるため、panic 情報を一切参照せず固定文言のみを
+/// stderr に出力する panic hook。
+///
+/// - `info.payload()` / `info.message()` / `info.location()` を参照しない（契約）
+/// - `tracing::*` マクロを呼ばない（契約）
+/// - `Locale` は `LOCALE_CACHE` から読取（未設定なら English にフォールバック）
+///
+/// 設計根拠: docs/features/cli-vault-commands/basic-design/security.md
+/// §panic hook と secret 漏洩経路の遮断
+// MSRV 1.80 のため `PanicInfo` を使用（`PanicHookInfo` は 1.81 stable）。
+// どちらも `info.payload()` / `info.message()` / `info.location()` を非参照とする契約は同じ。
+#[allow(deprecated)]
+fn panic_hook(_info: &std::panic::PanicInfo<'_>) {
+    let locale = LOCALE_CACHE.get().copied().unwrap_or(Locale::English);
+    let mut stderr = std::io::stderr().lock();
+    // 固定文言（MSG-CLI-109）。payload / message / location は一切参照しない。
+    let _ = writeln!(stderr, "error: internal bug");
+    let _ = writeln!(
+        stderr,
+        "hint: please report this issue to https://github.com/shikomi-dev/shikomi/issues"
+    );
+    if matches!(locale, Locale::JapaneseEn) {
+        let _ = writeln!(stderr, "error: 内部バグが発生しました");
+        let _ = writeln!(
+            stderr,
+            "hint: https://github.com/shikomi-dev/shikomi/issues に報告してください"
+        );
+    }
+}
+
+// -------------------------------------------------------------------
+// RepositoryHandle — Sqlite / IPC の Composition over Inheritance
+// -------------------------------------------------------------------
+
+/// vault 操作経路を保持する non-public 値型（Issue #30、案 D）。
+///
+/// `IpcVaultRepository` は `VaultRepository` trait を**実装しない**ため
+/// `Box<dyn VaultRepository>` で抽象化できない。代わりに enum dispatch で経路を
+/// 表現し、各 `run_*` 関数の冒頭で `match` を取って 2 アームに分岐する。
+///
+/// `#[non_exhaustive]` を**付けない**: CLI 内部限定で、新バリアント追加時に
+/// `match` 網羅性検査が変更箇所を漏れなく列挙してくれる方が安全。
+///
+/// 設計根拠:
+/// - docs/features/cli-vault-commands/detailed-design/composition-root.md
+///   §`RepositoryHandle` enum
+/// - docs/features/daemon-ipc/detailed-design/ipc-vault-repository.md
+///   §案 D（VaultRepository trait 非実装 + RepositoryHandle enum）
+//
+// バリアント間サイズ差（Sqlite ~96 B / Ipc ~304 B、`tokio::runtime::Runtime` 込み）は
+// 本 enum を `run()` 寿命中に **唯一 1 個** しか作らない契約のため、heap 1 個分の節約に
+// 価値がない。`Box<IpcVaultRepository>` で alloc を増やすより、stack 配置を維持する方が
+// 設計意図（composition-root.md §`Box` 不要、stack 配置）に沿う。
+#[allow(clippy::large_enum_variant)]
+enum RepositoryHandle {
+    /// `--no-ipc` 指定時のみ使用する SQLite 直接アクセス経路。
+    Sqlite(SqliteVaultRepository),
+    /// 既定の daemon 経由経路（IPC）。`--no-ipc` 指定時は使用しない。
+    Ipc(IpcVaultRepository),
+}
+
+// -------------------------------------------------------------------
+// `run_edit` fail-secure 経路の純粋関数（Issue #33 / Phase 1.5-ε）
+// -------------------------------------------------------------------
+
+/// `RepositoryHandle` の判別タグ。
+///
+/// `decide_kind_for_input` を **`IpcVaultRepository` 構築不要**（実 daemon spawn 不要）
+/// な単体テスト可能な形に保つための補助型。本 enum は `RepositoryHandle` の各
+/// バリアントが内包する重い値（`SqliteVaultRepository` / `IpcVaultRepository`）を
+/// 剥がした「判別だけのタグ」であり、`#[derive(Clone, Copy, PartialEq, Eq)]` で
+/// テスト時に `assert_eq!` 可能。
+///
+/// 設計根拠: docs/features/daemon-ipc/test-design/unit.md §3.10 ①（案 1）
+///
+/// 工程5 ペガサス指摘解消: `discriminant` / `decide_kind_for_input` 本体は
+/// `record_runners.rs` に移管。本 enum 定義のみ lib.rs に残し pub(crate) 公開。
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryHandleDiscriminant {
+    Sqlite,
+    Ipc,
+}
+
+// -------------------------------------------------------------------
+// run() — コンポジションルート
+// -------------------------------------------------------------------
+
+/// CLI 全体のエントリ関数。
+///
+/// 処理順序（詳細設計 `composition-root.md §処理順序`）:
+/// 1. panic hook 登録
+/// 2. Locale 決定 + `LOCALE_CACHE` 格納
+/// 3. clap パース（失敗時は clap エラー扱い）
+/// 4. `tracing_subscriber` 初期化
+/// 5. `RepositoryHandle` 構築（`args.no_ipc` で `Ipc`（既定）/ `Sqlite`（`--no-ipc`）を分岐）
+/// 6. サブコマンド分岐 → `run_*` 関数 → `Result<(), CliError>`
+/// 7. `Err` は `render_error` で stderr 出力 + `ExitCode::from(&err)` 写像
+#[must_use]
+pub fn run() -> ExitCode {
+    std::panic::set_hook(Box::new(panic_hook));
+
+    // Sub-F (#44) Phase 5 / C-41: core dump 抑制を最早期に呼び出す。失敗しても
+    // 起動を止めない (Fail Kindly)、ただし warn ログで観測可能化する。
+    if let Err(e) = hardening::core_dump::suppress() {
+        tracing::warn!(error = %e, "core dump suppression failed; continuing without it");
+    }
+
+    let locale = Locale::detect_from_env();
+    // set は初回のみ成功。テスト中の再入は無視してよい。
+    let _ = LOCALE_CACHE.set(locale);
+
+    let args = match CliArgs::try_parse() {
+        Ok(a) => a,
+        Err(e) => return handle_clap_error(e),
+    };
+
+    init_tracing(args.verbose);
+
+    let quiet = args.quiet;
+
+    // GUI サブコマンドは vault/IPC 初期化不要のため最優先で処理する（R1-GUI-01）
+    if let Subcommand::Gui = &args.subcommand {
+        return run_gui(locale);
+    }
+
+    // Sub-B (#127): daemon サブコマンドは RepositoryHandle 不要のため early return する。
+    if let Subcommand::Daemon(daemon_sub) = &args.subcommand {
+        return daemon_runners::run_daemon_subcommand(daemon_sub, args.no_ipc, locale, quiet);
+    }
+
+    // Sub-F (#44) Phase 2: vault サブコマンドは daemon IPC 経路に**強制**する。
+    // V1 の `RepositoryHandle::Sqlite` 経路は vault に直接触らない契約 (Phase 2 規定、
+    // cli-subcommands.md §Clean Architecture の依存方向) のため、ここで先に
+    // dispatch を分岐させる。`--no-ipc` 指定時も vault 経路は IPC 強制。
+    if let Subcommand::Vault(vault) = &args.subcommand {
+        // MSG-CLI-052 (Issue #126): `--no-ipc` 指定時に vault サブコマンドが IPC 強制されることを通知する。
+        // `run_vault` 呼び出し前に出力し、daemon 未起動時でも note が表示されるようにする。
+        if args.no_ipc && !quiet {
+            let note = presenter::warning::render_vault_ipc_forced_note(locale);
+            eprint_stderr(&note);
+        }
+        // Issue #75 Bug-F-007: `--vault-dir <DIR>` を daemon socket 解決の最優先 hint
+        // として渡す（`<DIR>/shikomi.sock` 最優先 + 失敗時 default fallback、
+        // `cli-subcommands.md` §Bug-F-007 SSoT）。
+        let result = run_vault(vault, args.vault_dir.as_deref(), locale, quiet);
+        return match result {
+            Ok(()) => ExitCode::Success,
+            Err(err) => emit_error_and_exit(&err, locale),
+        };
+    }
+
+    let handle = match build_handle(&args, locale, quiet) {
+        Ok(h) => h,
+        Err(err) => return emit_error_and_exit(&err, locale),
+    };
+
+    let result = match &args.subcommand {
+        Subcommand::List => record_runners::run_list(&handle, locale, quiet),
+        Subcommand::Add(a) => record_runners::run_add(&handle, a, locale, quiet),
+        Subcommand::Edit(a) => record_runners::run_edit(&handle, a, locale, quiet),
+        Subcommand::Remove(a) => record_runners::run_remove(&handle, a, locale, quiet),
+        // Issue #141: export / import は常に SQLite 直接アクセスを使用（IPC 経路を使わない）。
+        // `IpcVaultRepository` はペイロードを返さないため。
+        Subcommand::Export(a) => run_export(a, &handle, args.vault_dir.as_deref(), quiet, locale),
+        Subcommand::Import(a) => run_import(a, &handle, args.vault_dir.as_deref(), quiet, locale),
+        // 上の `if let Subcommand::Vault(_)` early return で処理済（網羅性のため `_` で吸収）。
+        Subcommand::Vault(_) => unreachable!("vault subcommand handled above"),
+        // 上の `if let Subcommand::Gui` early return で処理済（網羅性のため unreachable）。
+        Subcommand::Gui => unreachable!("gui subcommand handled above"),
+        // 上の `if let Subcommand::Daemon(_)` early return で処理済（網羅性のため unreachable）。
+        Subcommand::Daemon(_) => unreachable!("daemon subcommand handled above"),
+    };
+
+    match result {
+        Ok(()) => ExitCode::Success,
+        Err(err) => emit_error_and_exit(&err, locale),
+    }
+}
+
+// -------------------------------------------------------------------
+// Issue #141: data-portability export / import dispatcher
+// -------------------------------------------------------------------
+
+/// `shikomi export` の dispatcher。
+///
+/// # セキュリティ
+/// `--export-secrets` フラグが指定されている場合、UseCase 呼出の**前**に MSG-CLI-145 を
+/// stderr へ強制出力する。`quiet` フラグを参照しない経路として設計し、UseCase がエラーを
+/// 返した場合でも警告が表示され、ユーザが試みた操作の記録が残る。
+///
+/// # IPC 経路の設計判断
+/// `RepositoryHandle` のバリアントに**関わらず**、常に `SqliteVaultRepository::from_directory`
+/// で直接 SQLite にアクセスする。`IpcVaultRepository` はペイロードを返さないため
+/// export に使用できない（basic-design.md §REQ-DP-008 --no-ipc 経路の設計判断）。
+fn run_export(
+    args: &cli::ExportArgs,
+    handle: &RepositoryHandle,
+    vault_dir: Option<&Path>,
+    quiet: bool,
+    locale: Locale,
+) -> Result<(), CliError> {
+    // Step 1: --export-secrets 警告（--quiet でも抑止不可、UseCase 呼出前に出力）
+    if args.export_secrets {
+        // 直接 eprintln! で stderr へ強制出力（quiet フラグを参照しない設計）
+        eprintln!(
+            "{}",
+            presenter::success::render_export_secrets_warning(locale).trim_end()
+        );
+    }
+
+    // Step 2: vault_dir の解決
+    let resolved_dir = match vault_dir {
+        Some(p) => p.to_path_buf(),
+        None => io::paths::resolve_os_default_vault_dir()?,
+    };
+
+    // Steps 3–4: RepositoryHandle に関わらず SQLite 直接アクセス
+    if matches!(handle, RepositoryHandle::Ipc(_)) {
+        tracing::warn!(
+            target: "shikomi_cli::export",
+            "export uses direct SQLite access regardless of IPC mode"
+        );
+    }
+    let sqlite_repo = SqliteVaultRepository::from_directory(&resolved_dir)?;
+
+    // Step 5: 現在時刻
+    let now = time::OffsetDateTime::now_utc();
+
+    // Step 6: UseCase 呼出
+    let summary =
+        usecase::portability::export::export_records(&sqlite_repo, args, &resolved_dir, now)?;
+
+    // Step 7: 成功出力（quiet の場合は抑止）
+    if !quiet {
+        print_stdout(&presenter::success::render_exported(
+            summary.record_count,
+            &summary.output_path,
+            locale,
+        ));
+    }
+
+    Ok(())
+}
+
+/// `shikomi import` の dispatcher。
+///
+/// # IPC 経路の設計判断
+/// `RepositoryHandle` のバリアントに**関わらず**、常に `SqliteVaultRepository::from_directory`
+/// で直接 SQLite にアクセスする。IPC per-record 書き込みは R1-DP-09 の atomicity 要件に
+/// 非適合（途中クラッシュで半書き込み状態になる）。SQLite `repo.save()` が atomic write を保証。
+fn run_import(
+    args: &cli::ImportArgs,
+    handle: &RepositoryHandle,
+    vault_dir: Option<&Path>,
+    quiet: bool,
+    locale: Locale,
+) -> Result<(), CliError> {
+    // Step 1: vault_dir の解決
+    let resolved_dir = match vault_dir {
+        Some(p) => p.to_path_buf(),
+        None => io::paths::resolve_os_default_vault_dir()?,
+    };
+
+    // Step 2: IPC 経路警告（export と同じ pattern）
+    if matches!(handle, RepositoryHandle::Ipc(_)) {
+        tracing::warn!(
+            target: "shikomi_cli::import",
+            "import uses direct SQLite access regardless of IPC mode"
+        );
+    }
+
+    // Step 3: SQLite 直接アクセス（R1-DP-09 atomicity 要件適合）
+    // Issue #146: busy_timeout(2000ms) を設定して daemon のロック競合を吸収する。
+    // 2 秒超過後も SQLITE_BUSY が解消しない場合は DatabaseBusy → ImportVaultBusy（MSG-CLI-146）。
+    let sqlite_repo = SqliteVaultRepository::from_directory_with_busy_timeout(
+        &resolved_dir,
+        std::time::Duration::from_millis(2000),
+    )?;
+
+    // Step 4: 現在時刻
+    let now = time::OffsetDateTime::now_utc();
+
+    // Step 5: UseCase 呼出
+    let summary = usecase::portability::import::import_records(&sqlite_repo, args, now)?;
+
+    // Step 6: 成功出力（quiet の場合は抑止）
+    if !quiet {
+        print_stdout(&presenter::success::render_imported(
+            summary.added,
+            summary.skipped,
+            summary.overwritten,
+            locale,
+        ));
+    }
+
+    Ok(())
+}
+
+// -------------------------------------------------------------------
+// Sub-F (#44) Phase 2: vault サブコマンド dispatch
+// -------------------------------------------------------------------
+
+/// vault サブコマンド経路（IPC 強制）の dispatch。
+///
+/// daemon socket 解決 → `IpcVaultRepository::connect_with_vault_dir` → handshake (V2) →
+/// 7 サブコマンドの usecase 呼出。`--no-ipc` フラグ指定時も IPC 経路で動作する
+/// （vault 管理は daemon の責務、Phase 2 規定）。
+///
+/// Issue #75 Bug-F-007: `vault_dir` が `Some(<DIR>)` の場合、`<DIR>/shikomi.sock`（Unix）
+/// または `\\.\pipe\shikomi-{H}`（Windows）を socket 解決の最優先候補に渡す
+/// （`cli-subcommands.md` §Bug-F-007 解消 §`--vault-dir` の意味論 SSoT）。
+fn run_vault(
+    vault: &VaultSubcommand,
+    vault_dir: Option<&Path>,
+    locale: Locale,
+    quiet: bool,
+) -> Result<(), CliError> {
+    let repo = connect_vault_ipc(vault_dir, locale, quiet)?;
+    match vault {
+        VaultSubcommand::Encrypt(a) => usecase::vault::encrypt::execute(&repo, a, locale, quiet),
+        VaultSubcommand::Decrypt => usecase::vault::decrypt::execute(&repo, locale, quiet),
+        VaultSubcommand::Unlock(a) => usecase::vault::unlock::execute(&repo, a, locale, quiet),
+        VaultSubcommand::Lock => usecase::vault::lock::execute(&repo, locale, quiet),
+        VaultSubcommand::ChangePassword => {
+            usecase::vault::change_password::execute(&repo, locale, quiet)
+        }
+        VaultSubcommand::Rekey(a) => usecase::vault::rekey::execute(&repo, a, locale, quiet),
+        VaultSubcommand::RotateRecovery(a) => {
+            usecase::vault::rotate_recovery::execute(&repo, a, locale, quiet)
+        }
+    }
+}
+
+/// vault サブコマンド経路の `IpcVaultRepository` 構築（IPC 強制 + opt-in 警告省略）。
+///
+/// vault 管理は IPC 専用の責務領域であり、`build_handle` 経路を経由しない。
+///
+/// Issue #75 Bug-F-007: `vault_dir` を `IpcVaultRepository::connect_with_vault_dir` に渡し、
+/// `<DIR>/shikomi.sock`（Unix）または `\\.\pipe\shikomi-{H}`（Windows、`<H>` 純関数）を
+/// 最優先で試行する。失敗時は default 経路（`SHIKOMI_VAULT_DIR` env / `XDG_RUNTIME_DIR` /
+/// `dirs::cache_dir()` / `dirs::runtime_dir()` / Windows user-SID）にフォールバック。
+fn connect_vault_ipc(
+    vault_dir: Option<&Path>,
+    _locale: Locale,
+    _quiet: bool,
+) -> Result<IpcVaultRepository, CliError> {
+    let repo = IpcVaultRepository::connect_with_vault_dir(vault_dir)?;
+    Ok(repo)
+}
+
+// -------------------------------------------------------------------
+// 補助関数 — Repository 構築 / clap / tracing / 出力
+// -------------------------------------------------------------------
+
+/// `args.no_ipc` フラグから `RepositoryHandle` を構築する。
+///
+/// 既定（`no_ipc == false`）は IPC 経路。daemon 未起動時は `MSG-CLI-110` で Fail Fast。
+/// `--no-ipc` 指定時のみ SQLite 直結経路（Phase 1 相当）を使用する。
+fn build_handle(
+    args: &CliArgs,
+    _locale: Locale,
+    _quiet: bool,
+) -> Result<RepositoryHandle, CliError> {
+    if args.no_ipc {
+        // A09 監査ログ: `--no-ipc` 使用を `quiet` 抑止外の warn チャネルへ記録する。
+        tracing::warn!(
+            target: "shikomi_cli::composition_root",
+            "--no-ipc: direct SQLite access"
+        );
+        let path = match args.vault_dir.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => io::paths::resolve_os_default_vault_dir()?,
+        };
+        let repo = SqliteVaultRepository::from_directory(&path)?;
+        Ok(RepositoryHandle::Sqlite(repo))
+    } else {
+        let socket_path = IpcVaultRepository::default_socket_path()?;
+        let ipc = IpcVaultRepository::connect(&socket_path)?;
+        Ok(RepositoryHandle::Ipc(ipc))
+    }
+}
+
+/// clap エラーを CLI 終了コード方針に合わせて整形する。
+///
+/// - `DisplayHelp` / `DisplayVersion` → stdout + exit 0
+/// - その他 usage 系 → stderr + exit 1（clap デフォルトの exit 2 を上書き）
+/// - `Io` / `Format` → stderr + exit 2
+fn handle_clap_error(err: clap::Error) -> ExitCode {
+    use clap::error::ErrorKind;
+    match err.kind() {
+        ErrorKind::DisplayHelp
+        | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        | ErrorKind::DisplayVersion => {
+            let _ = err.print();
+            ExitCode::Success
+        }
+        ErrorKind::Io | ErrorKind::Format => {
+            let _ = err.print();
+            ExitCode::SystemError
+        }
+        _ => {
+            let _ = err.print();
+            ExitCode::UserError
+        }
+    }
+}
+
+fn init_tracing(verbose: bool) {
+    use tracing_subscriber::EnvFilter;
+    let default = if verbose { "debug" } else { "info" };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!("shikomi_cli={default},shikomi_infra={default}"))
+    });
+    // 二重初期化はテスト等で起こり得るため、結果は握り潰す（try_init）
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
+fn emit_error_and_exit(err: &CliError, locale: Locale) -> ExitCode {
+    let rendered = presenter::error::render_error(err, locale);
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(rendered.as_bytes());
+    ExitCode::from(err)
+}
+
+// -------------------------------------------------------------------
+// I/O 薄ラッパ (record_runners と build_handle 両方から使うため pub)
+// -------------------------------------------------------------------
+
+#[doc(hidden)]
+pub fn print_stdout(s: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(s.as_bytes());
+}
+
+#[doc(hidden)]
+pub fn eprint_stderr(s: &str) {
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(s.as_bytes());
+}
+
+// -------------------------------------------------------------------
+// テスト（src/tests.rs に分離: ペガサス 500 行ルール、audit TC-CI-026 unsafe 境界）
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests;
+
+/// `shikomi-gui` バイナリをサブプロセスとして起動する（R1-GUI-01）。
+///
+/// `shikomi-gui` が PATH 上に存在しない場合はエラーメッセージを表示して
+/// `SystemError` を返す。
+fn run_gui(locale: Locale) -> ExitCode {
+    match std::process::Command::new("shikomi-gui").status() {
+        Ok(status) => {
+            if status.success() {
+                ExitCode::Success
+            } else {
+                ExitCode::SystemError
+            }
+        }
+        Err(e) => emit_error_and_exit(&CliError::GuiLaunchFailed(e.to_string()), locale),
+    }
+}

@@ -1,0 +1,81 @@
+[package]
+name = "shikomi-infra"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# テスト専用公開 API（`ensure_vault_dir` / `ensure_vault_file`）を有効化する。
+# 本番バイナリには含まれない。テストのみで有効化する（justfile `test-cli` / `test-daemon` 参照）。
+test-fixtures = []
+
+[dependencies]
+shikomi-core  = { workspace = true }
+rusqlite      = { workspace = true }
+fs4           = { workspace = true }
+cfg-if        = { workspace = true }
+tracing       = { workspace = true }
+dirs          = { workspace = true }
+thiserror     = { workspace = true }
+time          = { workspace = true }
+# Sub-B (#40) crypto アダプタ層（KDF / RNG / 強度ゲート）。
+# `pbkdf2` / `hmac` は bip39 / hkdf / argon2 内部経由のため直接依存しない
+# (tech-stack.md §4.7、kdf.md §`bip39` / `pbkdf2` / `hkdf` crate 呼出契約)。
+argon2        = { workspace = true }
+hkdf          = { workspace = true }
+sha2          = { workspace = true }
+bip39         = { workspace = true }
+rand_core     = { workspace = true }
+getrandom     = { workspace = true }
+zxcvbn        = { workspace = true }
+secrecy       = { workspace = true }
+zeroize       = { workspace = true }
+# Sub-C (#41) AEAD アダプタ (AES-256-GCM)。aes-gcm が transitive で `subtle` を
+# 引いていたが、Sub-E (#43) `verify_password` で **VEK の bit-exact 比較** を
+# `subtle::ConstantTimeEq` 経由で実施する責務が `vek-cache-and-ipc.md` §F-E4 step 2
+# で確定したため、direct dep として明示昇格する (transitive 依存は version 漂流
+# リスクがあるため Sub-E では direct で固定する)。
+aes-gcm       = { workspace = true }
+subtle        = { workspace = true }
+
+[dev-dependencies]
+tempfile     = { workspace = true }
+tracing-test = { workspace = true }
+serial_test  = { workspace = true }
+rusqlite     = { workspace = true }
+uuid         = { workspace = true }
+# Sub-B (#40) BC-3 リリースブロッカ用 KDF ベンチマーク (criterion)。
+# `cargo bench -p shikomi-infra --bench kdf_bench` で起動、
+# `.github/workflows/bench-kdf.yml` の `bench-kdf` ジョブが 3 OS で gating。
+criterion    = { workspace = true }
+# Sub-C (#41) test-design TC-C-P01 / TC-C-P02 property test (1000 ケース)。
+# 詳細は `tests/aead_property.rs` と test-design.md §12.7。
+proptest     = { workspace = true }
+
+# Sub-B (#40) BC-3 リリースブロッカ。Argon2id `FROZEN_OWASP_2024_05` の
+# 単一 derive 時間 median を 750ms 閾値 (p95 ≤ 1.0s の proxy) で検証する。
+[[bench]]
+name = "kdf_bench"
+harness = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+] }
+
+[lints]
+workspace = true

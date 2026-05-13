@@ -1,0 +1,51 @@
+# lefthook — local-first quality gates for shikomi.
+#
+# 設計書: docs/features/dev-workflow/detailed-design.md §lefthook.yml のキー構造
+#
+# 原則:
+# - 実行本体は justfile に集約 (DRY)。ここでは fail_text / parallel / hook 配線のみ
+# - fail_text は設計書 §MSG 確定文言表から転記。動的変数は使わない (T7)
+# - pre-commit は独立タスクを parallel で走らせ体感時間を短縮
+# - commit-msg も convco と no-ai-footer を parallel 並走
+# 出典: https://lefthook.dev/configuration/
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt-check:
+      run: just fmt-check
+      fail_text: |
+        [FAIL] cargo fmt 違反を検出しました。
+        次のコマンド: just fmt
+    clippy:
+      run: just clippy
+      fail_text: |
+        [FAIL] cargo clippy 違反を検出しました。
+        次のコマンド: just clippy
+    audit-secrets:
+      run: just audit-secrets
+      fail_text: |
+        [FAIL] secret の混入が検出されました。該当行を除去後、git add を再実行してください。
+        既に push 済みの場合: CONTRIBUTING.md §Secret 混入時の緊急対応
+
+commit-msg:
+  parallel: true
+  commands:
+    convco:
+      run: just commit-msg-check {1}
+      fail_text: |
+        [FAIL] コミットメッセージが Conventional Commits 1.0 に準拠していません。
+        規約: CONTRIBUTING.md §コミット規約 または https://www.conventionalcommits.org/ja/v1.0.0/
+    no-ai-footer:
+      run: just commit-msg-no-ai-footer {1}
+      fail_text: |
+        [FAIL] コミットメッセージに AI 生成フッターが含まれています（🤖 Generated with Claude Code / Co-Authored-By: Claude 等）。
+        次のコマンド: 該当行を削除して再コミット。許可されない trailer のポリシーは CONTRIBUTING.md §AI 生成フッターの禁止 を参照。
+
+pre-push:
+  commands:
+    test:
+      run: just test
+      fail_text: |
+        [FAIL] cargo test に失敗しました。
+        次のコマンド: just test

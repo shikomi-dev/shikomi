@@ -1,0 +1,77 @@
+name: Branch Policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check:
+    name: branch-policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch naming and PR source restriction
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          echo "Base branch : $BASE_REF"
+          echo "Head branch : $HEAD_REF"
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          # ── main へのマージ ──────────────────────────────────────────────
+          # 許可: release/* または hotfix/* からのみ
+          if [ "$BASE_REF" = "main" ]; then
+            if echo "$HEAD_REF" | grep -qE '^(release|hotfix)/.+'; then
+              echo "OK: $HEAD_REF -> main is allowed"
+            else
+              fail "main への PR は release/* または hotfix/* からのみ許可されています。(head: $HEAD_REF) — dev.md §7.2 PR ソース制限"
+            fi
+          fi
+
+          # ── develop へのマージ ───────────────────────────────────────────
+          # 許可: feature/* / release/* / hotfix/* からのみ
+          if [ "$BASE_REF" = "develop" ]; then
+            if echo "$HEAD_REF" | grep -qE '^(feature|release|hotfix)/.+'; then
+              echo "OK: $HEAD_REF -> develop is allowed"
+            else
+              fail "develop への PR は feature/*, release/*, hotfix/* からのみ許可されています。(head: $HEAD_REF) — dev.md §7.2 PR ソース制限"
+            fi
+          fi
+
+          # ── release/* へのマージ ─────────────────────────────────────────
+          # 許可: develop からのみ（RC 開始時の初回）
+          if echo "$BASE_REF" | grep -qE '^release/.+'; then
+            if [ "$HEAD_REF" = "develop" ]; then
+              echo "OK: develop -> $BASE_REF is allowed"
+            else
+              fail "release/* への PR は develop からのみ許可されています。(head: $HEAD_REF)"
+            fi
+          fi
+
+          # ── hotfix/* へのマージ ──────────────────────────────────────────
+          # hotfix/* はマージ先ではなく起点なので、ここには来ない想定
+          # （hotfix/* → main / develop は上記ルールでカバー済み）
+
+          # ── feature ブランチの命名規則検証 ──────────────────────────────
+          if echo "$HEAD_REF" | grep -qE '^feature/'; then
+            if echo "$HEAD_REF" | grep -qE '^feature/[a-z0-9][a-z0-9/_-]+$'; then
+              echo "OK: feature branch name is valid"
+            else
+              fail "feature ブランチ名が命名規則に違反しています: $HEAD_REF — 正規表現: feature/[a-z0-9][a-z0-9/_-]+"
+            fi
+          fi
+
+          # ── release / hotfix ブランチの命名規則検証 ─────────────────────
+          if echo "$HEAD_REF" | grep -qE '^(release|hotfix)/'; then
+            if echo "$HEAD_REF" | grep -qE '^(release|hotfix)/[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "OK: release/hotfix branch name is valid"
+            else
+              fail "release/hotfix ブランチ名が命名規則に違反しています: $HEAD_REF — 正規表現: (release|hotfix)/X.Y.Z"
+            fi
+          fi
+
+          echo "Branch policy check passed."

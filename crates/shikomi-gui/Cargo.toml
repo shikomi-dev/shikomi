@@ -1,0 +1,56 @@
+[package]
+name = "shikomi-gui"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# lib + bin の 2 ターゲット構成
+# - lib: pub fn run() を公開し、将来 `shikomi-cli` から直接呼び出せる
+# - bin: `shikomi_gui::run()` を呼ぶ 3 行ラッパ（SUBSYSTEM:WINDOWS でコンソール非表示）
+[lib]
+name = "shikomi_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shikomi-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Tauri v2 ランタイム（tech-stack.md §2.1 / §2.6）
+# tray-icon: UC-GUI-005 システムトレイ常駐（Sub-D で実装）
+tauri = { version = "2", features = ["tray-icon"] }
+# Sub-D (#97): daemon 再起動コマンド実行（basic-design.md §1 / §6.1）
+tauri-plugin-shell = "2"
+serde           = { workspace = true }
+# tauri::generate_context!() マクロが serde_json を直接参照するため必須
+serde_json      = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror       = { workspace = true }
+# IPC クライアント依存（Sub-B ipc-client）
+shikomi-core    = { workspace = true }
+shikomi-infra   = { workspace = true }
+tokio           = { workspace = true }
+tokio-util      = { workspace = true }
+rmp-serde       = { workspace = true }
+bytes           = { workspace = true }
+futures-util    = { workspace = true }
+time            = { workspace = true }
+
+[dev-dependencies]
+serde_json       = { workspace = true }
+tempfile         = { workspace = true }
+bytes            = { workspace = true }
+rmp-serde        = { workspace = true }
+futures-util     = { workspace = true }
+uuid             = { workspace = true }
+tauri            = { version = "2", features = ["test"] }
+
+[build-dependencies]
+# Tauri ビルドスクリプト（tauri.conf.json の検証 + コード生成）
+tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

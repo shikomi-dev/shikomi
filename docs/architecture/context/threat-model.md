@@ -8,11 +8,11 @@
 
 | 脅威カテゴリ | 具体 | 平文モード（デフォルト）の対策 | 暗号化モード（オプトイン）の対策 |
 |------------|-----|--------------------------|--------------------------|
-| **S**poofing | 他プロセスが shikomi を名乗りホットキーを横取り／同ユーザ内の別プロセスが IPC ソケットへ偽装接続 | OS 署名（Developer ID / EV 証明書）、Wayland は Portal 同意ダイアログ、IPC は `process-model.md` §4.2 の UDS `0700` + ピア UID 検証 + セッショントークン | 同左（共通） |
+| **S**poofing | 他プロセスが shikomi を名乗りホットキーを横取り／同ユーザ内の別プロセスが IPC ソケットへ偽装接続 | OS 署名（Developer ID / EV 証明書）、Wayland は Portal 同意ダイアログ、IPC は `process-model.md` §4.2 の UDS `0700` + ピア UID 検証（Issue #26 で実装）。**セッショントークンによる二重防御（同ユーザ内悪性プロセス対策）は後続 Issue で追加予定**——`IpcProtocolVersion::V2` 追加と同時に `Handshake { client_version, session_token }` へ非破壊拡張する | 同左（共通） |
 | **T**ampering | vault ファイルの改竄（同ユーザ他プロセスによる書換え・差替え）・途中書込でのファイル破損 | OS パーミッション + atomic write（§7.1）。**同ユーザ内の他プロセスによる改竄は OS では阻止できず、平文モードでは暗号学的な改竄検出も行えない**（§7.0 参照）。自プロセスの部分書込のみ atomic write で防御 | AEAD（AES-256-GCM）認証タグ検証で他プロセスによる改竄を暗号学的に検出、改竄時は `fail fast` |
 | **R**epudiation | 対象外（単独ローカルアプリ） | 該当なし — 理由: 外部へ操作ログを送出しない | 同左 |
 | **I**nformation Disclosure | 平文パスワードのクリップボード流出、履歴保持、Cloud Clipboard 同期、スワップ経由ディスク書出、IPC 通信盗聴、**vault ファイル直接読取** | **vault は平文のため、OS パーミッション突破と同時に全レコードが漏洩**（脅威が現実化する具体例は §7.0）。クリップボード系対策は共通（自動クリア、sensitive hint）。IPC は UDS `0700` 適用 | vault は AES-256-GCM で保護され、OS パーミッション突破だけでは平文を得られない。加えて `secrecy` + `zeroize` + best-effort `mlock`/`VirtualLock` でメモリ上も最小時間保護 |
-| **D**enial of Service | ホットキー登録衝突、daemon 多重起動、vault 破損 | 起動時検出 → ユーザに再割当を促す（fail fast）、PID + advisory lock による単一インスタンス、atomic write による部分書込防止 | 同左 |
+| **D**enial of Service | ホットキー登録衝突、daemon 多重起動、vault 破損 | 起動時検出 → ユーザに再割当を促す（fail fast）、**IPC エンドポイント先取り（UDS: `flock` + unlink-before-bind の race-safe 併用、Windows: Named Pipe `FILE_FLAG_FIRST_PIPE_INSTANCE`）による単一インスタンス保証**（`process-model.md` §4.1 ルール2、Issue #26 で実装）、atomic write による部分書込防止 | 同左 |
 | **E**levation of Privilege | 管理者権限を要求しない設計 | 通常ユーザ権限で動作、setuid 等は使用しない | 同左 |
 
 ### 7.0 平文モードの残存リスク（ユーザ自己責任として明記）
@@ -68,6 +68,61 @@ shikomi は「ホットキーで投入 → ユーザが即貼付」が主ユー�
 - 通知メッセージにレコード名やプレビュー文字を含める（画面共有・肩越し閲覧で情報漏洩）
 - サウンド通知（デフォルト off、オプトイン）
 
+### 7.3 GUI 層（Tauri v2 WebView）固有の脅威（Issue #90 追加）
+
+`shikomi-gui` は Tauri v2 の WebView（WebView2 / WKWebView / WebKitGTK）を介して SolidJS フロントエンドを実行する。WebView の追加はローカルデスクトップアプリに**Web 層の攻撃面**をもたらす。
+
+#### 7.3.1 WebView 固有 STRIDE 補足
+
+| 脅威カテゴリ | GUI 固有リスク | 対策 |
+|------------|-------------|------|
+| **S**poofing | ローカル HTML / JS のなりすまし。攻撃者がローカルファイルシステムの別 HTML を WebView に読み込ませ、Tauri Commands を実行する | `tauri.conf.json` の `security.devTools` を `false`（production）にし、ローカルファイル読み込みは `asset://` プロトコルのみ許可。Tauri v2 は自動で `window.__TAURI__` の検証を行う |
+| **T**ampering | XSS により DOM が書き換えられ、Tauri Commands がバックグラウンドで呼び出される | CSP `script-src 'self'`（`R1-GUI-17`）で外部スクリプト・インラインスクリプト・`eval` を全面禁止。SolidJS は CSP 準拠コンパイルモードを使用 |
+| **I**nformation Disclosure | マスターパスワード等の機密変数が SolidJS ストア / シグナルに残留し、DevTools Memory タブから読み出される | `R1-GUI-18`: JS 側機密変数を `null` で即上書き。機密値を `createStore` / `createSignal` の state に保存しない |
+| **I**nformation Disclosure | Tauri Commands の引数ログ / エラー表示に機密値が混入 | Tauri Commands の `#[tauri::command]` は引数名のみログ記録。値は `SecretInput` 型で `Debug` を実装せず自動秘匿 |
+| **E**levation of Privilege | `window.__TAURI__.invoke` を DevTools / フィッシング経由で直接呼び出し、JS バリデーションをバイパスして不正な IPC リクエストを送信 | `R1-GUI-19`: Rust 側 Tauri Commands ハンドラで独立した input validation を実施（JS 側バリデーション必須化なし） |
+
+#### 7.3.2 CSP 設定方針
+
+`tauri.conf.json` の `security.csp` に以下を必須とする（`R1-GUI-17`）:
+
+- `script-src 'self'` — 外部オリジン・インラインスクリプト・`eval` を全面禁止
+- `connect-src ipc: http://ipc.localhost` — Tauri IPC 経路のみ許可
+- `default-src 'self'` — その他リソースも同一オリジン限定
+
+**禁止設定**: `unsafe-eval`・`unsafe-inline` の許可。Vite / SolidJS の CSP 準拠ビルド設定で対応する（追加コストなし）。出典: https://v2.tauri.app/security/csp/
+
+#### 7.3.3 WebView 起動オプション制限
+
+| 設定項目 | 要件 |
+|---------|------|
+| `devTools` | production ビルドでは `false` 必須 |
+| `dangerousDisableAssetCspModification` | `false`（CSP 改変禁止） |
+| `dangerousRemoteDomainIpcAccess` | 設定禁止（ローカルオリジン限定） |
+
+出典: https://v2.tauri.app/security/
+
+### 7.5 data-portability feature 固有の攻撃面（Issue #135 追加）
+
+`shikomi export` / `shikomi import` は vault データをローカルファイルとして読み書きする新しい攻撃面を開く。
+
+#### 7.5.1 STRIDE 補足
+
+| 脅威カテゴリ | data-portability 固有リスク | 対策 |
+|------------|---------------------------|------|
+| **I**nformation Disclosure | `--export-secrets` フラグで全 Secret kind レコードが平文 JSON ファイルに書き出される。誤操作・スクリプト自動化・CI 環境への出力が漏洩経路になる | (1) `MSG-CLI-145` を stderr に必ず出力（`--quiet` 抑止不可）。(2) export ファイルを `0600` で作成（同ユーザ内の他プロセスからの読み取りを OS レベルで阻止）。(3) デフォルト動作では Secret kind を `{"kind":"redacted"}` tagged union でリダクト |
+| **I**nformation Disclosure | export ファイルが `0644`（ワールドリーダブル）で作成された場合、同マシンの他ユーザが読み取り可能になる | `tempfile::Builder::new().permissions(0o600)` で書き込み前にパーミッションを設定する（`threat-model.md §7.1` の vault.db と同等の保護水準）|
+| **T**ampering | 攻撃者が import ファイルを改ざんして不正なレコード（例: 既知のラベル・ID を持つ偽レコード）を注入する | `ImportValidator` が `format_version` / 重複 ID / Redacted payload を検出。ファイル完全性検証（HMAC / 署名）は将来拡張（MVP スコープ外）。ユーザーは信頼できるソースからのファイルのみ import することを README で明示する |
+| **D**enial of Service | 巨大な import ファイル（数 GB）を渡して OOM を引き起こす | `serde_json::from_reader` のストリーミング読み込みを使用する（Sub-B 実装ガイドライン）。レコード数の上限チェック（例: 100 万件超で警告）は将来拡張 |
+
+#### 7.5.2 OWASP A04 補足（Insecure Design）
+
+`--export-secrets` は意図的に設計された危険操作である。誤操作防止のため:
+
+1. `MSG-CLI-145` は `--quiet` フラグでも抑止不可にする
+2. エラーではなく警告（exit 0 で続行）とするが、stderr への出力は保証する
+3. 将来拡張として「Are you sure? (yes/no)」確認プロンプトを Sub-B の後続 Issue で検討する（MVP スコープ外）
+
 ## 8. OWASP Top 10 対応表（2021 版・デスクトップアプリ適用）
 
 OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たないデスクトップアプリでも**多くが該当する**（認可・ログ・暗号失敗・依存コンポーネント等）。設計上の取扱を以下に明示する。
@@ -77,10 +132,10 @@ OWASP Top 10 はもともと Web アプリ向けだが、サーバを持たな�
 | **A01: Broken Access Control** | 該当（ローカル多重プロセス・多重ユーザ） | IPC の UID 検証＋ソケット `0700`（`process-model.md` §4.2）。vault ファイルパーミッション `0600`、ディレクトリ `0700`。Windows は同等の ACL を SDDL で設定 |
 | **A02: Cryptographic Failures** | **暗号化モード（オプトイン）で該当** | 暗号化モード有効時のみ AEAD（AES-256-GCM）＋ Argon2id（OWASP 推奨 `m=19456, t=2, p=1`）を適用。nonce は CSPRNG から毎回 96bit 生成、vault 内に per-record 記録（`../tech-stack.md` §2.4 参照）。VEK は `secrecy` + `zeroize`。MAC（GMAC タグ）で改竄検知。**平文モードは暗号保護を行わないことを明示**（§7.0 のユーザ自己責任リスク表を参照）。デフォルト平文を選ぶ場合、A02 は「暗号を使わない設計判断」として該当外だが、代わりに §7.0 の脅威表を受容する |
 | **A03: Injection** | 該当（SQL / コマンド引数） | SQLite 操作は `rusqlite` の parameter binding のみ使用し生 SQL 連結禁止。CLI → daemon IPC は MessagePack 型付きスキーマ、文字列として shell に渡す経路なし |
-| **A04: Insecure Design** | 該当 | 本ドキュメント全体で扱う（プロセスモデル・Threat Model・Fail Secure 方針）。**デフォルト平文を Insecure Design と誤解されないよう**、§7.0 でリスク提示と UI 可視化（`[plaintext]` 表示）を強制する設計とした。「知らされず平文だった」事故を防ぐ |
-| **A05: Security Misconfiguration** | 該当 | 既定値を安全側に（自動クリア 30 秒、アイドルタイムアウト 15 分、テレメトリ off、キーチェーン連携 off）。**vault 保護モードはデフォルト平文**だが、それを**必ず可視化する**ことで「設定ミスでオフのまま」を回避。デバッグビルドは別バイナリでリリースチャネルに混入しない |
+| **A04: Insecure Design** | 該当 | 本ドキュメント全体で扱う（プロセスモデル・Threat Model・Fail Secure 方針）。**デフォルト平文を Insecure Design と誤解されないよう**、§7.0 でリスク提示と UI 可視化（`[plaintext]` 表示）を強制する設計とした。「知らされず平文だった」事故を防ぐ。**data-portability 追加（§7.5.2）**: `--export-secrets` は意図的危険操作として `MSG-CLI-145` 警告を `--quiet` 抑止不可で出力する |
+| **A05: Security Misconfiguration** | 該当 | 既定値を安全側に（自動クリア 30 秒、アイドルタイムアウト 15 分、テレメトリ off、キーチェーン連携 off）。**vault 保護モードはデフォルト平文**だが、それを**必ず可視化する**ことで「設定ミスでオフのまま」を回避。デバッグビルドは別バイナリでリリースチャネルに混入しない。**GUI 追加対策（Issue #90）**: Tauri v2 WebView の `security.csp = "script-src 'self'"` を `tauri.conf.json` で強制し `unsafe-eval` / `unsafe-inline` を禁止する（§7.3.2 参照）。production ビルドで `devTools: false` 必須 |
 | **A06: Vulnerable and Outdated Components** | 該当 | `cargo-deny` + `cargo-audit` + Dependabot（`../dev.md` §5）。`Cargo.lock` をコミットし lock 書換え監査。SBOM（CycloneDX）をリリースに添付 |
-| **A07: Identification and Authentication Failures** | **暗号化モードで該当** | 暗号化モード時のみマスターパスワード認証を行うため、該当は暗号化モードに限定。Argon2id で総当たり耐性、連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフを該当 IPC リクエストにのみ適用**（プロセス全体を blocking sleep させない＝ホットキー購読を継続、`../tech-stack.md` §2.4 参照）。IPC 認証（UID + セッショントークン）は両モード共通。リカバリコード：BIP-39 24 語、1 度だけ表示、再発行不可（暗号化モード時のみ） |
+| **A07: Identification and Authentication Failures** | **暗号化モードで該当** | 暗号化モード時のみマスターパスワード認証を行うため、該当は暗号化モードに限定。Argon2id で総当たり耐性、連続失敗 5 回で **非同期タイマー（`tokio::time::sleep`）による指数バックオフを該当 IPC リクエストにのみ適用**（プロセス全体を blocking sleep させない＝ホットキー購読を継続、`../tech-stack.md` §2.4 参照）。IPC 認証（UID 検証は Issue #26 で実装、**セッショントークンは後続 Issue で追加予定**）は両モード共通。リカバリコード：BIP-39 24 語、1 度だけ表示、再発行不可（暗号化モード時のみ） |
 | **A08: Software and Data Integrity Failures** | 該当 | コード署名（Win: Authenticode、Mac: Developer ID + Notarization、Linux: GPG + minisign）。更新時は `tauri-plugin-updater` の minisign 署名検証、検証失敗で更新中断 |
 | **A09: Security Logging and Monitoring Failures** | 該当（ただしテレメトリ送信なし方針） | ローカルログのみ、`tracing` で構造化。シークレットは `secrecy` の `Debug` マスクで自動秘匿。ログファイルはローテート（サイズ・日数）、`0600` 権限。プライバシ懸念のため操作ログはユーザが明示的に opt-in した場合のみ詳細化 |
 | **A10: Server-Side Request Forgery** | 該当なし — サーバサイドリクエストを行わない | 該当なし。更新チェック（`tauri-plugin-updater`）のみ固定ホストへアクセス。任意 URL への HTTP 発行 API は提供しない |

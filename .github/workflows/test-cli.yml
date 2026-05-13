@@ -1,0 +1,49 @@
+name: Test CLI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-cli:
+    # Issue #75 Bug-F-003 解消: cli-vault-commands/test-design/ci.md §7.2.1 SSoT 通り
+    # 3-OS マトリクス (`test-infra` ジョブと同型) で `cargo test -p shikomi-cli` を必須化。
+    # 単一 OS (ubuntu-latest 限定) では Sub-F の OS 依存経路 (Win Narrator / macOS VOICEOVER /
+    # PTY 経路 etc.) が CI 観測スコープから構造的に漏れる事故を再演する温床になるため。
+    name: test-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # justfile が Windows で `pwsh` 固定 (set windows-shell := ["pwsh", ...])。
+        # 他 OS は既定 (`bash -euo pipefail`) のまま。
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just test-cli
+        # ci.md §7.4 SSoT: justfile 側で
+        # `cargo test --no-fail-fast --all-targets -p shikomi-cli --features "shikomi-infra/test-fixtures"`
+        # を 1 経路で確定する (CI / lefthook / 手動 3 経路の DRY)。
+        run: just test-cli
+
+      - name: sub-f static checks
+        # ci.md §8.1 SSoT: TC-F-S01〜S06 grep ゲート。
+        # 静的検査は軽量で shikomi-cli 実装直読のため test-cli と同一 job に配置。
+        # Windows は bash スクリプト非対応のため linux/mac のみ実行。
+        if: runner.os != 'Windows'
+        run: bash tests/docs/sub-f-static-checks.sh

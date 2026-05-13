@@ -1,0 +1,365 @@
+//! `shikomi-daemon` — 常駐プロセス（IPC サーバ）。
+//!
+//! 本 crate は `[lib] + [[bin]]` の 2 ターゲット構成。lib の公開項目は全て
+//! `#[doc(hidden)]` で `cargo doc` から隠し、外部契約化しない（`publish = false`）。
+//!
+//! 設計根拠: docs/features/daemon-ipc/detailed-design/composition-root.md / daemon-runtime.md
+
+#[doc(hidden)]
+pub mod backoff;
+#[doc(hidden)]
+pub mod cache;
+#[doc(hidden)]
+pub mod error;
+#[doc(hidden)]
+pub mod hotkey;
+#[doc(hidden)]
+pub mod ipc;
+#[doc(hidden)]
+pub mod lifecycle;
+#[doc(hidden)]
+pub mod panic_hook;
+#[doc(hidden)]
+pub mod permission;
+
+pub use error::DaemonExit;
+
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Instant;
+
+use shikomi_core::vault::Vault;
+use shikomi_infra::persistence::SqliteVaultRepository;
+use tokio::sync::Mutex;
+use tracing_subscriber::EnvFilter;
+
+use crate::backoff::UnlockBackoff;
+use crate::cache::lifecycle::{make_default_os_lock_signal, run_os_lock_signal_loop, IdleTimer};
+use crate::cache::VekCache;
+use crate::hotkey::backend::BackendEnum;
+use crate::hotkey::event_loop::HotkeyEventLoop;
+use crate::hotkey::notifier::NotifyRustNotifier;
+use crate::hotkey::HotkeyManager;
+use crate::ipc::server::IpcServer;
+use crate::ipc::transport::ListenerEnum;
+use crate::lifecycle::{shutdown, single_instance::SingleInstanceLock, socket_path};
+
+// -------------------------------------------------------------------
+// run() — daemon コンポジションルート
+// -------------------------------------------------------------------
+
+/// daemon プロセスのエントリ async fn。
+///
+/// 戻り値: `std::process::ExitCode`（`DaemonExit` 経由で 0 / 1 / 2 / 3 を返す）。
+///
+/// 設計根拠: docs/features/daemon-ipc/detailed-design/composition-root.md §処理順序
+#[must_use]
+pub async fn run() -> ExitCode {
+    panic_hook::install();
+
+    init_tracing();
+
+    // 親プロセスから継承された signal mask を解除する（Unix 専用 / Windows は noop）。
+    // `cargo test` 等で `std::process::Command::spawn` した親 thread の sigmask が
+    // SIGTERM/SIGINT を block していると、子プロセスもそのマスクを継承し
+    // tokio signal handler が起動しない（BUG-DAEMON-IPC-002）。
+    lifecycle::signal_mask::unblock_shutdown_signals();
+
+    let socket_dir = match socket_path::resolve_socket_dir() {
+        Ok(d) => d,
+        Err(err) => {
+            tracing::error!(target: "shikomi_daemon::lifecycle", "cannot resolve socket dir: {err}");
+            return DaemonExit::SystemError.into();
+        }
+    };
+
+    // シングルインスタンス先取り（OS 別、3 段階）
+    let mut single_instance = match SingleInstanceLock::acquire(&socket_dir) {
+        Ok(lock) => lock,
+        Err(err) => {
+            tracing::error!(
+                target: "shikomi_daemon::lifecycle",
+                "single instance acquisition failed: {err}"
+            );
+            return single_instance_exit_code(&err).into();
+        }
+    };
+
+    // vault dir 解決 → repo 構築 → dir 準備 → load（or 空 vault 生成）
+    // 責務: create_dir_all・permissions・NotFound→空vault は SqliteVaultRepository に閉じる
+    let vault_dir = match resolve_vault_dir() {
+        Ok(p) => p,
+        Err(err) => {
+            tracing::error!(target: "shikomi_daemon::lifecycle", "cannot resolve vault dir: {err}");
+            return DaemonExit::SystemError.into();
+        }
+    };
+
+    let repo = match SqliteVaultRepository::from_directory(&vault_dir) {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::error!(target: "shikomi_daemon::lifecycle", "failed to construct repository: {err}");
+            return DaemonExit::SystemError.into();
+        }
+    };
+
+    if let Err(err) = repo.prepare_dir() {
+        tracing::error!(
+            target: "shikomi_daemon::lifecycle",
+            "cannot prepare vault dir {}: {err}",
+            vault_dir.display()
+        );
+        return DaemonExit::SystemError.into();
+    }
+
+    let vault = match repo.load_or_create_plaintext() {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::error!(target: "shikomi_daemon::init", "failed to load or create vault: {err}");
+            return DaemonExit::SystemError.into();
+        }
+    };
+
+    // Sub-E (#43): 暗号化 vault も daemon で受理する。Locked 状態で起動し、
+    // クライアントから `IpcRequest::Unlock` を受信して `VekCache` に VEK を格納する
+    // (C-22 で read/write IPC は Locked 中は VaultLocked 拒否される)。
+    // Issue #26 時代の `EncryptionUnsupported` 早期終了は Sub-E で撤去する。
+    let _ = vault.protection_mode(); // ProtectionMode 参照は保持 (Encrypted/Plaintext 双方を受理)。
+
+    let Some(listener) = single_instance.take_listener() else {
+        tracing::error!(
+            target: "shikomi_daemon::lifecycle",
+            "internal: listener missing after acquisition"
+        );
+        return DaemonExit::SystemError.into();
+    };
+
+    let repo = Arc::new(repo);
+    let vault = Arc::new(Mutex::new(vault));
+
+    // Sub-E (#43): VEK キャッシュ + 連続失敗バックオフ
+    let cache = VekCache::new();
+    let backoff = Arc::new(Mutex::new(UnlockBackoff::new()));
+
+    // Sub-D (#97): クリップボード自動消去カウントダウン基点時刻。
+    // HotkeyEventLoop と IpcServer::handle_connection で共有する。
+    let countdown_started_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+
+    // Issue #89: ホットキーバックエンド + マネージャ + イベントループの初期化
+    let hotkey_backend = BackendEnum::detect();
+    let hotkey_notifier = Arc::new(NotifyRustNotifier);
+    let hotkey_manager = {
+        let vault_guard = vault.try_lock().expect("vault not yet shared");
+        Arc::new(HotkeyManager::new(
+            Arc::clone(&hotkey_backend),
+            &vault_guard,
+            Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
+        ))
+    };
+    let clipboard = crate::hotkey::clipboard::ArboardClipboardWriter::init_shared();
+
+    // shutdown 通知 channel。`watch::channel<bool>` を使うことで、シグナル到達と
+    // receiver の poll 順序に関わらず通知が消失しない（BUG-DAEMON-IPC-002 対策）。
+    let (shutdown_tx, shutdown_rx) = shutdown::channel();
+
+    // listening ログ（観測性、tests/IT-010 で検証）
+    log_listening(&listener);
+
+    // shutdown 受信タスク（Sender を move 所有、シグナル受信で send(true)）
+    let signal_task = tokio::spawn(async move {
+        shutdown::wait_for_signal(shutdown_tx).await;
+    });
+
+    // Sub-E §C-24: アイドル 15min タイムアウトで自動 lock する `IdleTimer` を spawn
+    // C-40: debug build でのみ env seam を読んで閾値を短縮する（テスト専用 idle 加速）。
+    // release build では env 読込を行わず DEFAULT_THRESHOLD / DEFAULT_POLL_INTERVAL 固定。
+    #[cfg(debug_assertions)]
+    let debug_thresholds = read_debug_env_seam();
+    #[cfg(not(debug_assertions))]
+    let debug_thresholds: Option<(u64, u64)> = None;
+
+    let idle_timer_task = {
+        let timer = match debug_thresholds {
+            Some((threshold_secs, poll_secs)) => IdleTimer::with_thresholds(
+                cache.clone(),
+                std::time::Duration::from_secs(threshold_secs),
+                std::time::Duration::from_secs(poll_secs),
+            ),
+            None => IdleTimer::new(cache.clone()),
+        };
+        let rx = shutdown_rx.clone();
+        tokio::spawn(timer.run(rx))
+    };
+
+    // Sub-E §C-25: OS スクリーンロック / サスペンド購読 task を spawn
+    let os_lock_signal_task = {
+        let cache_for_signal = cache.clone();
+        let signal = make_default_os_lock_signal();
+        let rx = shutdown_rx.clone();
+        tokio::spawn(run_os_lock_signal_loop(cache_for_signal, signal, rx))
+    };
+
+    // Issue #89: ホットキーイベントループを spawn
+    let event_loop_task = {
+        let event_loop = HotkeyEventLoop::new(
+            Arc::clone(&hotkey_backend),
+            Arc::clone(&vault),
+            cache.clone(),
+            Arc::clone(&clipboard),
+            Arc::clone(&hotkey_notifier) as Arc<dyn crate::hotkey::notifier::Notifier>,
+            Arc::clone(&countdown_started_at),
+        );
+        let rx = shutdown_rx.clone();
+        tokio::spawn(async move { event_loop.run(rx).await })
+    };
+
+    // server 実行 (Sub-E (#43): cache / backoff を注入)
+    let mut server = IpcServer::new(
+        listener,
+        Arc::clone(&repo),
+        Arc::clone(&vault),
+        cache.clone(),
+        Arc::clone(&backoff),
+        Arc::clone(&hotkey_manager),
+        Arc::clone(&countdown_started_at),
+    );
+    let server_result = server.start_with_shutdown(shutdown_rx).await;
+
+    // バックグラウンド task の解放
+    event_loop_task.abort();
+    idle_timer_task.abort();
+    os_lock_signal_task.abort();
+
+    // signal task の解放（shutdown 通知済みなら戻ってくる）
+    signal_task.abort();
+
+    // 明示的に共有資源を drop し、Drop 順序を可視化
+    drop(server);
+    drop(hotkey_manager); // Drop 時に全ホットキーを OS から解除
+    drop(hotkey_backend);
+    drop(clipboard);
+    drop(vault);
+    drop(repo);
+    drop(single_instance);
+
+    match server_result {
+        Ok(()) => {
+            tracing::info!(target: "shikomi_daemon::lifecycle", "graceful shutdown complete");
+            DaemonExit::Success.into()
+        }
+        Err(err) => {
+            tracing::error!(target: "shikomi_daemon::lifecycle", "server error: {err}");
+            DaemonExit::SystemError.into()
+        }
+    }
+}
+
+// -------------------------------------------------------------------
+// 補助関数
+// -------------------------------------------------------------------
+
+fn init_tracing() {
+    let filter =
+        EnvFilter::try_from_env("SHIKOMI_DAEMON_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(true)
+        .try_init();
+}
+
+/// vault ディレクトリを解決する。
+///
+/// CLI と同じく `dirs::data_dir()` 直下を使う（`SHIKOMI_VAULT_DIR` の env 上書きは
+/// `SqliteVaultRepository::new()` 経路で吸収済みだが、本 daemon は明示パスで構築する）。
+fn resolve_vault_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    if let Ok(v) = std::env::var("SHIKOMI_VAULT_DIR") {
+        return Ok(std::path::PathBuf::from(v));
+    }
+    dirs::data_dir()
+        .map(|base| base.join("shikomi"))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "data_dir is not available on this platform",
+            )
+        })
+}
+
+fn single_instance_exit_code(err: &lifecycle::single_instance::SingleInstanceError) -> DaemonExit {
+    use lifecycle::single_instance::SingleInstanceError;
+    match err {
+        SingleInstanceError::AlreadyRunning { .. } => DaemonExit::SingleInstanceUnavailable,
+        _ => DaemonExit::SystemError,
+    }
+}
+
+/// C-40: `#[cfg(debug_assertions)]` 限定 env seam。
+///
+/// `SHIKOMI_DAEMON_*` で始まる環境変数を allowlist（下記 3 定数）で検証し、
+/// 未知 env を発見したら `panic!` で即終了する（攻撃面拡大防止 / TC-F-S06）。
+///
+/// `SHIKOMI_DAEMON_LOG` は Sub-A 以前から存在する tracing 専用 env（`init_tracing` で読む）。
+/// C-40 テスト用 seam の範囲外であり ALLOWLIST に列挙しない。ループ前に明示的に除外する。
+///
+/// release build にはコンパイルされないため本番バイナリへの env seam 漏洩はない（TC-F-S05(a)）。
+///
+/// # Returns
+/// `Some((threshold_secs, poll_secs))` — カスタム閾値が指定された場合。
+/// `None` — env 未指定。`IdleTimer::new()`（デフォルト 15min）を使う。
+#[cfg(debug_assertions)]
+fn read_debug_env_seam() -> Option<(u64, u64)> {
+    /// C-40 allowlist: 許可する `SHIKOMI_DAEMON_*` 環境変数（TC-F-S06(a)）。
+    /// 設計書 SSoT 通り 3 定数のみ。`SHIKOMI_DAEMON_LOG` は tracing 専用で別枠扱い。
+    const ALLOWLIST: &[&str] = &[
+        "SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS",
+        "SHIKOMI_DAEMON_POLL_INTERVAL_SECS",
+        "SHIKOMI_DAEMON_FORCE_RELOCK_FAIL",
+    ];
+    /// tracing 専用 env（Sub-A 以前から存在、C-40 allowlist 対象外）。
+    const TRACING_LOG_ENV: &str = "SHIKOMI_DAEMON_LOG";
+
+    for (key, _) in std::env::vars() {
+        if key.starts_with("SHIKOMI_DAEMON_")
+            && key != TRACING_LOG_ENV
+            && !ALLOWLIST.contains(&key.as_str())
+        {
+            // 未知 env は攻撃面拡大防止のため即終了（TC-F-S06(b)）。
+            panic!("unknown SHIKOMI_DAEMON_* env var rejected: {key} (C-40 allowlist)");
+        }
+    }
+
+    let threshold = std::env::var("SHIKOMI_DAEMON_IDLE_THRESHOLD_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    let poll = std::env::var("SHIKOMI_DAEMON_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    match (threshold, poll) {
+        (None, None) => None,
+        (t, p) => Some((
+            t.unwrap_or(IdleTimer::DEFAULT_THRESHOLD.as_secs()),
+            p.unwrap_or(IdleTimer::DEFAULT_POLL_INTERVAL.as_secs()),
+        )),
+    }
+}
+
+fn log_listening(listener: &ListenerEnum) {
+    match listener {
+        #[cfg(unix)]
+        ListenerEnum::Unix { socket_path, .. } => {
+            tracing::info!(
+                target: "shikomi_daemon::lifecycle",
+                "shikomi-daemon listening on {}",
+                socket_path.display()
+            );
+        }
+        #[cfg(windows)]
+        ListenerEnum::Windows { pipe_name, .. } => {
+            tracing::info!(
+                target: "shikomi_daemon::lifecycle",
+                "shikomi-daemon listening on {pipe_name}"
+            );
+        }
+    }
+}

@@ -1,0 +1,43 @@
+name: Bench KDF
+
+# Sub-B (#40) BC-3 リリースブロッカ — KDF 性能ベンチ。
+# 設計書: docs/features/vault-encryption/detailed-design/kdf.md §性能契約 +
+#         §CI ジョブ「bench-kdf ジョブを追加（OS マトリクス 3）」
+#
+# Argon2id `FROZEN_OWASP_2024_05` の単一 derive 時間 median を `750 ms`
+# (p95 ≤ 1.0 s の proxy 閾値) と比較し、超過時に CI を fail させる。
+# 3 OS (Linux / macOS / Windows) の最低スペック相当 runner で gating。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench-kdf:
+    name: bench-kdf
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        # gating script は bash で書いているため、Windows でも Git for Windows
+        # 同梱の bash.exe を使う (justfile の commit-msg-check と同方式)。
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just
+        run: cargo install --locked just
+
+      - name: just bench-kdf (Argon2id median <= 750ms gating)
+        run: just bench-kdf

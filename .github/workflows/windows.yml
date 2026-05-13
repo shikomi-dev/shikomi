@@ -1,0 +1,172 @@
+name: Test Infra (Windows)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-infra-windows:
+    name: test-infra-windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        # windows-latest は PowerShell 7+ を既定搭載 (2023 以降)。justfile の windows-shell と整合。
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just
+        run: cargo install --locked just
+
+      # Bug-G-002 (Option B 採用): Win CI ランナーの Defender / Search Indexer が
+      # `vault.db` ハンドルを `~1.5 秒+` 連続スキャンロックする事象 (CI run 24972766065 観測)
+      # により、`vault-persistence` の指数バックオフ retry budget (~1675ms、
+      # `docs/features/vault-persistence/basic-design/security.md` §jitter SSoT) ですら
+      # `AtomicWriteFailed { code: 5 PermissionDenied }` が発生し `vault_migration_integration`
+      # 5 件 + TC-I29 主 + TC-I29-B が CI 連続 fail する。
+      #
+      # 対策: テスト作業領域 (`RUNNER_TEMP` = `tempfile::TempDir` の親) と
+      # `target/` (compile artifact) を Defender ExclusionPath に、vault DB の拡張子
+      # (`db` / `db-wal` / `db-shm` / `db-journal` / `db.new`) を ExclusionExtension に
+      # 登録し、スキャン経路を構造的に塞ぐ。
+      #
+      # 適用範囲: **CI 環境のみのワークアラウンド**。本番ユーザー環境 (Defender 配下) では
+      # 実装側の指数バックオフ retry が典型 race を吸収する設計を SSoT としている
+      # (典型 Defender 介入 ~250ms+ は retry 3 回目 (~350ms) で吸収、Bug-G-001 反映済)。
+      # `Add-MpPreference` 失敗時 (Defender 無効環境等) は `Write-Warning` のみで継続し、
+      # ジョブ全体は fail させない (Fail Secure の degrade 動作)。
+      - name: Add Windows Defender exclusions for vault-persistence test workspace
+        run: |
+          $paths = @($env:RUNNER_TEMP, "$env:GITHUB_WORKSPACE\target")
+          $exts = @("db", "db-wal", "db-shm", "db-journal", "db.new")
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "[OK] Defender ExclusionPath added: $p"
+            } catch {
+              Write-Warning "Failed to add Defender ExclusionPath '$p': $_"
+            }
+          }
+          foreach ($e in $exts) {
+            try {
+              Add-MpPreference -ExclusionExtension $e -ErrorAction Stop
+              Write-Host "[OK] Defender ExclusionExtension added: $e"
+            } catch {
+              Write-Warning "Failed to add Defender ExclusionExtension '$e': $_"
+            }
+          }
+          try {
+            Write-Host "--- current Defender ExclusionPath ---"
+            (Get-MpPreference).ExclusionPath | ForEach-Object { Write-Host "  $_" }
+            Write-Host "--- current Defender ExclusionExtension ---"
+            (Get-MpPreference).ExclusionExtension | ForEach-Object { Write-Host "  $_" }
+          } catch {
+            Write-Warning "Failed to enumerate Defender exclusions: $_"
+          }
+
+      # Bug-G-003 (Option G 採用): Defender exclusion 投入後も TC-I29 主 / TC-I29-B が
+      # Win CI で `~1.5 秒+` の `outcome="exhausted"` で fail し続ける事象 (CI run 24973364989) は
+      # **Defender ではなく Windows Search Indexer (`WSearch`) や SysMain (旧 SuperFetch) が
+      # `vault.db` ハンドルを連続スキャンロックしている**可能性が高いと判明
+      # (Bug-G-003 §真犯人候補 §B / §C)。Defender exclusion とは別系統のため、本ステップで
+      # 両サービスを停止してスキャナ全体を抑制する。
+      #
+      # 適用範囲: **CI 環境のみのワークアラウンド** (本番ユーザーは WSearch / SysMain 動作前提)。
+      # サービス停止失敗 (権限不足 / 既停止 / サービス無し) は `Write-Warning` のみで継続し、
+      # ジョブ全体は fail させない (Fail Secure の degrade 動作、Defender exclusion と同方針)。
+      - name: Stop Windows Search / SysMain services (CI scan suppression)
+        run: |
+          $services = @("WSearch", "SysMain")
+          foreach ($svc in $services) {
+            try {
+              Stop-Service -Name $svc -Force -ErrorAction Stop
+              Write-Host "[OK] Service stopped: $svc"
+            } catch {
+              Write-Warning "Failed to stop service '$svc': $_"
+            }
+          }
+          try {
+            Write-Host "--- current relevant service status ---"
+            Get-Service -Name $services -ErrorAction SilentlyContinue |
+              Select-Object Name, Status |
+              Format-Table | Out-String | Write-Host
+          } catch {
+            Write-Warning "Failed to enumerate service status: $_"
+          }
+
+      - name: just test-infra
+        run: just test-infra
+
+  # Windows 側 commit-msg 経路の回帰テスト。
+  # justfile の commit-msg-check / commit-msg-no-ai-footer が shebang bash レシピで
+  # 動作することを windows-latest + pwsh + Git for Windows の組み合わせで検証する。
+  # Linux だけで通っていても PowerShell の < 非対応で Windows 全コミット不能になる
+  # 事故 (前回 PR #24 レビュー指摘) の再発防止。
+  commit-msg-windows:
+    name: commit-msg-windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install just / convco
+        run: cargo install --locked just convco
+
+      # 正常系: Conventional Commits 1.0 準拠 → exit 0
+      - name: commit-msg-check accepts conventional commit
+        run: |
+          "feat(dev-workflow): windows commit-msg regression good" | Out-File -FilePath good.msg -Encoding utf8
+          just commit-msg-check good.msg
+
+      # 異常系: 非準拠メッセージ → exit 非 0 (失敗で ok、成功なら回帰発生でジョブ fail)
+      # pwsh は step 終了時の $LASTEXITCODE をそのまま step exit code にするため、
+      # `just` が exit 1 した直後の残留値で step が fail する。期待通りの失敗を
+      # 「成功」と再判定するため、明示的に `exit 0` でステップを締める。
+      - name: commit-msg-check rejects non-conventional commit
+        run: |
+          "random nonsense message" | Out-File -FilePath bad.msg -Encoding utf8
+          $global:LASTEXITCODE = 0
+          just commit-msg-check bad.msg
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "commit-msg-check は非準拠メッセージを通してしまいました (回帰)"
+            exit 1
+          }
+          Write-Host "[OK] commit-msg-check rejected non-conventional message as expected"
+          exit 0
+
+      # AI フッター検出 (REQ-DW-018) の Windows 側通過確認
+      - name: commit-msg-no-ai-footer passes clean message
+        run: |
+          "feat: clean" | Out-File -FilePath clean.msg -Encoding utf8
+          just commit-msg-no-ai-footer clean.msg
+
+      # pwsh の $LASTEXITCODE 残留対策（上記 commit-msg-check rejects ステップ参照）。
+      - name: commit-msg-no-ai-footer rejects AI trailer
+        run: |
+          @"
+          feat: add foo
+
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          "@ | Out-File -FilePath ai.msg -Encoding utf8
+          $global:LASTEXITCODE = 0
+          just commit-msg-no-ai-footer ai.msg
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "commit-msg-no-ai-footer は AI trailer を通してしまいました (REQ-DW-018 回帰)"
+            exit 1
+          }
+          Write-Host "[OK] commit-msg-no-ai-footer rejected AI trailer as expected"
+          exit 0

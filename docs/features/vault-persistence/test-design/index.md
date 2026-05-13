@@ -1,0 +1,224 @@
+# テスト設計書（インデックス） — vault-persistence
+
+## 1. 概要
+
+| 項目 | 内容 |
+|------|------|
+| 対象 feature | vault-persistence（`shikomi-infra` への `VaultRepository` trait + SQLite 実装 + atomic write） |
+| 対象 Issue | [#10](https://github.com/shikomi-dev/shikomi/issues/10) |
+| 対象ブランチ | `feat/issue-10-vault-persistence` |
+| 設計根拠 | `docs/features/vault-persistence/requirements-analysis.md`（REQ-P01〜P12・受入基準）、`docs/features/vault-persistence/basic-design/`（`index.md` モジュール構成 / `security.md` 脅威モデル・監査ログ・Windows DACL / `error.md` エラー方針）、`docs/features/vault-persistence/detailed-design/`（エラー型・SQL・atomic write アルゴリズム・Windows 内部構造） |
+| テスト実行タイミング | `feat/issue-10-vault-persistence` → `develop` へのマージ前 |
+
+### ファイル構成
+
+| ファイル | 内容 |
+|---------|------|
+| `index.md`（本ファイル） | 概要・受入基準・テストマトリクス・E2E設計・モック方針・実行手順・カバレッジ基準 |
+| `integration/index.md` | 結合テスト設計（TC-I01〜TC-I29）詳細。§0 に Issue #65 由来の外部 I/O 依存マップ |
+| `integration/changelog.md` | 結合テスト設計の改訂履歴（v6〜v8.5、Bug-G-002〜G-007 7 ラウンド実験経緯） |
+| `unit.md` | ユニットテスト設計（TC-U01〜TC-U16）詳細 |
+
+---
+
+## 2. テスト対象と受入基準
+
+> **注**: AC-01〜AC-17 は `docs/features/vault-persistence/requirements-analysis.md` §受入基準と **完全 1:1 対応**（`requirements-analysis.md` 現行体系を正として、セル・マユリ間で合意確定 2026-04-23）。R-01（save 中クラッシュ耐性 / SIGKILL 非決定的）は合格判定軸外のリスク観点として別置き。AC-06 の `write_new_only` テストが R-01 の論理等価を決定的に検証する。
+
+| 受入基準ID | 受入基準 | 検証レベル |
+|-----------|---------|-----------|
+| AC-01 | 全機能 REQ-P01〜REQ-P15 の型とメソッドが `shikomi-infra` の公開 API または crate 内部 symbol に存在する（`VaultLock`・`audit.rs`・`VaultDirReason` 含む） | 結合 |
+| AC-02 | 平文 vault の `save` → `load` で同一 `Vault` が復元される（レコード順含む） | 結合 |
+| AC-03 | 暗号化モード vault を `save` すると `PersistenceError::UnsupportedYet` が返る | 結合 |
+| AC-04 | 暗号化モード vault を `load` すると `PersistenceError::UnsupportedYet` が返る | 結合 |
+| AC-05 | `.new` ファイルを手動で残した状態で `load` を呼ぶと `PersistenceError::OrphanNewFile` が返る | 結合 |
+| AC-06 | `AtomicWriter::write_new_only` テストフックを使って `.new` 書込完了後 rename なし状態を再現 → `vault.db` 本体が未変更で `OrphanNewFile` が返る（R-01 参考観点の決定的等価テスト） | 結合 |
+| AC-07 | vault ディレクトリが `0777` で作られている状態で `load` すると `PersistenceError::InvalidPermission` が返る | 結合（Unix） |
+| AC-08 | vault.db に対し任意の UTF-8 文字列（絵文字含む）の label を保存し復元できる | 結合 |
+| AC-09 | 生 SQL 連結を使っていない（`rusqlite::params!` マクロ経由でのみバインドしている） | 結合（静的 grep） |
+| AC-10 | `cargo test -p shikomi-infra` が pass、行カバレッジ 80% 以上 | 結合（CI） |
+| AC-11 | `cargo clippy --workspace`（`[workspace.lints.clippy]` の `all="deny"` 違反ゼロ、`pedantic="warn"` は意図的に warn として維持し CI を fail させない） / `cargo fmt --check` / `cargo deny check` が全て pass | 結合（CI） |
+| AC-12 | `SqliteVaultRepository::save` 直後に `stat` でファイルパーミッションを確認すると `0600` である | 結合（Unix） |
+| AC-13 | 破損した SQLite ファイル（ゼロバイト / 不正バイト列）を渡すと `PersistenceError::Corrupted` または `PersistenceError::Sqlite` が返り panic しない | 結合 |
+| AC-14 | `vault.db.new` が残存した状態で `save()` を呼ぶと `PersistenceError::OrphanNewFile` が返る（save 側 Fail Secure、REQ-P05） | 結合 |
+| AC-15 | `tracing` ログ（全レベル）に `SecretString` / `SecretBytes` / `plaintext_value` / `kdf_salt` / `wrapped_vek_*` の生値が一切出現しない（REQ-P14 監査ログ秘密漏洩防止） | 結合 |
+| AC-16 | `SHIKOMI_VAULT_DIR` に `/etc/` / `..` 含むパス / シンボリックリンクを指定するとそれぞれ `PersistenceError::InvalidVaultDir` で拒否される（REQ-P15 `VaultPaths::new` 7段階バリデーション） | 結合（Unix） |
+| AC-17 | `SqliteVaultRepository::save` 中に別プロセスが同ディレクトリで save を試みると `PersistenceError::Locked` が返る（REQ-P13 advisory lock 競合検知） | 結合 |
+| AC-18 | Sub-D 由来 integration test `vault_migration_integration.rs` の 5 件（`tc_d_i01`〜`i05`）が **Windows ランナーで PASS** する（`AtomicWriter` のクローズ順序契約 + WAL/journal サイドカー解放 + Win 限定 rename retry の合成効果による既存テスト緑化、Issue #65） | 結合（Win） |
+| AC-19 | 並行スレッドが `vault.db` を `share_mode = 0` で短時間保持中に `save()` を発火しても、`cfg(windows)` 限定 rename retry（**指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms**、`../basic-design/security.md` §atomic write の二次防衛線 §jitter、Bug-G-001 で線形 375ms から拡張）が一過性ロックを吸収して `Ok(())` を返す（Issue #65 補強の機能検証） | 結合（Win） |
+
+> **リスク観点**（合格判定軸外）: **R-01**: save 中クラッシュ（SIGKILL 相当）耐性 — 非決定的で CI 不適。論理等価な決定的テストは **AC-06 / TC-I06** で保証済み。手動探索テストとしてのみ残置。
+
+---
+
+## 3. テストマトリクス（トレーサビリティ）
+
+| テストID | 受入基準ID | REQ-ID | 検証内容 | テストレベル | 種別 |
+|---------|-----------|-------|---------|------------|------|
+| TC-I01 | AC-01 | REQ-P01〜P15 | `cargo doc -p shikomi-infra --no-deps` が成功し公開型（`VaultLock`・`VaultDirReason` 含む）が出力される | 結合 | 正常系 |
+| TC-I02 | AC-02 | REQ-P01, P02, P03, P04, P09 | 平文 vault（レコード 5 件）の save → load round-trip で `Vault` が等価復元される | 結合 | 正常系 |
+| TC-I03 | AC-03 | REQ-P11 | 暗号化モード `Vault` を save → `UnsupportedYet` が返る。`.new` が作成されていない | 結合 | 異常系 |
+| TC-I04 | AC-04 | REQ-P11 | `protection_mode='encrypted'` の vault.db を直接作成して load → `UnsupportedYet` が返る | 結合 | 異常系 |
+| TC-I05 | AC-05 | REQ-P05 | `vault.db.new` 手動作成後 `load()` → `OrphanNewFile` が返る | 結合 | 異常系 |
+| TC-I06 | AC-06 | REQ-P04 | `write_new_only` フックで `.new` のみ作成 → `vault.db` 未変更・`load()` が `OrphanNewFile` を返す（R-01 参考観点の論理等価、AC-06 の決定的テスト） | 結合 | 異常系 |
+| TC-I07 | AC-07 | REQ-P06 | vault ディレクトリを `chmod 0777` → `load()` が `InvalidPermission` を返す（Unix） | 結合 | 異常系 |
+| TC-I08 | AC-08 | REQ-P09, P12 | 絵文字・CJK・アラビア文字を含む label の save → load round-trip でバイト同一を確認 | 結合 | 境界値 |
+| TC-I09 | AC-09 | REQ-P12 | SQL 文字列連結パターンの静的 grep → マッチ行ゼロ | 結合（静的） | 正常系 |
+| TC-I10 | AC-10 | — | `cargo test -p shikomi-infra` が pass かつ行カバレッジ ≥ 80% | 結合（CI） | 正常系 |
+| TC-I11 | AC-11 | — | `cargo clippy --workspace`（`[workspace.lints.clippy] all="deny"` 違反ゼロ、`pedantic="warn"` は warn のまま）／ `cargo fmt --check --all` ／ `cargo deny check` が全て pass | 結合（CI） | 正常系 |
+| TC-I12 | AC-12 | REQ-P06 | save 完了後 `stat(vault.db).mode() & 0o777 == 0o600` を確認（Unix） | 結合 | 正常系 |
+| TC-I13 | AC-13 | REQ-P09, P10 | ゼロバイト vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
+| TC-I14 | AC-13 | REQ-P09, P10 | 不正バイト列 vault.db → `Sqlite` or `SchemaMismatch` が返り panic しない | 結合 | 異常系 |
+| TC-I15 | AC-14 | REQ-P05 | `vault.db.new` 手動作成後 `save()` → `OrphanNewFile` が返る。`vault.db` 未変更 | 結合 | 異常系 |
+| TC-I16 | — | REQ-P01 | `exists()` が vault.db 非存在時に `Ok(false)` を返す | 結合 | 正常系 |
+| TC-I17 | — | REQ-P01 | `exists()` が vault.db 存在時に `Ok(true)` を返す（save 後に確認） | 結合 | 正常系 |
+| TC-I18 | — | REQ-P08 | `SHIKOMI_VAULT_DIR` 環境変数を tempdir に設定 → 指定ディレクトリに vault.db が作成される（`serial_test` クレートで直列化） | 結合 | 正常系 |
+| TC-I19 | AC-02 | REQ-P02, P03 | ゼロレコード平文 vault の save → load round-trip（境界値） | 結合 | 境界値 |
+| TC-I20 | — | REQ-P03, P12 | CHECK 制約違反の生 SQL を直接実行 → `SQLITE_CONSTRAINT_CHECK` エラーが返る（防衛線確認） | 結合 | 異常系 |
+| TC-I21 | AC-17 | REQ-P13 | 子プロセス 2 本が同 vault ディレクトリで `save()` を同時呼出 → 後発プロセスが `PersistenceError::Locked` を返す | 結合 | 異常系 |
+| TC-I22 | AC-16 | REQ-P15 | `SHIKOMI_VAULT_DIR` に `..` 含むパス / シンボリックリンク / `/etc/` 配下 をそれぞれ指定 → 全ケースで `PersistenceError::InvalidVaultDir` が返る（Unix） | 結合 | 異常系 |
+| TC-I23 | AC-15 | REQ-P14 | `tracing-test` で全操作（save/load/exists/error）のログを収集し、秘密値パターンがマッチしないことを確認 | 結合 | 正常系 |
+| TC-U01 | — | REQ-P08, P15 | `VaultPaths::new` が正常パスで `Ok(VaultPaths)` を返し `vault_db()` / `vault_db_new()` / `vault_db_lock()` が正しいパスを返す | ユニット | 正常系 |
+| TC-U02 | — | REQ-P09 | `Mapping::vault_header_to_params` が平文モードで `kdf_salt = None` を返す | ユニット | 正常系 |
+| TC-U03 | — | REQ-P09 | `Mapping::row_to_vault_header` が正常行から `VaultHeader` を復元する | ユニット | 正常系 |
+| TC-U04 | — | REQ-P09, P10 | `Mapping::row_to_vault_header` に `protection_mode='unknown'` → `Corrupted { UnknownProtectionMode }` | ユニット | 異常系 |
+| TC-U05 | — | REQ-P09, P10 | `Mapping::row_to_vault_header` に不正 RFC3339 → `Corrupted { InvalidRfc3339 }` | ユニット | 異常系 |
+| TC-U06 | — | REQ-P09 | `Mapping::row_to_record` が正常な `'plaintext'` 行から `Record` を復元する | ユニット | 正常系 |
+| TC-U07 | — | REQ-P09, P10 | `Mapping::row_to_record` に不正 UUID 文字列 → `Corrupted { InvalidUuidString }` | ユニット | 異常系 |
+| TC-U08 | — | REQ-P09, P10 | `Mapping::row_to_record` に `payload_variant='plaintext'` かつ `plaintext_value=NULL` → `Corrupted { NullViolation }` | ユニット | 異常系 |
+| TC-U09 | — | REQ-P06 | `PermissionGuard::verify_dir` に `mode=0o700` → `Ok(())` （Unix） | ユニット | 正常系 |
+| TC-U10 | — | REQ-P06 | `PermissionGuard::verify_dir` に `mode=0o755` → `Err(InvalidPermission)` （Unix） | ユニット | 異常系 |
+| TC-U11 | — | REQ-P06 | `PermissionGuard::verify_file` に `mode=0o600` → `Ok(())` （Unix） | ユニット | 正常系 |
+| TC-U12 | — | REQ-P06 | `PermissionGuard::verify_file` に `mode=0o644` → `Err(InvalidPermission)` （Unix） | ユニット | 異常系 |
+| TC-U13 | AC-16 | REQ-P15 | `VaultPaths::new` に相対パスを渡す → `Err(InvalidVaultDir { reason: NotAbsolute })` | ユニット | 異常系 |
+| TC-U14 | AC-16 | REQ-P15 | `VaultPaths::new` に `..` を含むパスを渡す → `Err(InvalidVaultDir { reason: PathTraversal })` | ユニット | 異常系 |
+| TC-U15 | AC-16 | REQ-P15 | `VaultPaths::new` にシンボリックリンクを渡す → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })` （Unix） | ユニット | 異常系 |
+| TC-U16 | AC-16 | REQ-P15 | `VaultPaths::new` に `/etc/` 配下のパスを渡す → `Err(InvalidVaultDir { reason: ProtectedSystemArea })` （Unix） | ユニット | 異常系 |
+| TC-I28 | AC-18 | REQ-P04 | Win CI で `cargo test -p shikomi-infra --test vault_migration_integration` を実行 → 5 件全 PASS（修正前の `AtomicWriteFailed { stage: Rename, code:5 PermissionDenied }` パターンが消滅、PR #64 失敗ログとの diff を証跡） | 結合（Win） | 異常系の green 化 |
+| TC-I29 | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で短時間（≤ 200ms）保持中に `save()` 発火 → retry が吸収して `Ok(())`、復元 vault が新内容と一致、`fsync_and_rename` 全体が **指数バックオフ込み最悪 ~1675ms 以内**に完了（`../basic-design/security.md` §atomic write の二次防衛線 §jitter）+ 監査ログに `outcome=pending` / `outcome=succeeded`（`%outcome` Display 経由、クォート無し wire format）が emit される | 結合（Win） | 異常系（race 状態下での正常完了検証） |
+| TC-I29-A | AC-19 | REQ-P04 | 補助スレッドが `vault.db` を `share_mode(0)` で **指数バックオフ最悪 ~1675ms を確実に超える時間**（≥ 2500ms）保持中に `save()` 発火 → retry 5 回全敗で `Err(AtomicWriteFailed { stage: Rename })`、監査ログに `"rename retry exhausted"` (**error レベル**) + `outcome=exhausted`（`%outcome` Display 経由、クォート無し wire format、`../basic-design/security.md` §retry 監査ログ）が emit される（DoS 兆候の OWASP A09 上位通報起点） | 結合（Win） | 異常系（fail fast + 監査 error 経路） |
+| TC-I29-B | AC-19 | REQ-P04 | race 不在の通常 `save()` 2 回 → 両 `Ok(())`、監査ログに `outcome=exhausted`（クォート無し wire format）が emit されない（DoS 兆候誤発火回帰防止）。`outcome=pending` / `outcome=succeeded` の retry 経路は CI Defender 介入で偶発し得るため許容する | 結合（Win） | 正常系（sanity check） |
+| TC-I29-D-1 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に通常ファイル → `Ok` | ユニット（Win） | 正常系 |
+| TC-I29-D-2 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に未存在パス → `Ok`（初回 save の `final_path` 経路） | ユニット（Win） | 正常系 |
+| TC-I29-D-3 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に `mklink /J` で作った junction → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })`（reparse point ビット検出経路） | ユニット（Win） | 異常系 |
+| TC-I29-D-4 | AC-19 | REQ-P04 | `reverify_no_reparse_point` に `symlink_dir` で作った dir symlink → `Err(InvalidVaultDir { reason: SymlinkNotAllowed })`（`is_symlink()` 検出経路） | ユニット（Win） | 異常系 |
+
+---
+
+## 4. E2Eテスト設計
+
+**省略理由**: `shikomi-infra` は `VaultRepository` を提供する内部ライブラリ crate であり、エンドユーザーが直接操作する CLI / GUI / 公開 HTTP API を持たない。
+
+テスト戦略ガイドの方針「エンドユーザー操作（UI/CLI/公開API）がない場合は結合テストで代替可」に従い、E2E は本 feature では設計対象外とする。エンドユーザーが `shikomi-infra` を直接触れるのは後続 Issue（`shikomi-cli` / `shikomi-daemon`）が公開される段階。受入基準 AC-01〜AC-17 は `integration/index.md` の結合テストで網羅する。
+
+---
+
+## 5. モック方針
+
+| 検証対象 | モック要否 | 理由 |
+|---------|---------|------|
+| `rusqlite::Connection` | **不要**（本物を使用） | in-memory または tempdir の実 SQLite で結合テスト。モックでは CHECK 制約・PRAGMA 動作が再現できない |
+| ファイルシステム（`std::fs`） | **不要**（tempdir を使用） | `tempfile::TempDir` で OS 標準ファイルシステムを使う。atomic rename / fsync の挙動が再現できる |
+| `dirs::data_dir()` | **不要**（環境変数 `SHIKOMI_VAULT_DIR` で override） | TC-I18 で環境変数による上書きを使う。`dirs` crate 自体はモックしない |
+| `shikomi-core` ドメイン型 | **不要** | ドメイン型は実装の一部（`shikomi-core` crate）を直接利用する。assumed mock 禁止 |
+| OS パーミッション API | **不要** | 実際の `stat` / `chmod` を使う。OS 依存ケースは `#[cfg(unix)]` でガード |
+| 外部 API / ネットワーク | **対象外** | 本 crate は外部 API を持たない |
+
+---
+
+## 6. 実行手順と証跡
+
+### 実行環境
+
+| 項目 | 内容 |
+|------|------|
+| Rust toolchain | `rustup` でインストール済み（`stable` チャネル） |
+| cargo-llvm-cov | `cargo install cargo-llvm-cov` |
+| cargo-deny | `cargo install cargo-deny` |
+| serial_test | `Cargo.toml` の `[dev-dependencies]` に `serial_test = "3"` を追加（`SHIKOMI_VAULT_DIR` 環境変数を書き換える TC-I18 はプロセス内の環境変数状態を変更するため、他テストと並列実行すると干渉する。`#[serial]` アトリビュートで直列化すること） |
+| OS | Linux / macOS（Unix ケース）。Windows CI でも `#[cfg(unix)]` ガード付きケース以外は通過する |
+
+### 実行コマンド例
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+echo "=== TC-I10, TC-U*: cargo test -p shikomi-infra ==="
+cargo test -p shikomi-infra 2>&1
+echo "TC-I10 (test): PASS"
+
+echo "=== TC-I10: カバレッジ確認 ==="
+cargo llvm-cov -p shikomi-infra --summary-only 2>&1 | tee /tmp/coverage.txt
+echo "TC-I10 (coverage): 確認 → /tmp/coverage.txt を参照"
+
+echo "=== TC-I01: cargo doc ==="
+cargo doc -p shikomi-infra --no-deps 2>&1
+echo "TC-I01: PASS"
+
+echo "=== TC-I11: clippy / fmt / deny ==="
+# -D warnings は使わない。workspace.lints.clippy.all="deny" が deny カテゴリを exit 非0 で弾く。
+# pedantic="warn" は意図的設計なので CI を fail させない。
+cargo clippy --workspace 2>&1
+echo "  clippy: PASS"
+cargo fmt --check --all 2>&1
+echo "  fmt: PASS"
+cargo deny check 2>&1
+echo "  deny: PASS"
+echo "TC-I11: PASS"
+
+echo "=== TC-I09: SQL インジェクション静的 grep ==="
+SQL_CONCAT=$(grep -rEn 'format!\s*\(.*(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA)' \
+  --include="*.rs" crates/shikomi-infra/src/ || true)
+if [ -z "$SQL_CONCAT" ]; then
+  echo "TC-I09: PASS (SQL 文字列連結なし)"
+else
+  echo "TC-I09: FAIL (SQL 文字列連結を検出):"
+  echo "$SQL_CONCAT"
+  exit 1
+fi
+
+echo "=== 全テスト PASS ==="
+```
+
+### 証跡
+
+- テスト実行結果（stdout/stderr/exit code）を Markdown で記録する
+- 結果ファイルを `/app/shared/attachments/マユリ/` に保存して Discord に添付する
+- `cargo llvm-cov` のカバレッジサマリを証跡として添付する
+- TC-I06（atomic write 論理等価テスト）は `write_new_only` フック呼出前後の vault.db / vault.db.new の存在確認を記録する
+
+---
+
+## 7. カバレッジ基準
+
+| 観点 | 基準 |
+|------|------|
+| 受入基準の網羅 | AC-01〜AC-19 全項目が TC-I01〜TC-I29 / TC-U01〜TC-U16 のいずれかで網羅されていること（§3 テストマトリクス参照） |
+| 正常系 | 全 正常系テストケース必須（TC-I02, I16, I17, I18, I19, I23, TC-U01〜U03, U06, U09, U11） |
+| 異常系 | 全 11 種 `PersistenceError` バリアント（`Io` / `Sqlite` / `Corrupted` / `InvalidPermission` / `InvalidVaultDir` / `OrphanNewFile` / `AtomicWriteFailed` / `SchemaMismatch` / `UnsupportedYet` / `CannotResolveVaultDir` / `Locked`）が少なくとも 1 ケースで発生・検証されること。`panic!` が一切発生しないことを確認 |
+| 境界値 | ゼロレコード（TC-I19）、絵文字ラベル（TC-I08）、ゼロバイトファイル（TC-I13）、不正バイト列（TC-I14） |
+| カバレッジ数値 | `cargo llvm-cov` 行カバレッジ 80% 以上（AC-10） |
+| Fail Secure ケース | `.new` 残存 load 側（TC-I05）・`.new` 残存 save 側（TC-I15）・OS パーミッション異常（TC-I07, TC-I12, TC-U10, TC-U12）・暗号化モード拒否（TC-I03, TC-I04）・VaultDir バリデーション（TC-I22, TC-U13〜U16）・ロック競合（TC-I21）が**必須**（省略不可） |
+| Win file-handle semantics（Issue #65） | Sub-D 既存 5 件（TC-I28）と並行 read open race（TC-I29）の双方が Windows ランナーで PASS することが**必須**。**`#[cfg(windows)] #[ignore]` での回避は問答無用で却下**（CI スコープ錯覚 = Bug-F-003 の再演温床、`integration/index.md` 冒頭注記 / `../basic-design/error.md` §禁止事項 §Windows rename retry の盲目採用は禁止 と整合） |
+
+---
+
+*作成: 涅マユリ（テスト担当）/ 2026-04-23*
+*改訂 v2: 涅マユリ（テスト担当）/ 2026-04-23 — 第1回レビュー差し戻し対応: ① `test-design/` ディレクトリ分割 ② AC-14 追加（TC-I15 トレーサビリティ修正） ③ TC-I06 を決定的テストに変更（`write_new_only` フック） ④ §6 実行環境に `serial_test` 明記*
+*改訂 v3: 涅マユリ（テスト担当）/ 2026-04-23 — 第2回レビュー差し戻し対応: ⑤ AC-01 範囲を REQ-P15 まで更新 ⑥ AC-15〜17 追加（REQ-P14/P15/P13 対応） ⑦ TC-I21〜I23（VaultLock競合・VaultPaths::newバリデーション・tracing秘密漏洩）追加 ⑧ TC-U01 更新（VaultPaths::new が Result 返却）⑨ TC-U13〜U16（VaultPaths::new 異常系 4 件）追加 ⑩ カバレッジ基準のバリアント数を 11 種に修正*
+*改訂 v4: 涅マユリ（テスト担当）/ 2026-04-23 — 第3回レビュー差し戻し対応: ⑪ AC 番号を要件側受入基準#1〜#17 と完全 1:1 に整合（誤った統合版）*
+*改訂 v5: 涅マユリ（テスト担当）/ 2026-04-23 — キャプテン決定「17 項目体系確定」に基づき requirements-analysis.md 現行体系と 1:1 合致する形へ再修正。セルとのマスターテーブル合意（2026-04-23）後に実施。① AC-03=save/load 統合を廃止し AC-03=save のみ・AC-04=load のみに分離 ② 旧 AC-05（クラッシュ参考観点）を削除し AC-05=.new 残存 load に戻す ③ AC-06=write_new_only（R-01 決定的等価）を確定 ④ AC-07〜AC-17 を requirements-analysis.md 現行の順序に完全一致 ⑤ R-01 をリスク観点として明示 ⑥ integration.md・unit.md・テストマトリクス全 AC 参照を追随更新*
+*改訂 v6: 涅マユリ（テスト担当）/ 2026-04-26 — Issue #65（Windows AtomicWrite rename 失敗）対応。① AC-18 追加（Sub-D `vault_migration_integration` 5 件 Win green 化を受入条件化）② AC-19 追加（並行 read open race を retry が吸収する補強検証）③ TC-I28・TC-I29 をマトリクスに追加 ④ カバレッジ基準の AC 範囲を AC-19 まで拡張、TC 範囲を TC-I29 まで拡張 ⑤ Fail Secure ケースに「Win file-handle semantics」行を追加し `#[cfg(windows)] #[ignore]` 回避禁止を SSoT 化（`integration.md` §0 外部 I/O 依存マップ・冒頭注記と二重露出による忘却防止）*
+*改訂 v6.1: 涅マユリ（テスト担当）/ 2026-04-26 — ペテルギウス再レビュー指摘反映。`security.md` §atomic write の二次防衛線 §jitter（±25ms 一様乱数追加、最悪 375ms / 平均 ~250ms）の同期漏れを修正。① AC-19 のretry 上限記述を「上限 約 375ms（50ms × 5 + jitter ±25ms × 5）/ 平均 ~250ms」に更新、`security.md` §jitter への参照追加 ② TC-I29 行のタイムアウト閾値を「jitter 込み最悪 375ms 以内」に更新 ③ `integration.md` 側 TC-I29 期待結果と実装上の注意を「150ms 保持は 1〜2 回目 retry で吸収される設計」と明確化（security.md ↔ flows.md ↔ test-design/* 三位一体の SSoT 整合確保）*
+
+*改訂 v7.0: 涅マユリ（テスト担当）/ 2026-04-27 — Issue #65 工程4（テスト実装）対応で AC-19 のテストカバレッジを 6 ケースに拡張。① TC-I29-A（DoS 兆候 / `outcome="exhausted"` error レベル発火）追加、補助スレッド 600ms 保持で retry 5 回全敗を決定的に再現 ② TC-I29-B（race 不在の通常 save で retry 監査ログが一切 emit されない sanity check、偽 emit バグ回帰防止）追加 ③ TC-I29-D-1〜D-4（`reverify_no_reparse_point` 4 経路ユニット検証、TOCTOU 二次防衛線）追加。詳細は `integration.md` §TC-I29-A / §TC-I29-B / §TC-I29-D 参照*
+
+*改訂 v8.0: 坂田銀時（実装担当）/ 2026-04-27 — Bug-G-001 反映。Win CI ランナーの Defender / Search Indexer が `vault.db` ハンドルを `~250ms+` 保持し続けるため、当初の線形 `50ms × 5 = 最悪 ~375ms` budget では `vault_migration_integration` 5 件 + TC-I29 主 + TC-I29-B が継続 fail する事象を解消。① AC-19 を「指数バックオフ `50ms × 2^(n-1)` ± `25ms` jitter × 5 = 上限 約 1675ms / 平均 ~1550ms」に SSoT 拡張 ② TC-I29 / TC-I29-A / TC-I29-B 行のタイムアウト閾値・補助スレッド保持時間を新 SSoT に同期 ③ TC-I29-B 期待結果を「retry 監査ログ全 emit NG」から「`outcome="exhausted"` のみ NG（`pending` / `succeeded` は CI Defender 介入で許容）」に緩和（旧 `integration.md` v7.1 で既に test 側に反映済の SSoT 同期）。`security.md` §jitter ↔ `error.md` ↔ `flows.md` ↔ `test-design/*` の四角形を新数値で同期*
+
+*改訂 v8.5: セル（設計担当）+ 坂田銀時（実装担当）/ 2026-04-27 — 工程5 三者レビュー指摘反映パッケージ。① **`integration.md` を `integration/` ディレクトリに分割**（ペガサス指摘、500 行ルール超過 621 行解消）: TC 本体 → `integration/index.md`、改訂履歴 v6〜v8.5 → `integration/changelog.md`。本ファイル §1 ファイル構成を新リンクに同期。② **`enum RetryOutcome` 化**（ペテルギウス指摘 2 反映）: `audit::retry_event` の `outcome` 引数を `&'static str` から型安全 enum へ。`security.md` §retry 監査ログ + `detailed-design/data.md` §`Audit` / §`RetryOutcome` を同期改訂、文字列 switch を排除（タイポ即バグ防止 / Tell, Don't Ask）。③ **`RENAME_JITTER_RANGE` のマジックナンバー解消**（ペテルギウス指摘 1）: `HALF_RANGE_MS * 2 + 1` で導出（実装側で適用、設計影響なし、本履歴で articulate のみ）。④ **helpers retry loop 共通化**（ペテルギウス指摘 3、実装側）。⑤ **Bug-G-007 反映**（涅マユリ全 integration test ファイル走査）: `vault_migration_property::tc_d_p01_encrypt_decrypt_roundtrip_property`（proptest 1000 ケース）にも `#[ignore]` 適用、reason 統一フォーマットに「Bug-G-002〜G-007 articulated in test-design v8.5」明記（ペテルギウス指摘 4「articulated in test-design」整合性回復、指摘 5 版番号一貫化）。詳細 7 ラウンド統合表 + 解除条件 (a)/(b)/(c) 拡大は `integration/changelog.md` v8.5 参照*
+
+*対応 Issue: #10 feat(shikomi-infra): vault 永続化層（平文モード） / #65 fix(persistence): Windows AtomicWrite rename 失敗*

@@ -1,0 +1,35 @@
+name: PR Title Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check:
+    name: pr-title-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title follows Conventional Commits
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "PR title: $PR_TITLE"
+
+          # Conventional Commits 正規表現
+          # 許可 type: feat, fix, docs, chore, refactor, test, ci, build, perf
+          # Breaking change: type! または BREAKING CHANGE フッターで表現
+          # scope は任意 (例: feat(vault): ...)
+          PATTERN='^(feat|fix|docs|chore|refactor|test|ci|build|perf)(\([a-z0-9_/-]+\))?!?: .+'
+
+          if echo "$PR_TITLE" | grep -qE "$PATTERN"; then
+            echo "OK: PR title follows Conventional Commits"
+          else
+            echo "::error::PR タイトルが Conventional Commits に従っていません。"
+            echo "::error::期待するフォーマット: <type>[optional scope]: <description>"
+            echo "::error::  例: feat(vault): add encryption opt-in"
+            echo "::error::  例: fix(hotkey): resolve Wayland portal timeout"
+            echo "::error::  例: docs: update README install instructions"
+            echo "::error::使用可能な type: feat, fix, docs, chore, refactor, test, ci, build, perf"
+            echo "::error::Breaking change は type! を使用 (例: feat!: remove deprecated flag)"
+            exit 1
+          fi

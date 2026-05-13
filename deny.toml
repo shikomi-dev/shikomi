@@ -1,0 +1,207 @@
+[advisories]
+# メンテナンス停止・yanked な crate は即座にビルドを失敗させる（Fail Fast）
+# vulnerability: cargo-deny 0.19.x で deprecated となり省略可能（常時有効・deny相当で動作する）
+# unmaintained: "all"=全依存, "workspace"=直接依存のみ, "transitive"=間接のみ, "none"=無効
+unmaintained = "all"
+yanked = "deny"
+# 一時例外: ignore リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# NOTE: 以下の暗号クリティカル crate は ignore への登録を禁止する
+# aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
+ignore = [
+    # Sub-A (#94) Tauri v2 依存チェーン由来の unmaintained advisories。
+    # これらは全て Tauri の間接依存であり、安全な代替バージョンが存在しない。
+    # Tauri がこれらを解消次第、対応エントリを削除すること。
+
+    # gtk-rs GTK3 bindings: tray-icon → libappindicator → gtk / muda → gtk 経由で混入。
+    # GTK3 → GTK4 移行が完了するまで一時例外として許容する（RUSTSEC-2024-0411〜0420）。
+    { id = "RUSTSEC-2024-0411", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0412", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0413", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings (atk); no safe upgrade available" },
+    { id = "RUSTSEC-2024-0414", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0415", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0416", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0417", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0418", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0419", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    { id = "RUSTSEC-2024-0420", reason = "tauri tray-icon depends on gtk-rs GTK3 bindings; no safe upgrade available" },
+    # proc-macro-error: tauri-macros 経由の間接依存。
+    { id = "RUSTSEC-2024-0370", reason = "tauri-macros depends on proc-macro-error; no maintained alternative in tauri dep chain" },
+    # unic-* Unicode crates: html5ever → tauri 経由の間接依存。
+    { id = "RUSTSEC-2025-0075", reason = "tauri html5ever dependency on unic; no safe upgrade available" },
+    { id = "RUSTSEC-2025-0080", reason = "tauri html5ever dependency on unic; no safe upgrade available" },
+    { id = "RUSTSEC-2025-0081", reason = "tauri html5ever dependency on unic; no safe upgrade available" },
+    { id = "RUSTSEC-2025-0098", reason = "tauri html5ever dependency on unic; no safe upgrade available" },
+    { id = "RUSTSEC-2025-0100", reason = "tauri html5ever dependency on unic; no safe upgrade available" },
+]
+
+[licenses]
+# MIT / Apache-2.0 / ISC / BSD 系のみ許可
+# confidence-threshold: ライセンス検出精度の下限（0.93 未満は unknown 扱いで deny）
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Unicode-3.0",
+    # foldhash (tauri-utils → dom_query 経由) が Zlib ライセンスを使用。Sub-A #94 で混入。
+    "Zlib",
+    # libloading (libappindicator-sys → tray-icon → tauri 経由) が ISC ライセンスを使用。Sub-A #94 で混入。
+    "ISC",
+    # hashlink 0.9.x（rusqlite 0.31 の依存）が MPL-2.0 ライセンス。
+    # Issue #10 で導入した rusqlite による一時例外。rusqlite バージョン更新時に再評価すること。
+    "MPL-2.0",
+    # Sub-B (#40) で導入する暗号 crate チェーンが採用するライセンス。
+    # - `subtle` v2.x (BSD-3-Clause): tech-stack §4.7 凍結、constant-time 比較標準
+    # - `bip39` v2.x / `bitcoin_hashes` / `hex-conservative` (CC0-1.0): rust-bitcoin
+    #   org 配下の BIP-39 24 語実装と依存。tech-stack §4.7 で `tiny-bip39` 不採用根拠と
+    #   セットで凍結済。CC0-1.0 は public domain dedication で OSS 互換。
+    "BSD-3-Clause",
+    "CC0-1.0",
+    # Issue #89 で導入した `arboard` → `clipboard-win` / `error-code` が BSL-1.0 採用。
+    # Business Source License 1.1: 4 年後に MIT/Apache-2.0 相当に移行する条項あり。
+    # clipboard-win 5.4.1 / error-code 3.3.2 の 2 crate のみ対象。
+    # arboard のバージョン更新時に再評価すること。
+    "BSL-1.0",
+]
+
+[bans]
+# 複数バージョン共存は依存解決の複雑化を招く（Fail Fast）
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+deny = []
+# 一時例外: skip リストに個別登録し、PR インラインコメントで解除 Issue 番号必須
+# 初期状態は空（外部 crate 未導入のため）
+# NOTE: 以下の暗号クリティカル crate は skip / skip-tree への登録を禁止する
+# aes-gcm / argon2 / zeroize / secrecy / hkdf / pbkdf2 / bip39 / rand_core / subtle
+skip = [
+    # wit-bindgen 0.51.0 / 0.57.1 が getrandom v0.4 → uuid v1 の間接依存で共存する。
+    # Issue #7 で導入した uuid/getrandom による一時例外。
+    # uuid のバージョン更新時に再評価すること。
+    { name = "wit-bindgen", version = "0.51.0" },
+    { name = "wit-bindgen", version = "0.57.1" },
+    # thiserror 1.x は一部の間接依存が旧バージョンを使用する。ワークスペースは 2.x を採用。
+    # Issue #10 で顕在化。各依存クレートのバージョン更新時に再評価すること。
+    { name = "thiserror", version = "1" },
+    { name = "thiserror-impl", version = "1" },
+    # windows-sys / windows-targets / windows_* は各クレートが異なるバージョンを要求するため共存する。
+    # fs4 0.9 / dirs 5 / rusqlite 0.31 の依存チェーンによる。Issue #10 で導入。
+    { name = "windows-sys", version = "0.48" },
+    { name = "windows-sys", version = "0.52" },
+    { name = "windows-sys", version = "0.59" },
+    { name = "windows-targets", version = "0.48" },
+    { name = "windows_aarch64_gnullvm", version = "0.48" },
+    { name = "windows_aarch64_msvc", version = "0.48" },
+    { name = "windows_i686_gnu", version = "0.48" },
+    { name = "windows_i686_msvc", version = "0.48" },
+    { name = "windows_x86_64_gnu", version = "0.48" },
+    { name = "windows_x86_64_gnullvm", version = "0.48" },
+    { name = "windows_x86_64_msvc", version = "0.48" },
+    # getrandom 0.2.x は uuid 1.x の依存。0.4.x は wit-bindgen 経由の新規依存。
+    # Issue #7/#10 で導入。バージョン更新時に再評価すること。
+    { name = "getrandom", version = "0.2" },
+    # rustix / linux-raw-sys は `fs4` 0.9（shikomi-infra）が旧系（rustix 0.38 / linux-raw-sys 0.4）、
+    # `tempfile` 3.x / `clap` 4.x などの新しい依存が新系（rustix 1.x / linux-raw-sys 0.12）を
+    # 引くため共存する。Issue #20（cli-vault-commands 実装）で顕在化。
+    # `fs4` が rustix 1.x に追従次第、両エントリとも削除して重複解消する。
+    { name = "rustix", version = "0.38" },
+    { name = "linux-raw-sys", version = "0.4" },
+    # nix 0.26.4 は `expectrl 0.8` → `ptyprocess` 経由の **dev-dep 限定** 共存。
+    # 本番バイナリには混入しない（`shikomi-daemon/Cargo.toml` の `[dev-dependencies]`、
+    # かつ `cfg(unix)` 限定）。`shikomi-daemon` 直接依存の nix 0.29 と版差。
+    # Issue #33（Phase 1.5-ε pty 観測 TC-E2E-017）で導入。expectrl が nix 0.29+ に
+    # 追従次第、本エントリを削除して重複解消する。
+    { name = "nix", version = "0.26.4" },
+    # hashbrown 0.14.x は hashlink 0.9（rusqlite 0.31 の依存）が要求する旧系。
+    # hashbrown 0.15.x は wasmparser → wit-bindgen 経由の中間バージョン。
+    # 最新系は indexmap 2.x が要求する 0.17.x。Issue #89 で顕在化。
+    # rusqlite / wit-bindgen のバージョン更新時に再評価すること。
+    { name = "hashbrown", version = "0.14" },
+    { name = "hashbrown", version = "0.15" },
+    # windows-core / windows-link / windows-result / windows-strings は
+    # Issue #89 で導入した `notify-rust` → `windows v0.61` 系と、
+    # 既存依存 (`zxcvbn` → `chrono` → `iana-time-zone`) の `windows v0.62` 系が共存する。
+    # windows 0.61 系バージョン（旧系）のみスキップ登録。
+    # notify-rust が windows 0.62 系に追従次第、各エントリを削除して重複解消する。
+    { name = "windows-core", version = "0.61" },
+    { name = "windows-link", version = "0.1" },
+    { name = "windows-result", version = "0.3" },
+    { name = "windows-strings", version = "0.4" },
+    # Tauri v2 (Sub-A #94) 依存チェーンによる複数バージョン共存。
+    # gtk-rs が bitflags 1.x を要求、tauri/selectors が 2.x を使用
+    { name = "bitflags", version = "1" },
+    # Tauri が getrandom 0.3.x を要求、uuid の cfb 経由で 0.4.x も共存
+    { name = "getrandom", version = "0.3" },
+    # schemars 0.8 が hashbrown 0.12 / indexmap 1.x を引く（0.14/0.15 スキップ既存）
+    { name = "hashbrown", version = "0.12" },
+    { name = "indexmap", version = "1" },
+    # glib-macros が heck 0.4.1 を要求、tauri/system-deps が 0.5.x を使用
+    { name = "heck", version = "0.4" },
+    # tauri-codegen → ico が png 0.17.x を要求、tray-icon が png 0.18.x を使用
+    { name = "png", version = "0.17" },
+    # gtk3-macros が proc-macro-crate 1.x を、glib-macros が 2.x を要求
+    { name = "proc-macro-crate", version = "1" },
+    # toml/toml_edit/serde_spanned の複数バージョン（tauri-build/tauri-utils 依存チェーン）
+    { name = "serde_spanned", version = "0.6" },
+    # proc-macro-error が syn 1.x を要求（ワークスペースは syn 2.x 採用）
+    { name = "syn", version = "1" },
+    { name = "toml", version = "0.8" },
+    # toml 0.9.12 / 1.1.2 の spec バージョン付き表記（cargo-deny は full version で照合）
+    { name = "toml", version = "0.9.12" },
+    { name = "toml_datetime", version = "0.6" },
+    { name = "toml_datetime", version = "0.7.5" },
+    { name = "toml_edit", version = "0.19" },
+    { name = "winnow", version = "0.5" },
+    { name = "winnow", version = "0.7" },
+    # Tauri v2 依存チェーンによる追加の複数バージョン共存（Sub-A #94）。
+    # swift-rs が base64 0.21 を要求、reqwest/plist/wry が 0.22 を使用
+    { name = "base64", version = "0.21" },
+    # zxcvbn → derive_builder が darling 0.20 を要求、serde_with が 0.23 を使用
+    { name = "darling", version = "0.20" },
+    { name = "darling_core", version = "0.20" },
+    { name = "darling_macro", version = "0.20" },
+    # Tauri の dirs 6.x と既存の dirs 5.x が共存（dirs-sys 0.4/0.5 も連動）
+    { name = "dirs", version = "5" },
+    { name = "dirs-sys", version = "0.4" },
+    # glib-macros が proc-macro-crate 2.x を要求（0.19 スキップ既存、3.x が新系）
+    { name = "proc-macro-crate", version = "2" },
+    # tauri-utils が quick-xml 0.37/0.39 の複数バージョンを引く
+    { name = "quick-xml", version = "0.37" },
+    # wasi-sdk / r-efi の複数バージョン（Tauri の wasm32 サポートチェーン）
+    { name = "r-efi", version = "5" },
+    # redox_users 0.4 は dirs 5.x 経由、0.5 は dirs 6.x 経由
+    { name = "redox_users", version = "0.4" },
+    # toml_edit 0.20 は glib-sys 等の build-dep 経由、0.25 は tauri-utils が使用
+    { name = "toml_edit", version = "0.20" },
+    # windows-sys 0.45 は Tauri の一部 crate が要求（0.48/0.52/0.59 は既存スキップ済）
+    { name = "windows-sys", version = "0.45" },
+    { name = "windows-sys", version = "0.61" },
+    # windows-targets / windows_* の 0.42 系が Tauri 依存チェーンで新たに追加される
+    { name = "windows-targets", version = "0.42" },
+    { name = "windows-targets", version = "0.52" },
+    { name = "windows_aarch64_gnullvm", version = "0.42" },
+    { name = "windows_aarch64_gnullvm", version = "0.52" },
+    { name = "windows_aarch64_msvc", version = "0.42" },
+    { name = "windows_aarch64_msvc", version = "0.52" },
+    { name = "windows_i686_gnu", version = "0.42" },
+    { name = "windows_i686_gnu", version = "0.52" },
+    { name = "windows_i686_msvc", version = "0.42" },
+    { name = "windows_i686_msvc", version = "0.52" },
+    { name = "windows_x86_64_gnu", version = "0.42" },
+    { name = "windows_x86_64_gnu", version = "0.52" },
+    { name = "windows_x86_64_gnullvm", version = "0.42" },
+    { name = "windows_x86_64_gnullvm", version = "0.52" },
+    { name = "windows_x86_64_msvc", version = "0.42" },
+    { name = "windows_x86_64_msvc", version = "0.52" },
+    # tauri-plugin-shell v2.3.5 → shared_child → windows-sys 0.60 → windows-targets 0.53 が
+    # 既存依存と windows_i686_gnullvm 0.53.1 の重複を生じさせる。Issue #97 で導入。
+    # tauri-plugin-shell が windows-sys 0.61 系に追従次第、本エントリを削除して重複解消する。
+    { name = "windows_i686_gnullvm", version = "0.53" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,24 @@
+[package]
+name = "shikomi-core"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+uuid                 = { workspace = true }
+serde                = { workspace = true }
+secrecy              = { workspace = true }
+zeroize              = { workspace = true }
+thiserror            = { workspace = true }
+time                 = { workspace = true }
+unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+serde_json  = { workspace = true }
+proptest    = { workspace = true }
+rmp-serde   = { workspace = true }
+
+[lints]
+workspace = true

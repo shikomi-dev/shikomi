@@ -1,0 +1,95 @@
+[package]
+name = "shikomi-cli"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# lib + bin の 2 ターゲット構成
+# - lib: UseCase / Presenter 等の内部公開 Rust API を提供。結合テスト（tests/）から直接呼び出す目的
+# - bin: `shikomi_cli::run()` を呼ぶ 3 行ラッパ。コンポジションルートは lib 側
+# 設計根拠: docs/features/cli-vault-commands/detailed-design/public-api.md §前提: crate 構成
+[lib]
+name = "shikomi_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shikomi"
+path = "src/main.rs"
+
+[dependencies]
+shikomi-core  = { workspace = true }
+shikomi-infra = { workspace = true }
+clap          = { workspace = true }
+anyhow        = { workspace = true }
+is-terminal   = { workspace = true }
+rpassword     = { workspace = true }
+# 工程5 服部指摘 (BLOCKER 3) 解消: accessibility 経路で 24 語 byte 列を
+# `Zeroizing<Vec<u8>>` で構築し drop 時に自動 zeroize する目的。
+zeroize       = { workspace = true }
+time          = { workspace = true }
+uuid          = { workspace = true }
+tracing       = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror     = { workspace = true }
+dirs          = { workspace = true }
+# Issue #141: data-portability export / import（UseCase 層での JSON シリアライズ・デシリアライズ）
+serde_json    = { workspace = true }
+# Issue #141: export の atomic write（tempfile + persist パターン、R1-DP-09）
+tempfile      = { workspace = true }
+# Issue #75 / Bug-F-007: `windows_pipe_name_from_dir` で `<DIR>` 絶対パスを SHA-256
+# Base32 先頭 16 文字の純関数化（`docs/features/vault-encryption/detailed-design/cli-subcommands.md`
+# §Bug-F-007 解消の Windows pipe 名 `<H>` 契約）。CLI / daemon が同 hash を導出する
+# 共有実装の起点。Base32 自体は本 crate 内部で 5-bit alphabet `a-z2-7` を直接実装する
+# (新規依存追加を最小化、Boy Scout: pure function かつ 20 行未満)。
+sha2          = { workspace = true }
+# Issue #75 / Bug-F-007 + ペテルギウス工程5 致命指摘1 解消:
+# `windows_pipe_name_from_dir` の **NFC 正規化必須**契約 (cli-subcommands.md §Bug-F-007 §Windows pipe
+# 名の `<H>` 契約) を遵守するため Unicode NFC 正規化を提供する。同一 `<DIR>` を
+# 異なるエンコード形式 (NFC / NFD) で渡しても同一 hash を導出する純関数性を保証。
+unicode-normalization = "0.1"
+
+# IPC 経路（daemon-ipc feature）
+tokio         = { workspace = true }
+tokio-util    = { workspace = true }
+rmp-serde     = { workspace = true }
+bytes         = { workspace = true }
+futures-util  = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# Sub-F (#44) Phase 5 / C-41: core dump 抑制（Linux: prctl(PR_SET_DUMPABLE, 0) /
+# macOS: setrlimit(RLIMIT_CORE, 0)）。`nix` 0.29 (workspace) は既存 features に
+# `process` / `resource` を含まないため、Phase 5 専用に `libc` 直接呼出で実装する。
+# 依存ツリー追加は本 1 件のみ、workspace 横断影響なし。
+libc          = "0.2"
+# Sub-F (#44) Phase 6 / C-A05: `--output {print,braille}` 経路の umask(0o077)
+# 内部適用 (`accessibility::umask::with_secure_umask`)。`nix::sys::stat::umask`
+# は workspace 既定 features (`fs`) で利用可能、追加 features 不要。
+nix           = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys   = { workspace = true }
+
+[dev-dependencies]
+tempfile      = { workspace = true }
+assert_cmd    = { workspace = true }
+predicates    = { workspace = true }
+serial_test   = { workspace = true }
+# 暗号化 vault フィクスチャ helper (tests/common/fixtures.rs) で SQLite を直接書き出すため。
+# CLI 本体は rusqlite を参照しない（`shikomi-infra` 経由）。本依存はテスト限定。
+rusqlite      = { workspace = true }
+# Windows テスト: normalize_tempdir_dacl（test-fixtures feature gate）を CLI テストヘルパ
+# （tests/common/mod.rs）から参照するため dev-dependencies で明示的に feature を有効化する。
+# justfile/CI のフラグに依存せず `cargo test -p shikomi-cli` 単体でも Windows でコンパイル可能。
+# 設計根拠: docs/features/vault-persistence/test-design/integration/index.md
+shikomi-infra = { workspace = true, features = ["test-fixtures"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# Sub-F (#77) TC-F-I01/I02/I02b/I03/I03b/I05/I06/I07/I07c/I08 で PTY 経由パスワード入力を
+# シミュレートする目的。Unix 限定（Windows は #[cfg_attr(target_os = "windows", ignore)] で除外）。
+# 設計根拠: docs/features/cli-vault-commands/test-design/integration.md §10.3
+expectrl       = { workspace = true }
+
+[lints]
+workspace = true

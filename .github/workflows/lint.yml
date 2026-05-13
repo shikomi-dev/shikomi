@@ -1,0 +1,48 @@
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4 as of 2026-05-11
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable as of 2026-05-11
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2 as of 2026-05-11
+
+      - name: install system deps (Ubuntu / Tauri v2)
+        # shikomi-gui は Tauri v2 を使用するため webkit2gtk 等が必要
+        # 参照: https://v2.tauri.app/start/prerequisites/#linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: install just
+        run: cargo install --locked just
+
+      # justfile が CI / local / 手動の 3 経路で単一真実源 (DRY)。
+      # workspace.lints.clippy で all="deny", pedantic="warn" が設定済みのため -D warnings は付けない。
+      - name: just fmt-check
+        run: just fmt-check
+
+      - name: just clippy
+        run: just clippy
+
+      - name: shellcheck (scripts/smoke-e2e.sh)
+        # 設計根拠: docs/features/shikomi-gui/build-ci/detailed-design/e2e.md §6.4
+        run: shellcheck scripts/smoke-e2e.sh

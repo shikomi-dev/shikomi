@@ -1,0 +1,111 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/shikomi-core",
+    "crates/shikomi-infra",
+    "crates/shikomi-gui",
+    "crates/shikomi-daemon",
+    "crates/shikomi-cli",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["shikomi-dev"]
+license = "MIT"
+repository = "https://github.com/shikomi-dev/shikomi"
+# MSRV: `.clippy.toml` の msrv と同値。`rust-toolchain.toml` は開発時チャンネル(stable)指定のみで、MSRV管理は本フィールドと `.clippy.toml` で一元化
+rust-version = "1.80.0"
+publish = false
+
+[workspace.lints.rust]
+# Windows 固有の Win32 Security API モジュール（permission/windows/）のみ allow(unsafe_code) で上書きする。
+# forbid だとサブモジュールで allow できないため deny を使用する。
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+uuid            = { version = "1",    features = ["v7", "serde"] }
+serde           = { version = "1",    features = ["derive"] }
+secrecy         = { version = "0.10" }
+zeroize         = { version = "1",    features = ["derive"] }
+thiserror       = "2"
+time            = { version = "0.3",  features = ["serde", "macros", "formatting", "parsing"] }
+unicode-segmentation = "1"
+rusqlite        = { version = "0.31", features = ["bundled"] }
+fs4             = { version = "0.9",  default-features = false, features = ["sync"] }
+cfg-if          = "1"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+dirs            = "5"
+shikomi-core    = { path = "crates/shikomi-core", version = "0.1.0" }
+shikomi-infra   = { path = "crates/shikomi-infra", version = "0.1.0" }
+# CLI 層の依存（cli-vault-commands feature で追加）
+clap            = { version = "4",    features = ["derive", "env", "wrap_help"] }
+anyhow          = "1"
+is-terminal     = "0.4"
+rpassword       = "7"
+# IPC 層の依存（daemon-ipc feature で追加、tech-stack.md §2.1 でピン根拠確定）
+tokio           = { version = "1.44.2", features = ["rt-multi-thread", "net", "io-util", "sync", "signal", "time", "macros"] }
+tokio-util      = { version = "0.7",  default-features = false, features = ["codec"] }
+rmp-serde       = "1.3"
+bytes           = "1"
+futures-util    = { version = "0.3",  default-features = false, features = ["std", "sink"] }
+nix             = { version = "0.29", default-features = false, features = ["socket", "fs", "user", "signal"] }
+windows-sys     = { version = "0.59", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Foundation", "Win32_System_Diagnostics_Debug"] }
+# テスト用
+tempfile        = "3"
+# Issue #65 工程4: integration test では別 crate 扱いとなり既定の env filter
+# (`RUST_LOG=<test_crate>=trace`) で `shikomi-infra` 側ログが全弾される
+# (tracing-test 0.2 公式注記)。`no-env-filter` で全 crate のログを捕捉し、
+# 必要に応じて `logs_assert` 側で文字列フィルタする責務に切替える。
+tracing-test    = { version = "0.2", features = ["no-env-filter"] }
+serial_test     = "3"
+assert_cmd      = "2"
+predicates      = "3"
+# pty 経由 E2E（Issue #33 / TC-E2E-017）。Unix 限定の pty allocation で
+# `read_password`（rpassword）の非エコー経路を実観測する。`MIT OR Apache-2.0`、
+# 依存数 < 10、2024+ メンテ。Windows は `cfg(unix)` ガードで skip。
+expectrl        = "0.8"
+# Sub-B (#40) vault 暗号化 KDF / RNG / 強度ゲート用 crate（tech-stack.md §4.7）。
+# 全て pure Rust、shikomi-infra のみが依存（shikomi-core は no-I/O 制約継承）。
+argon2          = { version = "0.5",  default-features = false, features = ["alloc", "std", "zeroize"] }
+hkdf            = { version = "0.12", default-features = false, features = ["std"] }
+sha2            = { version = "0.10", default-features = false, features = ["std"] }
+bip39           = { version = "2",                              features = ["std", "zeroize"] }
+rand_core       = { version = "0.6",                            features = ["getrandom"] }
+getrandom       = "0.2"
+zxcvbn          = { version = "3",    default-features = false, features = ["default"] }
+# Sub-B (#40) BC-3 リリースブロッカ用 KDF ベンチ。`cargo bench -p shikomi-infra
+# --bench kdf_bench` で Argon2id `FROZEN_OWASP_2024_05` / Bip39Pbkdf2Hkdf の
+# 単一 derive 時間を計測し、median を 750 ms (p95 ≤ 1.0 s の proxy) と比較する。
+# `bench-kdf` ワークフロー (`.github/workflows/bench-kdf.yml`) で 3 OS gating。
+criterion       = { version = "0.5", default-features = false }
+# Sub-C (#41) AEAD アダプタ。AES-256-GCM (RustCrypto)、tech-stack §4.7 凍結。
+aes-gcm         = { version = "0.10", default-features = false, features = ["alloc", "aes", "zeroize"] }
+# Sub-E (#43) `verify_password` で VEK の bit-exact 比較を constant-time 実施する。
+# `vek-cache-and-ipc.md` §F-E4 step 2 (subtle::ConstantTimeEq 経由 side-channel 排除)。
+# aes-gcm が transitive で同 crate を引くが、direct dep に明示昇格して version 漂流を防ぐ。
+subtle          = { version = "2", default-features = false }
+# Sub-E (#43) `OsLockSignal` trait の `async fn in trait` を `Send + 'static` future
+# 制約付きで dyn 化するため。`vek-cache-and-ipc.md` §OsLockSignal trait の代替方針
+# (`#[trait_variant::make]` macro 採用が困難な場合は `async-trait` で `Box<dyn>` 経由
+# 動的ディスパッチ) を採用。1 回のヒープ確保コストはあるがテスト容易性 + 既存 stable
+# Rust エディションでの保証された動作を優先 (tech-stack.md §4.7 同期更新)。
+async-trait     = { version = "0.1", default-features = false }
+# Issue #89 グローバルホットキー + クリップボード + OS 通知（daemon-hotkey-clipboard feature）。
+# global-hotkey: クロスプラットフォームグローバルホットキー（tauri-plugin-global-shortcut の土台 crate）。
+# arboard: OS クリップボードへのテキスト読み書き。1Password メンテ、MIT ライセンス。
+# notify-rust: OS ネイティブ通知（Linux: libnotify / macOS: NSUserNotification / Windows: Toast）。
+global-hotkey    = { version = "0.8", default-features = false }
+arboard          = { version = "3.6", default-features = false }
+notify-rust      = { version = "4.11", default-features = false, features = ["z"] }
+# Sub-C (#41) test-design TC-C-P01 / TC-C-P02 用 proptest。1000 ケースで
+# AAD 入れ替え検出 + encrypt/decrypt 往復不変条件を property 検証する。
+# Bug-C-001 顛末: 銀ちゃん impl は単発 fixture 検証のみで proptest 不在、
+# テスト工程でマユリが Boy Scout 補強として 1000 ケース proptest を追加。
+proptest        = { version = "1", default-features = false, features = ["std"] }
+serde_json      = "1"

@@ -28,7 +28,7 @@
 | TC-U02 | REPO-01 | `LICENSE` の存在 | ユニット | 正常系 |
 | TC-U03 | REPO-01 | `CONTRIBUTING.md` の存在 | ユニット | 正常系 |
 | TC-U04 | REPO-01 | `SECURITY.md` の存在 | ユニット | 正常系 |
-| TC-U05 | REPO-01 | `CODEOWNERS` の存在 | ユニット | 正常系 |
+| TC-U05 | REPO-01 | `.github/CODEOWNERS` の存在（まこちゃん指摘によりルートから移動） | ユニット | 正常系 |
 | TC-U06 | REPO-01 | `.github/ISSUE_TEMPLATE/*.yml` の存在（1件以上）| ユニット | 正常系 |
 | TC-U07 | REPO-01 | `.github/pull_request_template.md` の存在 | ユニット | 正常系 |
 | TC-U08 | REPO-03 | `LICENSE` に「MIT License」文言を含む | ユニット | 正常系 |
@@ -38,7 +38,7 @@
 | TC-U12 | REPO-04 | `README.md` に使い方（Usage）の記載を含む | ユニット | 正常系 |
 | TC-U13 | REPO-01 | `CONTRIBUTING.md` に GitFlow 4ブランチ（feature/develop/release/hotfix）**全て**の記載を含む | ユニット | 正常系 |
 | TC-U14 | REPO-01 | `SECURITY.md` に脆弱性報告窓口の記載を含む | ユニット | 正常系 |
-| TC-U15 | REPO-01 | `CODEOWNERS` に `docs/architecture/` の責務割当を含む | ユニット | 正常系 |
+| TC-U15 | REPO-01 | `.github/CODEOWNERS` に `docs/architecture/` の責務割当を含む | ユニット | 正常系 |
 | TC-U16 | REPO-05 | `CONTRIBUTING.md` に `feature/*` → `develop` のマージ先が明記されている | ユニット | 正常系 |
 | TC-I01 | REPO-02 | `main` ブランチ保護: PR 必須・2名レビュー・status checks（branch-policy/pr-title-check含む、build-preview/back-merge-checkは§7.6方針で除外）・force push 禁止・会話解決必須・bypass list | 結合 | 正常系 |
 | TC-I02 | REPO-02 | `develop` ブランチ保護: PR 必須・1名レビュー・status checks（branch-policy/pr-title-check含む）・force push 禁止 | 結合 | 正常系 |
@@ -281,7 +281,7 @@
 | TC-U02 | `LICENSE` | HTTP 200 / ファイルが存在する |
 | TC-U03 | `CONTRIBUTING.md` | HTTP 200 / ファイルが存在する |
 | TC-U04 | `SECURITY.md` | HTTP 200 / ファイルが存在する |
-| TC-U05 | `CODEOWNERS` | HTTP 200 / ファイルが存在する |
+| TC-U05 | `.github/CODEOWNERS` | HTTP 200 / ファイルが存在する |
 | TC-U06 | `.github/ISSUE_TEMPLATE/` | ディレクトリに `.yml` ファイルが 1 件以上存在する |
 | TC-U07 | `.github/pull_request_template.md` | HTTP 200 / ファイルが存在する |
 
@@ -348,8 +348,8 @@
 | 対応する受入基準ID | REPO-01 |
 | 対応する工程 | 要件定義 |
 | 種別 | 正常系 |
-| 前提条件 | `CODEOWNERS` が存在する |
-| 操作 | `CODEOWNERS` を取得し内容確認 |
+| 前提条件 | `.github/CODEOWNERS` が存在する |
+| 操作 | `.github/CODEOWNERS` を取得し内容確認 |
 | 期待結果 | `docs/architecture/` のパターンに対する所有者割当が存在する |
 
 ### TC-U16: CONTRIBUTING.md への feature/* → develop マージ先明記確認

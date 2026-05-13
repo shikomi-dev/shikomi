@@ -1,0 +1,56 @@
+name: Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # 毎日深夜に全依存の CVE・ライセンス・bans を再チェック
+  schedule:
+    - cron: '0 0 * * *'  # UTC 00:00 = JST 09:00
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      # gitleaks に履歴全体を渡すため全履歴取得
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 確定 B: EmbarkStudios/cargo-deny-action@v2 廃止。just 経由で単一真実源 (DRY)。
+      - name: install just / cargo-deny
+        run: cargo install --locked just cargo-deny
+
+      - name: just audit
+        run: just audit
+
+      # setup.sh / setup.ps1 のピン定数が同期しているか静的検証
+      - name: just audit-pin-sync
+        run: just audit-pin-sync
+
+      # setup.sh を --tools-only モードで呼び、gitleaks を SHA256 ピンつきで導入。
+      # CI inline に複製しないことで DRY 担保、ローカルと同一経路で gitleaks を入れる。
+      - name: install gitleaks via setup.sh --tools-only
+        run: bash scripts/setup.sh --tools-only
+
+      # 二重防護: ローカル pre-commit が lefthook.yml 改変で無効化された場合でも CI で検知
+      - name: just audit-secrets
+        run: just audit-secrets
+
+      # npm サプライチェーン audit（shikomi-gui/ui の直接・間接依存）
+      # --audit-level=high: high / critical のみ CI を失敗させる（moderate は dev server 限定で許容）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: npm audit (shikomi-gui/ui)
+        working-directory: crates/shikomi-gui/ui
+        run: npm audit --audit-level=high

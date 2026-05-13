@@ -1,0 +1,385 @@
+/* ============================================================
+ * shikomi GUI — グローバルスタイル（Sub-C 本実装）
+ * 設計根拠: docs/features/shikomi-gui/ui/detailed-design/ux-and-visual.md §8
+ * ============================================================ */
+
+/* ---- カラーパレット ---------------------------------------- */
+:root {
+  --color-bg:                #f5f5f5;
+  --color-surface:           #ffffff;
+  --color-border:            #e0e0e0;
+  --color-text-primary:      #212121;
+  --color-text-secondary:    #757575;
+  --color-primary:           #1976d2;
+  --color-primary-hover:     #1565c0;
+  --color-primary-disabled:  #90caf9;
+  --color-danger:            #d32f2f;
+  --color-danger-hover:      #b71c1c;
+  --color-warning:           #f57c00;
+  --color-error-bg:          #ffebee;
+  --color-error-text:        #c62828;
+
+  /* VaultStatusBanner 4状態 */
+  --color-vault-plaintext-bg:   #fff3e0;
+  --color-vault-plaintext-text: #bf360c;
+  --color-vault-locked-bg:      #e3f2fd;
+  --color-vault-locked-text:    #0d47a1;
+  --color-vault-unlocked-bg:    #e8f5e9;
+  --color-vault-unlocked-text:  #1b5e20;
+  --color-vault-unknown-bg:     #f5f5f5;
+  --color-vault-unknown-text:   #424242;
+
+  /* zxcvbn strength メーター */
+  --color-strength-0: #ef5350;
+  --color-strength-1: #ff7043;
+  --color-strength-2: #ffa726;
+  --color-strength-3: #66bb6a;
+  --color-strength-4: #43a047;
+
+  /* タイポグラフィ */
+  --font-family:         system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-size-heading:   18px;
+  --font-size-subheading:15px;
+  --font-size-body:      14px;
+  --font-size-small:     12px;
+  --font-weight-heading: 600;
+  --font-weight-body:    400;
+  --line-height-body:    1.5;
+
+  /* 8pt スペーシンググリッド */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+
+  /* ボーダー半径 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/* ---- リセット・基底 --------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-body);
+  line-height: var(--line-height-body);
+  color: var(--color-text-primary);
+  background: var(--color-bg);
+}
+
+/* ---- レイアウト ------------------------------------------- */
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+/* ---- タブ ------------------------------------------------- */
+.tab-bar {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.tab-btn {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: var(--font-weight-heading);
+}
+
+/* ---- ボタン ----------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-hover); }
+.btn-primary:disabled { background: var(--color-primary-disabled); cursor: not-allowed; }
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) { background: var(--color-danger-hover); }
+
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--color-bg); }
+
+/* ---- フォーム要素 ----------------------------------------- */
+.field { display: flex; flex-direction: column; gap: var(--space-1); }
+
+.field-label {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-heading);
+  color: var(--color-text-primary);
+}
+
+.field-input, .field-select {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  width: 100%;
+}
+
+.field-input:focus, .field-select:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.field-value-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.field-value-row .field-input { flex: 1; }
+
+/* ---- インラインエラー ------------------------------------ */
+.inline-error {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-small);
+}
+
+/* ---- パネル / カード ------------------------------------- */
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.panel-title {
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-heading);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- オーバーレイ ----------------------------------------- */
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.overlay-modal {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  width: min(480px, calc(100vw - var(--space-5)));
+  max-height: calc(100vh - var(--space-6) * 2);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.overlay-title {
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-heading);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---- VaultStatusBanner ----------------------------------- */
+.vault-status-banner {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-heading);
+  letter-spacing: 0.02em;
+}
+
+.vault-status-banner.plaintext   { background: var(--color-vault-plaintext-bg); color: var(--color-vault-plaintext-text); }
+.vault-status-banner.encrypted-locked  { background: var(--color-vault-locked-bg);   color: var(--color-vault-locked-text); }
+.vault-status-banner.encrypted-unlocked{ background: var(--color-vault-unlocked-bg); color: var(--color-vault-unlocked-text); }
+.vault-status-banner.unknown     { background: var(--color-vault-unknown-bg);   color: var(--color-vault-unknown-text); }
+
+/* ---- DaemonConnectionPanel ------------------------------- */
+.daemon-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.daemon-panel-msg { font-size: var(--font-size-subheading); }
+.daemon-panel-hint { font-size: var(--font-size-body); color: var(--color-text-secondary); }
+
+/* ---- EntryList ------------------------------------------- */
+.entry-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-body);
+}
+
+.entry-list-table th {
+  text-align: left;
+  padding: var(--space-2);
+  font-size: var(--font-size-subheading);
+  font-weight: var(--font-weight-heading);
+  border-bottom: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.entry-list-table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.hotkey-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-small);
+  font-family: monospace;
+}
+
+.entry-actions { display: flex; gap: var(--space-2); }
+
+.entry-add-row {
+  margin-top: var(--space-3);
+}
+
+/* ---- EntryForm ------------------------------------------- */
+.entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ---- HotkeySelector -------------------------------------- */
+.hotkey-selector { display: flex; flex-direction: column; gap: var(--space-1); }
+.hotkey-selector-row { display: flex; gap: var(--space-2); align-items: center; }
+
+/* ---- PasswordStrengthMeter ------------------------------- */
+.strength-meter { display: flex; flex-direction: column; gap: var(--space-1); }
+
+.strength-bar-track {
+  height: 8px;
+  background: var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.strength-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  transition: width 0.2s, background 0.2s;
+}
+
+.strength-label {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+}
+
+.strength-warning {
+  font-size: var(--font-size-small);
+  color: var(--color-warning);
+}
+
+.strength-suggestions {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  padding-left: var(--space-3);
+}
+
+/* ---- RecoveryPhraseDisplay ------------------------------- */
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+.recovery-word {
+  display: flex;
+  gap: var(--space-1);
+  font-size: var(--font-size-body);
+}
+
+.recovery-num {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  min-width: 20px;
+  text-align: right;
+}
+
+.recovery-caution {
+  font-size: var(--font-size-body);
+  color: var(--color-warning);
+}
+
+/* ---- VaultDecryptPanel ----------------------------------- */
+.decrypt-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.decrypt-checkbox-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
