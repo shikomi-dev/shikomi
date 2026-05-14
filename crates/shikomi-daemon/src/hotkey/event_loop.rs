@@ -203,6 +203,22 @@ impl HotkeyEventLoop {
                     "hotkey event: clipboard injected"
                 );
 
+                // --- auto-paste: Ctrl+V keystroke 注入（Wayland: RemoteDesktop portal） ---
+                // クリップボード書き込み直後に paste を発火。失敗しても clipboard 経由
+                // (手動 Ctrl+V) は動くため、warn ログのみで継続。
+                let inject_combo = combo.to_owned();
+                let backend_for_inject = Arc::clone(&self.backend);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = backend_for_inject.inject_paste() {
+                        tracing::warn!(
+                            target: "shikomi::audit",
+                            combo = %inject_combo,
+                            error = %e,
+                            "auto-paste failed (clipboard injection still succeeded)"
+                        );
+                    }
+                });
+
                 // --- Step 7: Secret レコードは ClearTimer をスケジュール ---
                 if matches!(record_kind, RecordKind::Secret) {
                     // GUI カウントダウン用の投入時刻を記録（Sub-D #97）。
