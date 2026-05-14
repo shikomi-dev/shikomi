@@ -20,9 +20,22 @@ const HOTKEY_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
   (n) => `Ctrl+Alt+${n}`,
 );
 
+/**
+ * vault が保存する正規化形式 (例 "alt+ctrl+2") を UI 表示形式
+ * (例 "Ctrl+Alt+2") にそろえる。daemon 側 Hotkey::parse が修飾キー
+ * 順序を再ソートするため、GUI から送る前後で表記が変わりうる。
+ */
+function normalizeForUi(combo: string | null | undefined): string {
+  if (!combo) return "";
+  const m = combo.match(/(\d)$/);
+  if (!m) return "";
+  const candidate = `Ctrl+Alt+${m[1]}`;
+  return HOTKEY_OPTIONS.includes(candidate) ? candidate : "";
+}
+
 const HotkeySelector: Component<Props> = (props) => {
   const [selected, setSelected] = createSignal<string>(
-    props.currentHotkey ?? "",
+    normalizeForUi(props.currentHotkey),
   );
   const [conflictMsg, setConflictMsg] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -40,7 +53,7 @@ const HotkeySelector: Component<Props> = (props) => {
       if (err.kind === "ipc_error" && err.ipc_code === "hotkey_conflict") {
         // errors.ts 経由でメッセージ取得（独自メッセージ構築禁止）
         setConflictMsg(resolveMessage(err) ?? "選択したホットキーは既に使用されています");
-        setSelected(props.currentHotkey ?? "");
+        setSelected(normalizeForUi(props.currentHotkey));
       }
     } finally {
       setLoading(false);
