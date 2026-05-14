@@ -31,20 +31,11 @@ use std::sync::Arc;
 use ashpd::desktop::global_shortcuts::{
     Activated, BindShortcutsOptions, GlobalShortcuts, NewShortcut,
 };
-use ashpd::desktop::remote_desktop::{
-    DeviceType, KeyState, NotifyKeyboardKeysymOptions, RemoteDesktop, SelectDevicesOptions,
-    StartOptions,
-};
 use ashpd::desktop::CreateSessionOptions;
 use futures_util::{stream::BoxStream, StreamExt};
 use tokio::sync::Mutex as TokioMutex;
 
 use super::{HotkeyBackend, HotkeyError, HotkeyEvent};
-
-/// X11 keysym 定数（auto-paste で使用）。
-/// 出典: /usr/include/X11/keysymdef.h
-const XK_CONTROL_L: i32 = 0xffe3_u32 as i32;
-const XK_V: i32 = 0x0076; // 'v' lowercase
 
 // ---------------------------------------------------------------------------
 // XdgPortalBackend (public)
@@ -150,10 +141,6 @@ impl HotkeyBackend for XdgPortalBackend {
             Some((event, rx_arc))
         }))
     }
-
-    fn inject_paste(&self) -> Result<(), HotkeyError> {
-        self.send_cmd_and_wait(|reply| BackendCmd::InjectPaste { reply })
-    }
 }
 
 impl Drop for XdgPortalBackend {
@@ -173,10 +160,6 @@ enum BackendCmd {
     },
     Unregister {
         combo: String,
-        reply: std::sync::mpsc::SyncSender<Result<(), HotkeyError>>,
-    },
-    /// auto-paste: Ctrl+V keystroke を OS に送信する。
-    InjectPaste {
         reply: std::sync::mpsc::SyncSender<Result<(), HotkeyError>>,
     },
     Shutdown,
@@ -279,14 +262,6 @@ async fn worker_main(
         }
     }
 
-    // RemoteDesktop session を別途確立（auto-paste の Ctrl+V keystroke 注入用）。
-    // 失敗時は inject_paste が disabled になるが、clipboard 経由は動く。
-    // 注: RemoteDesktop::start は permission UI を出すため初回のみユーザー承認が必要。
-    let remote_desktop_session = init_remote_desktop().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "XdgPortalBackend: RemoteDesktop init failed (auto-paste disabled, clipboard only)");
-        None
-    });
-
     // メインループ: cmd 受信 と Activated signal を同時に待つ
     loop {
         tokio::select! {
@@ -315,15 +290,6 @@ async fn worker_main(
                         tracing::debug!(combo = %combo, "XdgPortalBackend: unregister noop (pre-bound)");
                         let _ = reply.send(Ok(()));
                     }
-                    BackendCmd::InjectPaste { reply } => {
-                        let result = match &remote_desktop_session {
-                            Some((rd, sess)) => inject_ctrl_v(rd, sess).await,
-                            None => Err(HotkeyError::Unavailable {
-                                reason: "RemoteDesktop session not available".into(),
-                            }),
-                        };
-                        let _ = reply.send(result);
-                    }
                     BackendCmd::Shutdown => {
                         tracing::info!("XdgPortalBackend: shutdown signal received");
                         break;
@@ -346,86 +312,9 @@ fn handle_activated(
 }
 
 // NOTE: 旧 `bind_all` 関数は session 作成時の一括 prebind に置き換えたため削除。
-
-// ---------------------------------------------------------------------------
-// RemoteDesktop ヘルパ (auto-paste 用)
-// ---------------------------------------------------------------------------
-
-/// RemoteDesktop session を確立し、Keyboard デバイスを select + start する。
-///
-/// 起動時に 1 回だけ呼ぶ。permission UI が初回ユーザー操作を必要とするため
-/// 数秒〜数十秒かかる場合がある。失敗時は `None` を返す（auto-paste 不可だが
-/// clipboard 経由は維持）。
-async fn init_remote_desktop(
-) -> Result<Option<(RemoteDesktop, ashpd::desktop::Session<RemoteDesktop>)>, HotkeyError> {
-    let rd = match RemoteDesktop::new().await {
-        Ok(p) => p,
-        Err(e) => {
-            return Err(HotkeyError::Unavailable {
-                reason: format!("RemoteDesktop::new failed: {e}"),
-            });
-        }
-    };
-
-    let session = match rd.create_session(CreateSessionOptions::default()).await {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(HotkeyError::Unavailable {
-                reason: format!("RemoteDesktop create_session failed: {e}"),
-            });
-        }
-    };
-
-    // Keyboard デバイスを選択（Ctrl+V keystroke 注入のみ必要、Pointer 不要）
-    if let Err(e) = rd
-        .select_devices(
-            &session,
-            SelectDevicesOptions::default().set_devices(Some(DeviceType::Keyboard.into())),
-        )
-        .await
-    {
-        return Err(HotkeyError::Unavailable {
-            reason: format!("RemoteDesktop select_devices failed: {e}"),
-        });
-    }
-
-    // start: ユーザー承認ダイアログ表示。これが完了すると以後の notify_keyboard_* が動く。
-    if let Err(e) = rd.start(&session, None, StartOptions::default()).await {
-        return Err(HotkeyError::Unavailable {
-            reason: format!("RemoteDesktop start failed: {e}"),
-        });
-    }
-
-    tracing::info!("XdgPortalBackend: RemoteDesktop session ready (auto-paste enabled)");
-    Ok(Some((rd, session)))
-}
-
-/// Ctrl+V keystroke を注入する。
-///
-/// シーケンス: Press Ctrl_L → Press v → Release v → Release Ctrl_L
-async fn inject_ctrl_v(
-    rd: &RemoteDesktop,
-    session: &ashpd::desktop::Session<RemoteDesktop>,
-) -> Result<(), HotkeyError> {
-    let send = |keysym: i32, state: KeyState| async move {
-        rd.notify_keyboard_keysym(
-            session,
-            keysym,
-            state,
-            NotifyKeyboardKeysymOptions::default(),
-        )
-        .await
-        .map_err(|e| HotkeyError::Unavailable {
-            reason: format!("notify_keyboard_keysym failed: {e}"),
-        })
-    };
-
-    send(XK_CONTROL_L, KeyState::Pressed).await?;
-    send(XK_V, KeyState::Pressed).await?;
-    send(XK_V, KeyState::Released).await?;
-    send(XK_CONTROL_L, KeyState::Released).await?;
-    Ok(())
-}
+// NOTE: auto-paste (RemoteDesktop portal) は GNOME 50 で notify_keyboard_keysym
+// が "Invalid session" を返し動作しないため除去。代わりに HotkeyEventLoop が
+// クリップボード書き込み時に OS 通知を出してユーザーに Ctrl+V を促す方式とする。
 
 // ---------------------------------------------------------------------------
 // Availability check (使う側 = backend/mod.rs::detect() が呼ぶ)

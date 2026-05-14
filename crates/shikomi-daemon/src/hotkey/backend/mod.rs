@@ -69,23 +69,6 @@ pub trait HotkeyBackend: Send + Sync + 'static {
     ///
     /// `HotkeyEventLoop::run` が一度だけ呼び出す。
     fn event_stream(&self) -> BoxStream<'static, HotkeyEvent>;
-
-    /// `Ctrl+V` ペースト keystroke を OS に注入する（auto-paste 機能）。
-    ///
-    /// クリップボード書き込み直後に呼び出され、フォアグラウンドアプリへ
-    /// 即時投入を実現する。Wayland: XDG Portal RemoteDesktop、X11: 未実装、
-    /// それ以外: noop。
-    ///
-    /// # Errors
-    /// 注入失敗（portal 未対応、permission 未許可、デバイス未利用可能等）。
-    /// 失敗してもクリップボード書き込みは成功しているため、呼出側は
-    /// warn ログのみで継続する想定。
-    fn inject_paste(&self) -> Result<(), HotkeyError> {
-        // デフォルト実装: 未対応として noop。実装するバックエンドが override。
-        Err(HotkeyError::Unavailable {
-            reason: "auto-paste not supported on this backend".into(),
-        })
-    }
 }
 
 // -------------------------------------------------------------------
@@ -178,16 +161,6 @@ impl HotkeyBackend for BackendEnum {
             Self::XdgPortal(b) => b.event_stream(),
             Self::Null(b) => b.event_stream(),
             Self::Mock(b) => b.event_stream(),
-        }
-    }
-
-    fn inject_paste(&self) -> Result<(), HotkeyError> {
-        match self {
-            Self::GlobalHotkey(b) => b.inject_paste(),
-            #[cfg(target_os = "linux")]
-            Self::XdgPortal(b) => b.inject_paste(),
-            Self::Null(b) => b.inject_paste(),
-            Self::Mock(b) => b.inject_paste(),
         }
     }
 }

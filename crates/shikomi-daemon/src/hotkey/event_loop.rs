@@ -203,21 +203,17 @@ impl HotkeyEventLoop {
                     "hotkey event: clipboard injected"
                 );
 
-                // --- auto-paste: Ctrl+V keystroke 注入（Wayland: RemoteDesktop portal） ---
-                // クリップボード書き込み直後に paste を発火。失敗しても clipboard 経由
-                // (手動 Ctrl+V) は動くため、warn ログのみで継続。
-                let inject_combo = combo.to_owned();
-                let backend_for_inject = Arc::clone(&self.backend);
-                tokio::task::spawn_blocking(move || {
-                    if let Err(e) = backend_for_inject.inject_paste() {
-                        tracing::warn!(
-                            target: "shikomi::audit",
-                            combo = %inject_combo,
-                            error = %e,
-                            "auto-paste failed (clipboard injection still succeeded)"
-                        );
-                    }
-                });
+                // OS 通知: クリップボードに値を入れたことをユーザーに知らせる。
+                // GNOME 等のセキュリティモデル上、daemon から keystroke を直接
+                // 注入する手段は portal 経由でも安定動作しないため、shikomi は
+                // クリップボード書き込み + 通知で「準備完了」をユーザーに伝え、
+                // 投入は ユーザーが Ctrl+V で行う設計とする。
+                let body = if matches!(record_kind, RecordKind::Secret) {
+                    format!("{combo} → クリップボードに投入済み (Ctrl+V で貼り付け、30秒後に自動クリア)")
+                } else {
+                    format!("{combo} → クリップボードに投入済み (Ctrl+V で貼り付け)")
+                };
+                self.send_notification(NotifyLevel::Low, "shikomi", &body);
 
                 // --- Step 7: Secret レコードは ClearTimer をスケジュール ---
                 if matches!(record_kind, RecordKind::Secret) {
