@@ -93,11 +93,13 @@ export function deleteEntry(id: string): Promise<void> {
 }
 
 export function assignHotkey(entryId: string, combo: string): Promise<void> {
-  return invoke<void>("assign_hotkey", { entryId, combo });
+  // Rust 側 #[tauri::command] の引数名は `id` (snake_case)。
+  // Tauri 2.x は引数オブジェクトのキーをそのまま使うため、TS でも `id` を渡す。
+  return invoke<void>("assign_hotkey", { id: entryId, combo });
 }
 
 export function removeHotkey(entryId: string): Promise<void> {
-  return invoke<void>("remove_hotkey", { entryId });
+  return invoke<void>("remove_hotkey", { id: entryId });
 }
 
 export function encryptVault(password: string): Promise<EncryptVaultResult> {

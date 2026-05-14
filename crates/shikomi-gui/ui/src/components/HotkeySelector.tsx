@@ -50,11 +50,25 @@ const HotkeySelector: Component<Props> = (props) => {
       props.onChanged();
     } catch (e) {
       const err = e as GUIError;
-      if (err.kind === "ipc_error" && err.ipc_code === "hotkey_conflict") {
-        // errors.ts 経由でメッセージ取得（独自メッセージ構築禁止）
-        setConflictMsg(resolveMessage(err) ?? "選択したホットキーは既に使用されています");
-        setSelected(normalizeForUi(props.currentHotkey));
+      const msg = resolveMessage(err);
+      // v0.1.x debug: resolveMessage の戻り値を信用せず、kind/ipc_code が
+      // 明確な既知パターンでない場合は常に raw JSON を見せて根本原因特定可能にする。
+      const isKnown =
+        err?.kind === "vault_locked" ||
+        err?.kind === "daemon_not_running" ||
+        err?.kind === "not_connected" ||
+        err?.kind === "connection_failed" ||
+        (err?.kind === "ipc_error" && err.ipc_code === "hotkey_conflict");
+      if (msg && isKnown) {
+        setConflictMsg(msg);
+      } else {
+        try {
+          setConflictMsg(`raw: ${JSON.stringify(e)}`);
+        } catch {
+          setConflictMsg(`raw: ${String(e)}`);
+        }
       }
+      setSelected(normalizeForUi(props.currentHotkey));
     } finally {
       setLoading(false);
     }
