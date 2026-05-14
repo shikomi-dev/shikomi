@@ -208,12 +208,20 @@ impl HotkeyEventLoop {
                 // 注入する手段は portal 経由でも安定動作しないため、shikomi は
                 // クリップボード書き込み + 通知で「準備完了」をユーザーに伝え、
                 // 投入は ユーザーが Ctrl+V で行う設計とする。
+                //
+                // notify-rust の Notification::show は内部で block_on を呼ぶため、
+                // tokio runtime から直接呼ぶと panic する。spawn_blocking でラップ。
                 let body = if matches!(record_kind, RecordKind::Secret) {
                     format!("{combo} → クリップボードに投入済み (Ctrl+V で貼り付け、30秒後に自動クリア)")
                 } else {
                     format!("{combo} → クリップボードに投入済み (Ctrl+V で貼り付け)")
                 };
-                self.send_notification(NotifyLevel::Low, "shikomi", &body);
+                let notifier_for_msg = Arc::clone(&self.notifier);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = notifier_for_msg.notify(NotifyLevel::Low, "shikomi", &body) {
+                        tracing::warn!(error = %e, "HotkeyEventLoop: notification failed (best-effort)");
+                    }
+                });
 
                 // --- Step 7: Secret レコードは ClearTimer をスケジュール ---
                 if matches!(record_kind, RecordKind::Secret) {
