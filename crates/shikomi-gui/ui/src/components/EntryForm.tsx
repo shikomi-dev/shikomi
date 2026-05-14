@@ -36,6 +36,11 @@ const EntryForm: Component<Props> = (props) => {
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
 
+  // add モードでは entry がまだ存在しないため、HotkeySelector に渡せる
+  // entryId が無い。代わりに「保存時に同梱」する pending な選択を保持する。
+  // edit モードでは HotkeySelector が直接 assignHotkey IPC を打つ。
+  const [pendingHotkey, setPendingHotkey] = createSignal<string>("");
+
   // ホットキー変更後に一覧を更新するためのフラグ
   const handleHotkeyChanged = async () => {
     await refreshEntries();
@@ -64,7 +69,7 @@ const EntryForm: Component<Props> = (props) => {
     setLoading(true);
     const value = valueRef?.value ?? "";
     try {
-      await addEntry(label(), value, kind(), null);
+      await addEntry(label(), value, kind(), pendingHotkey() || null);
       // 機密値を即破棄（R1-GUI-18）
       if (valueRef) valueRef.value = "";
       await refreshEntries();
@@ -201,13 +206,37 @@ const EntryForm: Component<Props> = (props) => {
           </select>
         </div>
 
-        {/* ホットキー（編集モードのみ） */}
+        {/* ホットキー: edit モードは HotkeySelector が直接 IPC、
+           add モードは pendingHotkey signal で保持し addEntry に同梱 */}
         <Show when={props.mode === "edit" && props.entry}>
           <HotkeySelector
             entryId={props.entry!.id}
             currentHotkey={props.entry!.hotkey}
             onChanged={handleHotkeyChanged}
           />
+        </Show>
+        <Show when={props.mode === "add"}>
+          <div class="hotkey-selector">
+            <span class="field-label">ホットキー</span>
+            <select
+              class="field-select"
+              value={pendingHotkey()}
+              disabled={loading()}
+              style="width: auto;"
+              onChange={(e) => setPendingHotkey(e.currentTarget.value)}
+            >
+              <option value="">（未設定）</option>
+              <option value="Ctrl+Alt+1">Ctrl+Alt+1</option>
+              <option value="Ctrl+Alt+2">Ctrl+Alt+2</option>
+              <option value="Ctrl+Alt+3">Ctrl+Alt+3</option>
+              <option value="Ctrl+Alt+4">Ctrl+Alt+4</option>
+              <option value="Ctrl+Alt+5">Ctrl+Alt+5</option>
+              <option value="Ctrl+Alt+6">Ctrl+Alt+6</option>
+              <option value="Ctrl+Alt+7">Ctrl+Alt+7</option>
+              <option value="Ctrl+Alt+8">Ctrl+Alt+8</option>
+              <option value="Ctrl+Alt+9">Ctrl+Alt+9</option>
+            </select>
+          </div>
         </Show>
 
         {submitError() && (
