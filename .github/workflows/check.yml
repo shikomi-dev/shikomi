@@ -1,0 +1,26 @@
+name: check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['24.04', '26.04']
+    container: ubuntu:${{ matrix.ubuntu }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: 検証環境を用意
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnome-shell dbus-x11 python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gjs nodejs libgl1-mesa-dri
+          mkdir -p /run/dbus
+          dbus-daemon --system --fork
+          /usr/lib/systemd/systemd-logind &
+      - name: 文書・保存・実画面を検証
+        run: ./scripts/check-all.sh
