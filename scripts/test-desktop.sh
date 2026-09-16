@@ -10,6 +10,7 @@ if [[ "${SHIKOMI_ISOLATED_TEST:-}" != 1 ]]; then
   else
     status=$?
     cat "$session/services.log" >&2
+    cat "$session/shell.log" >&2
     exit "$status"
   fi
 fi

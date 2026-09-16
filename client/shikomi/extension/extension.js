@@ -137,8 +137,7 @@ class KeyCapture {
         this.actor = new St.Widget({reactive: true, can_focus: true, width: global.stage.width, height: global.stage.height});
         Main.uiGroup.add_child(this.actor);
         this.grab = Main.pushModal(this.actor, {actionMode: Shell.ActionMode.SYSTEM_MODAL});
-        this.actor.connect('key-press-event', (_actor, event) => this.onEvent(event));
-        this.actor.connect('key-release-event', (_actor, event) => this.onEvent(event));
+        this.actor.connect('captured-event', (_actor, event) => this.onEvent(event));
         this.timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
             this.timeout = 0;
             this.finish('');
