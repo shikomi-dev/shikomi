@@ -1,0 +1,8 @@
+{
+  "uuid": "shikomi@shikomi-dev.github.io",
+  "name": "shikomi",
+  "description": "登録した文字列をキーから貼り付ける",
+  "shell-version": ["46", "50"],
+  "version": 1,
+  "url": "https://github.com/shikomi-dev/shikomi"
+}

@@ -1,0 +1,54 @@
+name: 変更を提案する
+description: 困りごとと期待する体験から変更を始める
+title: "[変更]: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること
+      description: 誰が、どんな場面で、いま何ができないかを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: できるようにしたいこと
+      description: 解決後に、誰が何をできるようになるかを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 中心となる利用の流れ
+      description: 関係するSC番号があれば示し、誰が、何のために、どの入口で、何をして、何が見え、次に何を判断できるかを最初から最後まで書いてください。新しい目的なら「新規シナリオ」と書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: interface
+    attributes:
+      label: 入口の入力と結果
+      description: CLIのコマンドと出力、GUIの操作と画面、APIの要求と応答など、関係する入口だけを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 完了と判断できる状態
+      description: 何を観測できれば、この困りごとが解消したと言えるかを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: current_view
+    attributes:
+      label: 更新する現在像
+      description: requirementsのシナリオ・要求・受入例・横断的な受入条件と、systemの全体構造・シーケンス・データ構造のうち、変わるものを書いてください。影響がない文書の列挙は不要です。
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 今回作らないもの
+      description: 自然に期待されそうだが意識して作らない入口や振る舞いがあれば書いてください。
+    validations:
+      required: false

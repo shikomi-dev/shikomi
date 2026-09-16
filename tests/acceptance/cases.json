@@ -1,0 +1,4 @@
+[
+  {"id":"EX-SC001-01","text":"こんにちは世界","edited":"変更後の日本語","label":"あいさつ"},
+  {"id":"EX-SC001-02","text":"space and 'quotes' $HOME ; echo test","edited":"changed symbols","label":"記号を含む文字列"}
+]

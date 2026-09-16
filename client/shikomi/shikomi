@@ -1,0 +1,148 @@
+#!/usr/bin/python3
+"""登録の対話を行う。保存とキー操作はGNOME Shell拡張が所有する。"""
+from __future__ import annotations
+
+import argparse
+import json
+import signal
+import sys
+from typing import TypedDict
+
+import gi
+
+gi.require_version('Gio', '2.0')
+from gi.repository import Gio, GLib  # noqa: E402
+
+
+class Entry(TypedDict):
+    label: str
+    text: str
+    key: str
+
+
+class ShellConnection:
+    def __init__(self) -> None:
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def call(self, method: str, parameters: GLib.Variant | None = None) -> str:
+        try:
+            result = self.bus.call_sync(
+                'org.gnome.Shell', '/io/github/shikomi/Control',
+                'io.github.shikomi.Control', method, parameters, None,
+                Gio.DBusCallFlags.NONE, 65000, None,
+            ).unpack()
+        except GLib.Error as error:
+            raise RuntimeError(
+                'GNOME拡張に接続できません。インストール後にログインし直し、'
+                'gnome-extensions enable shikomi@shikomi-dev.github.io を実行してください。'
+                '変更結果が不明な場合は shikomi list で確認してください。'
+            ) from error
+        return result[0] if result else ''
+
+    def request(self, operation: str, **values: str | Entry) -> object:
+        raw = self.call('Request', GLib.Variant('(s)', (
+            json.dumps({'operation': operation, **values}, ensure_ascii=False),
+        )))
+        response = json.loads(raw)
+        if not response['ok']:
+            raise RuntimeError(response['error'])
+        return response['result']
+
+    def capture(self) -> str:
+        print('割り当てるキーを押してください（Ctrl / Alt / Super を含む組み合わせ、Escで取消し）:', flush=True)
+        key = self.call('Capture')
+        if not key:
+            raise KeyboardInterrupt
+        print(f'読み取り: {key}')
+        return key
+
+    def cancel(self) -> None:
+        self.call('CancelCapture')
+
+
+class Dialogue:
+    def __init__(self, connection: ShellConnection) -> None:
+        self.connection = connection
+
+    def add(self, text: str) -> None:
+        self.require_terminal()
+        if not text or '\0' in text:
+            raise ValueError('文字列を空にはできません。')
+        key = self.connection.capture()
+        label = input('ラベル: ')
+        self.connection.request('add', entry={'label': label, 'text': text, 'key': key})
+        print('登録しました。')
+
+    def edit(self, label: str) -> None:
+        self.require_terminal()
+        entry = self.connection.request('get', label=label)
+        if not isinstance(entry, dict):
+            raise RuntimeError('登録を読み取れません。')
+        text = input('新しい文字列（Enterで変更なし）: ') or entry['text']
+        answer = input('キーを変更しますか？ [y/N]: ')
+        if answer.lower() not in ('', 'n', 'y'):
+            raise ValueError('y または n を入力してください。変更していません。')
+        key = self.connection.capture() if answer.lower() == 'y' else entry['key']
+        name = input('新しいラベル（Enterで変更なし）: ') or label
+        self.connection.request('edit', label=label, previous=entry, entry={'label': name, 'text': text, 'key': key})
+        print('変更しました。')
+
+    def remove(self, label: str) -> None:
+        self.connection.request('remove', label=label)
+        print('削除しました。')
+
+    def list(self) -> None:
+        entries = self.connection.request('list')
+        if not isinstance(entries, list):
+            raise RuntimeError('一覧を読み取れません。')
+        if not entries:
+            print('登録はありません。')
+        for entry in entries:
+            print(f'{entry["label"]}\t{entry["key"]}')
+
+    def require_terminal(self) -> None:
+        if not sys.stdin.isatty():
+            raise ValueError('キーを読み取るため、端末で対話実行してください。')
+
+
+class Command:
+    def run(self) -> int:
+        args = self.arguments()
+        connection = None
+        try:
+            connection = ShellConnection()
+            dialogue = Dialogue(connection)
+            if args.operation == 'add':
+                dialogue.add(args.text)
+            elif args.operation == 'edit':
+                dialogue.edit(args.label)
+            elif args.operation == 'remove':
+                dialogue.remove(args.label)
+            else:
+                dialogue.list()
+        except (KeyboardInterrupt, EOFError):
+            if connection:
+                try:
+                    connection.cancel()
+                except RuntimeError:
+                    print('入力待ちの解除を確認できませんでした。', file=sys.stderr)
+            print('\n取り消しました。', file=sys.stderr)
+            return 130
+        except (RuntimeError, ValueError, GLib.Error) as error:
+            print(f'エラー: {error}', file=sys.stderr)
+            return 1
+        return 0
+
+    def arguments(self) -> argparse.Namespace:
+        parser = argparse.ArgumentParser(description='文字列をキーに登録して貼り付ける')
+        commands = parser.add_subparsers(dest='operation', required=True)
+        commands.add_parser('add', help='文字列を登録する').add_argument('text')
+        commands.add_parser('edit', help='ラベルで編集する').add_argument('label')
+        commands.add_parser('remove', help='ラベルで削除する').add_argument('label')
+        commands.add_parser('list', help='ラベルとキーを表示する')
+        return parser.parse_args()
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    raise SystemExit(Command().run())
