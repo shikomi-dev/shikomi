@@ -134,7 +134,7 @@ class KeyCapture {
         this.key = '';
         this.watch = Gio.bus_watch_name_on_connection(Gio.DBus.session, this.sender,
             Gio.BusNameWatcherFlags.NONE, null, () => this.finish(''));
-        this.actor = new St.Widget({reactive: true, can_focus: true, opacity: 0, width: global.stage.width, height: global.stage.height});
+        this.actor = new St.Widget({reactive: true, can_focus: true, width: global.stage.width, height: global.stage.height});
         Main.uiGroup.add_child(this.actor);
         this.grab = Main.pushModal(this.actor, {actionMode: Shell.ActionMode.SYSTEM_MODAL});
         this.actor.connect('key-press-event', (_actor, event) => this.onEvent(event));
