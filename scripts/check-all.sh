@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 python3 scripts/check-docs.py

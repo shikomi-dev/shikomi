@@ -53,5 +53,3 @@ class Desktop:
         time.sleep(.3)
         self.chord([0xffe3, 0xff57])
 
-    def close(self) -> None:
-        pass

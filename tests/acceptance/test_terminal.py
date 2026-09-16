@@ -10,6 +10,8 @@ import gi
 gi.require_version('Atspi', '2.0')
 from gi.repository import GLib, Atspi
 
+from recording import Recording
+
 ROOT = Path(__file__).resolve().parents[2]
 CASE = json.loads((Path(__file__).parent / 'terminal-case.json').read_text())
 
@@ -26,13 +28,23 @@ class TestTerminal:
         ], cwd=tmp_path, env=environment)
         log = tmp_path / 'terminal.log'
         result = tmp_path / 'result.txt'
+        recording = None
         try:
             self.await_text(log, '> ')
             desktop.evaluate('Main.activateWindow(global.get_window_actors().find(a => a.meta_window.get_title() === "shikomi 操作確認").meta_window)')
             time.sleep(.6)
             assert 'shikomi 操作確認' in desktop.evaluate('global.display.focus_window?.get_title()')
-            assert self.focus_terminal(Atspi.get_desktop(0))
+            for _ in range(100):
+                if self.focus_terminal(Atspi.get_desktop(0)):
+                    break
+                time.sleep(.05)
+            else:
+                raise AssertionError('端末の入力欄が見つかりません')
             time.sleep(.3)
+            if os.environ.get('SHIKOMI_RECORD_DIR'):
+                recording = Recording(desktop, os.environ['SHIKOMI_RECORD_DIR'])
+                recording.prepare()
+                recording.start('terminal')
             desktop.type_text(shlex.join([cli, 'add', case['before']]))
             desktop.chord([0xff0d])
             self.await_text(log, 'Escで取消し）:')
@@ -68,6 +80,10 @@ class TestTerminal:
             time.sleep(.3)
             assert result.stat().st_mtime_ns == original
             assert desktop.request('list')['result'] == []
+            if recording:
+                time.sleep(.8)
+                recording.stop()
+                (recording.directory / 'result.json').write_text(json.dumps({'installed_cli': cli, 'before': 'before', 'after': result.read_text(), 'remove_kept_mtime': True}))
             desktop.type_text('exit')
             desktop.chord([0xff0d])
             terminal.wait(timeout=5)
@@ -78,12 +94,16 @@ class TestTerminal:
                          'ScreenshotArea', GLib.Variant('(iiiibs)', (*rect, False, str(tmp_path / 'failure.png'))))
             raise
         finally:
+            if recording:
+                recording.stop()
             desktop.request('remove', label=case['label'])
             if terminal.poll() is None:
                 terminal.terminate()
                 terminal.wait(timeout=5)
 
     def focus_terminal(self, accessible):
+        if accessible is None:
+            return False
         if accessible.get_role() == Atspi.Role.TERMINAL:
             assert accessible.get_component_iface().grab_focus()
             return True
