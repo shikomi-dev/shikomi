@@ -139,6 +139,10 @@ class KeyCapture {
         this.grab = Main.pushModal(this.actor, {actionMode: Shell.ActionMode.SYSTEM_MODAL});
         this.actor.connect('captured-event', (_actor, event) => this.onEvent(event));
         this.stageSignal = global.stage.connect('captured-event', (_stage, event) => this.onEvent(event));
+        // キーそのものを読む間は、日本語入力などの文字変換を通さない。
+        this.backend = Clutter.get_default_backend();
+        this.inputMethod = this.backend.get_input_method();
+        this.backend.set_input_method(null);
         this.timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
             this.timeout = 0;
             this.finish('');
@@ -187,6 +191,8 @@ class KeyCapture {
             global.stage.disconnect(this.stageSignal);
         Gio.bus_unwatch_name(this.watch);
         Main.popModal(this.grab);
+        this.backend.set_input_method(this.inputMethod);
+        this.inputMethod = null;
         this.actor.destroy();
         this.invocation.return_value(new GLib.Variant('(s)', [key]));
         this.invocation = null;
