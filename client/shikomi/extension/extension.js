@@ -22,8 +22,7 @@ class Shortcuts {
         this.entries = entries;
         this.bindings = new Map();
         this.pending = 0;
-        this.keyboard = Clutter.get_default_backend().get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        this.keyboard = null;
         this.signal = global.display.connect('accelerator-activated', (_display, action) => this.activate(action));
         try {
             this.prepare(entries.items);
@@ -97,6 +96,8 @@ class Shortcuts {
     }
 
     paste(text) {
+        this.keyboard ??= Clutter.get_default_backend().get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         const clipboard = St.Clipboard.get_default();
         clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
         clipboard.set_text(St.ClipboardType.PRIMARY, text);

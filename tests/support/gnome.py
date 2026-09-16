@@ -8,6 +8,14 @@ from gi.repository import Gio, GLib
 class Desktop:
     def __init__(self) -> None:
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        for _ in range(100):
+            if self.evaluate('!Main.layoutManager._startingUp') == 'true':
+                break
+            time.sleep(.05)
+        else:
+            raise TimeoutError('GNOMEの画面準備が完了していません')
+        self.evaluate('global.shikomiPrepareTestInput()')
+
     def call(self, destination: str, path: str, interface: str,
              method: str, parameters: GLib.Variant | None = None) -> tuple:
         return self.bus.call_sync(destination, path, interface, method, parameters,

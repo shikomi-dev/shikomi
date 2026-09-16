@@ -4,8 +4,11 @@ export default class Observer extends Extension {
     enable() {
         global.context.unsafe_mode = true;
         global.shikomiTestBackend = Clutter.get_default_backend();
-        global.shikomiTestKeyboard = Clutter.get_default_backend().get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        global.shikomiPrepareTestInput = () => {
+            global.shikomiTestKeyboard ??= Clutter.get_default_backend().get_default_seat()
+                .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+            return true;
+        };
     }
-    disable() { global.shikomiTestKeyboard = null; global.shikomiTestBackend = null; global.context.unsafe_mode = false; }
+    disable() { global.shikomiTestKeyboard = null; global.shikomiPrepareTestInput = null; global.shikomiTestBackend = null; global.context.unsafe_mode = false; }
 }
