@@ -18,7 +18,7 @@ jobs:
       - name: 検証環境を用意
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnome-shell dbus-x11 python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gjs nodejs libgl1-mesa-dri
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnome-shell gnome-terminal dbus-x11 python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gir1.2-atspi-2.0 gjs nodejs reprepro gnupg libgl1-mesa-dri
           mkdir -p /run/dbus
           dbus-daemon --system --fork
           /usr/lib/systemd/systemd-logind &

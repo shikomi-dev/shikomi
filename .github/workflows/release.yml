@@ -1,0 +1,58 @@
+name: Release to apt
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: apt-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: 配布物を作成
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: ./scripts/build-deb.sh "$RELEASE_TAG"
+      - name: 署名に必要な道具を用意
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq reprepro
+      - name: aptへ署名
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          test -n "$APT_SIGNING_KEY"
+          export GNUPGHOME="$(mktemp -d)"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$fingerprint" = "$(cat packaging/apt/fingerprint.txt)"
+          gpg --batch --export-options export-minimal --export "$fingerprint" > apt-public-key.gpg
+          ./scripts/build-apt-repository.sh "dist/shikomi_$(cat VERSION)_all.deb" apt-public-key.gpg public/apt
+          touch public/.nojekyll
+      - name: Releaseへ添付
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          (cd dist && sha256sum *.deb > SHA256SUMS)
+          gh release upload "$RELEASE_TAG" dist/*.deb dist/SHA256SUMS --clobber
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+      - name: apt配布元を公開
+        id: deployment
+        uses: actions/deploy-pages@v5

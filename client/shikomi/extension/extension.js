@@ -97,8 +97,10 @@ class Shortcuts {
     }
 
     paste(text) {
-        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-        // Shift+Insertは端末でも通常の入力欄でも貼り付けに使える。
+        const clipboard = St.Clipboard.get_default();
+        clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+        clipboard.set_text(St.ClipboardType.PRIMARY, text);
+        // GNOME TerminalはShift+InsertでPRIMARYを読むため、両方を同じ内容にする。
         for (const [key, state] of [
             [Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED],
             [Clutter.KEY_Insert, Clutter.KeyState.PRESSED],
