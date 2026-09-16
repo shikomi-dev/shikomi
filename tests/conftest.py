@@ -16,9 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def desktop():
     if os.environ.get('SHIKOMI_ISOLATED_TEST') != '1':
         pytest.skip('scripts/test-desktop.sh の隔離GNOMEで実行する')
-    value = Desktop()
-    yield value
-    value.close()
+    return Desktop()
 
 
 @pytest.fixture

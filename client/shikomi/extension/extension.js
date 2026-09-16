@@ -22,8 +22,7 @@ class Shortcuts {
         this.entries = entries;
         this.bindings = new Map();
         this.pending = 0;
-        this.keyboard = Clutter.get_default_backend().get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        this.keyboard = null;
         this.signal = global.display.connect('accelerator-activated', (_display, action) => this.activate(action));
         try {
             this.prepare(entries.items);
@@ -97,8 +96,12 @@ class Shortcuts {
     }
 
     paste(text) {
-        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-        // Shift+Insertは端末でも通常の入力欄でも貼り付けに使える。
+        this.keyboard ??= Clutter.get_default_backend().get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        const clipboard = St.Clipboard.get_default();
+        clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+        clipboard.set_text(St.ClipboardType.PRIMARY, text);
+        // GNOME TerminalはShift+InsertでPRIMARYを読むため、両方を同じ内容にする。
         for (const [key, state] of [
             [Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED],
             [Clutter.KEY_Insert, Clutter.KeyState.PRESSED],
@@ -132,11 +135,15 @@ class KeyCapture {
         this.key = '';
         this.watch = Gio.bus_watch_name_on_connection(Gio.DBus.session, this.sender,
             Gio.BusNameWatcherFlags.NONE, null, () => this.finish(''));
-        this.actor = new St.Widget({reactive: true, can_focus: true, opacity: 0, width: global.stage.width, height: global.stage.height});
+        this.actor = new St.Widget({reactive: true, can_focus: true, width: global.stage.width, height: global.stage.height});
         Main.uiGroup.add_child(this.actor);
         this.grab = Main.pushModal(this.actor, {actionMode: Shell.ActionMode.SYSTEM_MODAL});
-        this.actor.connect('key-press-event', (_actor, event) => this.onEvent(event));
-        this.actor.connect('key-release-event', (_actor, event) => this.onEvent(event));
+        this.actor.connect('captured-event', (_actor, event) => this.onEvent(event));
+        this.stageSignal = global.stage.connect('captured-event', (_stage, event) => this.onEvent(event));
+        // キーそのものを読む間は、日本語入力などの文字変換を通さない。
+        this.backend = Clutter.get_default_backend();
+        this.inputMethod = this.backend.get_input_method();
+        this.backend.set_input_method(null);
         this.timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
             this.timeout = 0;
             this.finish('');
@@ -145,6 +152,8 @@ class KeyCapture {
     }
 
     onEvent(event) {
+        if (global.stage.get_key_focus() !== this.actor)
+            return Clutter.EVENT_PROPAGATE;
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             const symbol = event.get_key_symbol();
             if (symbol === Clutter.KEY_Escape) {
@@ -179,8 +188,12 @@ class KeyCapture {
             GLib.Source.remove(this.timeout);
         if (this.released)
             GLib.Source.remove(this.released);
+        if (this.stageSignal)
+            global.stage.disconnect(this.stageSignal);
         Gio.bus_unwatch_name(this.watch);
         Main.popModal(this.grab);
+        this.backend.set_input_method(this.inputMethod);
+        this.inputMethod = null;
         this.actor.destroy();
         this.invocation.return_value(new GLib.Variant('(s)', [key]));
         this.invocation = null;

@@ -51,6 +51,9 @@ class TestJourney:
             desktop.chord(KEYS)
             assert target.read_text() == before
             assert desktop.request('list')['result'] == []
+        except BaseException:
+            print(desktop.evaluate('JSON.stringify({pointer:global.get_pointer(), focus:global.stage.key_focus?.toString(), capture:Main.extensionManager.lookup("shikomi@shikomi-dev.github.io").stateObj.capture ? {key:Main.extensionManager.lookup("shikomi@shikomi-dev.github.io").stateObj.capture.key, timer:Main.extensionManager.lookup("shikomi@shikomi-dev.github.io").stateObj.capture.released, seat:Main.extensionManager.lookup("shikomi@shikomi-dev.github.io").stateObj.capture.grab.get_seat_state?.(), mapped:Main.extensionManager.lookup("shikomi@shikomi-dev.github.io").stateObj.capture.actor.mapped} : null})'))
+            raise
         finally:
             child.close(force=True)
             desktop.request('remove', label=case['label'])

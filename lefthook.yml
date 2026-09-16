@@ -1,0 +1,5 @@
+pre-push:
+  commands:
+    tests:
+      run: ./scripts/check-all.sh
+      fail_text: テストが失敗したためpushを止めました。失敗を直してから再実行してください。

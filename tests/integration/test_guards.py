@@ -29,7 +29,8 @@ class TestGuards:
         finally:
             desktop.request('remove', label='existing')
 
-    def test_escape_cancels_without_saving(self, desktop):
+    def test_escape_cancels_without_saving(self, desktop, target):
+        desktop.evaluate('global.previousTestInputMethod = global.shikomiTestBackend.get_input_method(); true')
         child = pexpect.spawn(CLI, ['add', 'cancel me'], encoding='utf-8', timeout=8)
         try:
             child.expect('Escで取消し）:')
@@ -39,17 +40,20 @@ class TestGuards:
             child.expect(pexpect.EOF)
             child.close()
             assert child.exitstatus == 130
+            assert desktop.evaluate('global.shikomiTestBackend.get_input_method() === global.previousTestInputMethod') == 'true'
             assert desktop.request('list')['result'] == []
         finally:
             child.close(force=True)
 
-    def test_disconnect_releases_capture(self, desktop):
+    def test_disconnect_releases_capture(self, desktop, target):
+        desktop.evaluate('global.disconnectTestInputMethod = global.shikomiTestBackend.get_input_method(); true')
         child = pexpect.spawn(CLI, ['add', 'disconnect'], encoding='utf-8', timeout=8)
         child.expect('Escで取消し）:')
         time.sleep(.2)
         child.close(force=True)
         time.sleep(.2)
-        self.test_escape_cancels_without_saving(desktop)
+        assert desktop.evaluate('global.shikomiTestBackend.get_input_method() === global.disconnectTestInputMethod') == 'true'
+        self.test_escape_cancels_without_saving(desktop, target)
 
     def test_stale_edit_preserves_new_value(self, desktop):
         old = dict(label='version', text='original', key='<Control><Alt>j')

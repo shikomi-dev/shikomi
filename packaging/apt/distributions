@@ -1,0 +1,7 @@
+Origin: shikomi
+Label: shikomi
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: shikomi stable packages

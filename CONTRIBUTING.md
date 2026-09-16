@@ -13,3 +13,5 @@ just check
 ```
 
 Pull Requestには、中心の利用の流れを実際に通した入力と結果を書きます。未確認のことは、そのまま未確認と記載してください。
+
+開発環境でlefthookを導入し、`./scripts/setup-dev.sh` を実行してください。pre-pushは `./scripts/check-all.sh` を実行し、失敗した変更を送信しません。

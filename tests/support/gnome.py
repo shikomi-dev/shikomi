@@ -8,29 +8,41 @@ from gi.repository import Gio, GLib
 class Desktop:
     def __init__(self) -> None:
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        self.path = self.call(
-            'org.gnome.Mutter.RemoteDesktop', '/org/gnome/Mutter/RemoteDesktop',
-            'org.gnome.Mutter.RemoteDesktop', 'CreateSession',
-        )[0]
-        self.remote('Start')
+        for _ in range(100):
+            if self.evaluate('!Main.layoutManager._startingUp') == 'true':
+                break
+            time.sleep(.05)
+        else:
+            raise TimeoutError('GNOMEの画面準備が完了していません')
+        self.evaluate('global.shikomiPrepareTestInput()')
 
     def call(self, destination: str, path: str, interface: str,
              method: str, parameters: GLib.Variant | None = None) -> tuple:
         return self.bus.call_sync(destination, path, interface, method, parameters,
                                   None, 0, 5000, None).unpack()
 
-    def remote(self, method: str, parameters: GLib.Variant | None = None) -> tuple:
-        return self.call('org.gnome.Mutter.RemoteDesktop', self.path,
-                         'org.gnome.Mutter.RemoteDesktop.Session', method, parameters)
+    def key(self, symbol: int, pressed: bool) -> None:
+        self.evaluate(f'global.shikomiTestKeyboard.notify_keyval(GLib.get_monotonic_time(), {symbol}, {1 if pressed else 0})')
 
     def chord(self, keys: list[int]) -> None:
         for key in keys:
-            self.remote('NotifyKeyboardKeysym', GLib.Variant('(ub)', (key, True)))
+            self.key(key, True)
             time.sleep(.06)
         for key in reversed(keys):
-            self.remote('NotifyKeyboardKeysym', GLib.Variant('(ub)', (key, False)))
+            self.key(key, False)
             time.sleep(.06)
         time.sleep(.15)
+
+    def type_text(self, text: str) -> None:
+        for character in text:
+            symbol = ord(character)
+            if symbol > 127:
+                symbol |= 0x01000000
+            self.key(symbol, True)
+            time.sleep(.025)
+            self.key(symbol, False)
+            time.sleep(.015)
+        time.sleep(.1)
 
     def request(self, operation: str, **values: object) -> dict:
         result = self.call('org.gnome.Shell', '/io/github/shikomi/Control',
@@ -49,5 +61,3 @@ class Desktop:
         time.sleep(.3)
         self.chord([0xffe3, 0xff57])
 
-    def close(self) -> None:
-        self.remote('Stop')

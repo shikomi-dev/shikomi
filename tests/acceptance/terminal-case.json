@@ -1,0 +1,6 @@
+{
+  "id": "EX-SC001-04",
+  "before": "printf 'before\\n' | tee result.txt",
+  "after": "printf 'after\\n' | tee result.txt",
+  "label": "sample"
+}
