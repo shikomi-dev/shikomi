@@ -138,6 +138,7 @@ class KeyCapture {
         Main.uiGroup.add_child(this.actor);
         this.grab = Main.pushModal(this.actor, {actionMode: Shell.ActionMode.SYSTEM_MODAL});
         this.actor.connect('captured-event', (_actor, event) => this.onEvent(event));
+        this.stageSignal = global.stage.connect('captured-event', (_stage, event) => this.onEvent(event));
         this.timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
             this.timeout = 0;
             this.finish('');
@@ -146,6 +147,8 @@ class KeyCapture {
     }
 
     onEvent(event) {
+        if (global.stage.get_key_focus() !== this.actor)
+            return Clutter.EVENT_PROPAGATE;
         if (event.type() === Clutter.EventType.KEY_PRESS) {
             const symbol = event.get_key_symbol();
             if (symbol === Clutter.KEY_Escape) {
@@ -180,6 +183,8 @@ class KeyCapture {
             GLib.Source.remove(this.timeout);
         if (this.released)
             GLib.Source.remove(this.released);
+        if (this.stageSignal)
+            global.stage.disconnect(this.stageSignal);
         Gio.bus_unwatch_name(this.watch);
         Main.popModal(this.grab);
         this.actor.destroy();
