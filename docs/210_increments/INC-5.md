@@ -14,4 +14,4 @@ Flutterの画面を `client/shikomi/gui` に置く。保存とキー取得は既
 
 ## 結果のありか
 
-対応PRは作成後に記載する。採用した画像と生成指示は作業用 `output/imagegen` に保管し、実装の動作確認結果と区別する。
+動作確認結果と実画面の録画は[PR #6](https://github.com/shikomi-dev/shikomi/pull/6)に記載する。採用したモック画像は[Issue #5](https://github.com/shikomi-dev/shikomi/issues/5)に添付し、実装の動作確認結果と区別する。
