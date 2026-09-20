@@ -16,6 +16,9 @@ SKIP_DIRECTORIES = {
     "bin",
     "coverage",
     "dist",
+    "build",
+    ".dart_tool",
+    "ephemeral",
 }
 SKIP_SUFFIXES = {".gif", ".ico", ".jpeg", ".jpg", ".mp4", ".pdf", ".png", ".webp"}
 PATTERNS = (

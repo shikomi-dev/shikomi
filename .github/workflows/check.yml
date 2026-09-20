@@ -18,9 +18,15 @@ jobs:
       - name: 検証環境を用意
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnome-shell gnome-terminal dbus-x11 python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gir1.2-atspi-2.0 gjs nodejs reprepro gnupg libgl1-mesa-dri
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnome-shell gnome-terminal dbus-x11 python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gir1.2-atspi-2.0 gjs nodejs reprepro gnupg libgl1-mesa-dri clang cmake ninja-build libgtk-3-dev liblzma-dev curl git xz-utils unzip fonts-noto-cjk
           mkdir -p /run/dbus
           dbus-daemon --system --fork
           /usr/lib/systemd/systemd-logind &
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/shikomi
+            ~/.pub-cache
+          key: flutter-3.47.5-${{ matrix.ubuntu }}-${{ hashFiles('client/shikomi/gui/pubspec.lock') }}
       - name: 文書・保存・実画面を検証
         run: ./scripts/check-all.sh

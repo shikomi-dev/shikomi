@@ -10,4 +10,6 @@ PYTHONPYCACHEPREFIX="$(mktemp -d -t shikomi-pycache.XXXXXX)" python3 -m py_compi
 node --input-type=module --check < client/shikomi/extension/extension.js
 node --input-type=module --check < client/shikomi/extension/entries.js
 gjs -m tests/integration/storage.js
+(cd client/shikomi/gui && "$root/scripts/flutter.sh" pub get --enforce-lockfile && \
+  "$root/scripts/flutter.sh" analyze && "$root/scripts/flutter.sh" test test)
 ./scripts/test-desktop.sh
