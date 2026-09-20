@@ -72,6 +72,19 @@ class TestGuards:
         assert '指定したラベルはありません' in result.stderr
         assert result.stdout == ''
 
+    def test_stale_delete_preserves_new_value(self, desktop):
+        old = dict(label='delete-version', text='original', key='<Control><Alt>j')
+        new = dict(old, text='changed elsewhere')
+        assert desktop.request('add', entry=old)['ok']
+        try:
+            assert desktop.request('edit', label=old['label'], entry=new, previous=old)['ok']
+            assert not desktop.request('remove', label=old['label'], previous=old)['ok']
+            assert desktop.request('get', label=old['label'])['result'] == new
+            reordered = dict(key=new['key'], text=new['text'], label=new['label'])
+            assert desktop.request('remove', label=old['label'], previous=reordered)['ok']
+        finally:
+            desktop.request('remove', label=old['label'])
+
     def test_restart_restores_entries(self, desktop):
         entry = dict(label='restore', text='restart', key='<Control><Alt>j')
         assert desktop.request('add', entry=entry)['ok']
