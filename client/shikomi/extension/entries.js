@@ -59,7 +59,8 @@ export class Entries {
             next.push(request.entry);
         } else {
             const current = this.find(request.label);
-            if (operation === 'edit' && JSON.stringify(current) !== JSON.stringify(request.previous))
+            if ((operation === 'edit' || request.previous !== undefined) &&
+                (!request.previous || ['label', 'text', 'key'].some(field => current[field] !== request.previous[field])))
                 throw new Error('別の操作で登録が変わりました。もう一度編集してください。');
             const index = next.indexOf(current);
             if (operation === 'edit')

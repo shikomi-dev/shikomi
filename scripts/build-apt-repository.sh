@@ -12,7 +12,7 @@ if [[ -e "$output" || ! -f "$public_key" ]]; then
 fi
 if [[ "$(dpkg-deb -f "$deb" Package)" != shikomi || \
       "$(dpkg-deb -f "$deb" Version)" != "$(cat "$root/VERSION")" || \
-      "$(dpkg-deb -f "$deb" Architecture)" != all ]]; then
+      "$(dpkg-deb -f "$deb" Architecture)" != amd64 ]]; then
   echo 'shikomiの配布物とVERSIONが一致していません。' >&2
   exit 1
 fi

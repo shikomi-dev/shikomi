@@ -1,0 +1,92 @@
+[
+  {
+    "id": "EX-SC001-05",
+    "journey": "register",
+    "label": "あいさつ",
+    "text": "お世話になっております。\nよろしくお願いいたします。",
+    "edited": "ありがとうございます。",
+    "key": "<Control><Alt>j",
+    "keys": [
+      65507,
+      65513,
+      106
+    ],
+    "changedKeys": [
+      65507,
+      65513,
+      107
+    ]
+  },
+  {
+    "id": "EX-SC001-06",
+    "journey": "cancel",
+    "label": "あいさつ",
+    "text": "よろしくお願いいたします。",
+    "edited": "未保存の文章",
+    "key": "<Control><Alt>j",
+    "keys": [
+      65507,
+      65513,
+      106
+    ],
+    "changedKeys": [
+      65507,
+      65513,
+      107
+    ]
+  },
+  {
+    "id": "EX-SC001-07",
+    "journey": "conflict",
+    "label": "あいさつ",
+    "text": "変更前",
+    "edited": "別の入口で変更",
+    "key": "<Control><Alt>j",
+    "keys": [
+      65507,
+      65513,
+      106
+    ],
+    "changedKeys": [
+      65507,
+      65513,
+      107
+    ]
+  },
+  {
+    "id": "EX-SC001-08",
+    "journey": "themes",
+    "label": "あいさつ",
+    "text": "お世話になっております。\nよろしくお願いいたします。",
+    "edited": "ありがとうございます。",
+    "key": "<Control><Alt>j",
+    "keys": [
+      65507,
+      65513,
+      106
+    ],
+    "changedKeys": [
+      65507,
+      65513,
+      107
+    ]
+  },
+  {
+    "id": "EX-SC001-09",
+    "journey": "offline",
+    "label": "あいさつ",
+    "text": "保存済みの本文",
+    "edited": "編集中の本文",
+    "key": "<Control><Alt>j",
+    "keys": [
+      65507,
+      65513,
+      106
+    ],
+    "changedKeys": [
+      65507,
+      65513,
+      107
+    ]
+  }
+]

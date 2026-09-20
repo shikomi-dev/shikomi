@@ -1,6 +1,6 @@
 # shikomi
 
-Ubuntu 24.04 / 26.04 の標準GNOMEデスクトップで、登録した文字列をキーから貼り付けます。端末で登録・編集・削除し、GNOME Shell拡張がキーの読み取りと貼り付けを受け持ちます。
+Ubuntu 24.04 / 26.04 の標準GNOMEデスクトップで、登録した文字列をキーから貼り付けます。画面または端末で登録・編集・削除し、GNOME Shell拡張がキーの読み取りと貼り付けを受け持ちます。
 
 ## aptでインストール
 
@@ -27,6 +27,14 @@ gnome-extensions enable shikomi@shikomi-dev.github.io
 次の版への更新も `sudo apt update && sudo apt upgrade shikomi` です。ソースからユーザー専用に入れる場合は `./scripts/install.sh` を使えますが、apt版と混在させないでください。
 
 ## 使い方
+
+アプリ一覧から「shikomi」を開きます。端末からは `shikomi-gui` でも起動できます。「追加」からラベルと本文を入力し、「キーを設定」を押して実際のキーを押し、離してから保存します。左の一覧で登録を選ぶと、右で本文とキーを編集できます。削除は「定型文の操作」のメニューから確認して行います。
+
+外観メニューでライト・ダーク・システムに合わせるを選べます。狭い画面では左上のボタンから一覧を開きます。Ctrl+Nで追加、Ctrl+Fで検索、Ctrl+Sで保存できます。編集中に別の登録へ移る、キャンセルする、ウィンドウを閉じる場合は、未保存の変更を破棄するか確認します。
+
+接続エラーの間は保存とキー取得を止め、入力を残します。変更の返事が確認できない場合は成功と表示せず、「保存内容を読み直す」で現在の登録を確認してから操作を再開します。読み直しは編集中の入力を破棄するため、確認画面を表示します。
+
+端末で操作する場合は次のとおりです。
 
 ```console
 $ shikomi add 'よろしくお願いします'
@@ -57,10 +65,12 @@ Windows、macOS、GNOME以外のデスクトップ、旧版のデータ移行、
 [開発の進め方](docs/000_process.md)、[要求](docs/110_requirements/README.md)、[構造](docs/150_system/README.md)を参照してください。基盤は [software-development-template](https://github.com/kkm-horikawa/software-development-template) から作成しています。テンプレートのサンプル製品は含めません。
 
 ```sh
-sudo apt install gnome-shell gnome-terminal python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gir1.2-atspi-2.0 gjs nodejs reprepro gnupg
+sudo apt install gnome-shell gnome-terminal python3-gi python3-pytest python3-pexpect gir1.2-gtk-4.0 gir1.2-atspi-2.0 gjs nodejs reprepro gnupg clang cmake ninja-build libgtk-3-dev liblzma-dev curl xz-utils unzip fonts-noto-cjk
 ./scripts/setup-dev.sh # lefthookを導入済みの環境でフックを設定
 ./scripts/check-all.sh
 ```
+
+GUIのSDKは初回に指定版を取得し、チェックサムで照合します。以後は同じSDKと取得済みの依存を再利用します。GUIだけをビルドする場合は `./scripts/build-gui.sh` を実行します。
 
 実際のGNOMEを別セッションで起動し、利用者のデスクトップや保存先と分けて検証します。テストはキー入力からGTK入力欄への貼り付けまで通します。
 

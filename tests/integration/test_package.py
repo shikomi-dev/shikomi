@@ -15,11 +15,15 @@ class TestPackage:
     def test_package_contains_public_commands_without_test_observer(self, tmp_path):
         version = (ROOT / 'VERSION').read_text().strip()
         subprocess.run([str(ROOT / 'scripts/build-deb.sh'), f'v{version}', str(tmp_path)], check=True, capture_output=True)
-        package = tmp_path / f'shikomi_{version}_all.deb'
+        package = tmp_path / f'shikomi_{version}_amd64.deb'
         assert subprocess.check_output(['dpkg-deb', '-f', str(package), 'Version'], text=True).strip() == version
         subprocess.run(['dpkg-deb', '-x', str(package), str(tmp_path / 'installed')], check=True)
         prefix = tmp_path / 'installed/usr'
         assert (prefix / 'bin/shikomi').is_file()
+        assert (prefix / 'bin/shikomi-gui').is_file()
+        assert (prefix / 'lib/shikomi/lib/libflutter_linux_gtk.so').is_file()
+        assert (prefix / 'share/applications/io.github.shikomi.shikomi_gui.desktop').is_file()
+        assert subprocess.check_output(['dpkg-deb', '-f', str(package), 'Architecture'], text=True).strip() == 'amd64'
         assert (prefix / 'share/gnome-shell/extensions/shikomi@shikomi-dev.github.io/extension.js').is_file()
         assert not list(prefix.rglob('*observer*'))
         command = subprocess.run([str(prefix / 'bin/shikomi'), '--help'], capture_output=True, text=True)
@@ -41,7 +45,7 @@ class TestPackage:
                            check=True, capture_output=True)
             output = tmp_path / 'apt'
             subprocess.run([str(ROOT / 'scripts/build-apt-repository.sh'),
-                            str(tmp_path / f'shikomi_{version}_all.deb'), str(public), str(output)],
+                            str(tmp_path / f'shikomi_{version}_amd64.deb'), str(public), str(output)],
                            env=environment, check=True, capture_output=True)
             subprocess.run(['gpgv', '--keyring', str(public), str(output / 'dists/stable/InRelease')],
                            check=True, capture_output=True)

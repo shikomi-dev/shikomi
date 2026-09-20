@@ -39,7 +39,8 @@ test_cli="${SHIKOMI_TEST_CLI:-$root/client/shikomi/shikomi}"
 mkdir -p "$XDG_DATA_HOME/gnome-shell/extensions/test-observer@shikomi"
 cp "$root"/tests/support/observer/* "$XDG_DATA_HOME/gnome-shell/extensions/test-observer@shikomi/"
 gsettings set org.gnome.desktop.interface enable-animations false
-gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x800@30 --wayland-display "$WAYLAND_DISPLAY" > "$SHIKOMI_SESSION/shell.log" 2>&1 &
+gsettings set org.gnome.desktop.notifications show-banners false
+gnome-shell --headless --wayland --no-x11 --virtual-monitor "${SHIKOMI_TEST_MONITOR:-1280x800@30}" --wayland-display "$WAYLAND_DISPLAY" > "$SHIKOMI_SESSION/shell.log" 2>&1 &
 shell_pid=$!
 trap 'kill "$shell_pid" 2>/dev/null || true; wait "$shell_pid" 2>/dev/null || true' EXIT
 for attempt in $(seq 1 100); do

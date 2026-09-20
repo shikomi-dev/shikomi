@@ -26,7 +26,10 @@ jobs:
       - name: 配布物を作成
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: ./scripts/build-deb.sh "$RELEASE_TAG"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang cmake ninja-build libgtk-3-dev liblzma-dev
+          ./scripts/build-deb.sh "$RELEASE_TAG"
       - name: 署名に必要な道具を用意
         run: sudo apt-get update -qq && sudo apt-get install -y -qq reprepro
       - name: aptへ署名
@@ -40,7 +43,7 @@ jobs:
           fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
           test "$fingerprint" = "$(cat packaging/apt/fingerprint.txt)"
           gpg --batch --export-options export-minimal --export "$fingerprint" > apt-public-key.gpg
-          ./scripts/build-apt-repository.sh "dist/shikomi_$(cat VERSION)_all.deb" apt-public-key.gpg public/apt
+          ./scripts/build-apt-repository.sh "dist/shikomi_$(cat VERSION)_amd64.deb" apt-public-key.gpg public/apt
           touch public/.nojekyll
       - name: Releaseへ添付
         env:
