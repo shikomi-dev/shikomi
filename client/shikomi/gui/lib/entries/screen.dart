@@ -244,18 +244,11 @@ class _EntryScreenState extends State<EntryScreen> with WidgetsBindingObserver {
             onPressed: () => scaffold.currentState?.openDrawer(),
             icon: const Icon(Icons.menu),
           ),
-        Container(
-          width: 26,
-          height: 26,
-          decoration: BoxDecoration(
-            color: const Color(0xffd6530e),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: const Icon(
-            Icons.short_text_rounded,
-            color: Colors.white,
-            size: 22,
-          ),
+        Image.asset(
+          'assets/app-icon.png',
+          width: 34,
+          height: 34,
+          excludeFromSemantics: true,
         ),
         const SizedBox(width: 10),
         const Text(

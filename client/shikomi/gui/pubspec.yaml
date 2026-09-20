@@ -1,7 +1,7 @@
 name: shikomi_gui
 description: 定型文を登録し、キーで貼り付けるデスクトップアプリ。
 publish_to: none
-version: 0.0.1+1
+version: 0.0.2+2
 environment:
   sdk: ^3.13.0
 dependencies:
@@ -18,3 +18,5 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
+  assets:
+    - assets/app-icon.png

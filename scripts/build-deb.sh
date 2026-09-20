@@ -14,11 +14,11 @@ trap 'rm -rf "$stage"' EXIT
 install -d "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/doc/shikomi" \
   "$stage/usr/share/gnome-shell/extensions/shikomi@shikomi-dev.github.io"
 install -m 755 "$root/client/shikomi/shikomi" "$stage/usr/bin/shikomi"
-install -d "$stage/usr/lib/shikomi" "$stage/usr/share/applications" "$stage/usr/share/icons/hicolor/scalable/apps"
+install -d "$stage/usr/lib/shikomi" "$stage/usr/share/applications" "$stage/usr/share/pixmaps"
 cp -R "$root/client/shikomi/gui/build/linux/x64/release/bundle/." "$stage/usr/lib/shikomi/"
 ln -s ../lib/shikomi/shikomi_gui "$stage/usr/bin/shikomi-gui"
 install -m 644 "$root/packaging/io.github.shikomi.shikomi_gui.desktop" "$stage/usr/share/applications/"
-install -m 644 "$root/packaging/io.github.shikomi.shikomi_gui.svg" "$stage/usr/share/icons/hicolor/scalable/apps/"
+install -m 644 "$root/client/shikomi/gui/assets/app-icon.png" "$stage/usr/share/pixmaps/io.github.shikomi.shikomi_gui.png"
 install -m 644 "$root"/client/shikomi/extension/{extension.js,entries.js,metadata.json} \
   "$stage/usr/share/gnome-shell/extensions/shikomi@shikomi-dev.github.io/"
 install -m 644 "$root/LICENSE" "$stage/usr/share/doc/shikomi/copyright"
