@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=shikomi
+Comment=定型文を登録してキーで貼り付ける
+Exec=shikomi-gui
+Icon=io.github.shikomi.shikomi_gui
+Terminal=false
+Categories=Utility;
+Keywords=snippet;text;keyboard;定型文;
+StartupWMClass=io.github.shikomi.shikomi_gui
