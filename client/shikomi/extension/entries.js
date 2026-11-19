@@ -5,7 +5,9 @@ export class Entries {
     constructor(directory = GLib.build_filenamev([GLib.get_user_data_dir(), 'shikomi'])) {
         this.directory = directory;
         this.file = Gio.File.new_for_path(GLib.build_filenamev([directory, 'entries.json']));
-        this.items = this.load();
+        const {entries, searchKey} = this.load();
+        this.items = entries;
+        this.searchKey = searchKey;
     }
 
     load() {
@@ -14,11 +16,13 @@ export class Entries {
             const data = JSON.parse(new TextDecoder().decode(bytes));
             if (data.version !== 1 || !Array.isArray(data.entries))
                 throw new Error('保存形式を読み取れません。保存ファイルは変更していません。');
+            const searchKey = Object.hasOwn(data, 'searchKey') ? data.searchKey : '';
             this.validateAll(data.entries);
-            return data.entries;
+            this.validateSearchKey(searchKey, data.entries);
+            return {entries: data.entries, searchKey};
         } catch (error) {
             if (error.matches?.(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND))
-                return [];
+                return {entries: [], searchKey: ''};
             throw error;
         }
     }
@@ -41,8 +45,20 @@ export class Entries {
             throw new Error('ラベルは前後の空白や制御文字を含まない文字列にしてください。');
         if (typeof item.text !== 'string' || !item.text.length || item.text.includes('\0'))
             throw new Error('文字列は空またはNULを含む値にできません。');
-        if (typeof item.key !== 'string' || !/<(Control|Alt|Super)>/.test(item.key) ||
-            item.key.length > 200 || /[\x00-\x1f\x7f]/.test(item.key))
+        this.validateKey(item.key);
+    }
+
+    validateSearchKey(key, items) {
+        if (key === '')
+            return;
+        this.validateKey(key);
+        if (items.some(item => item.key === key))
+            throw new Error('そのキーは定型文のショートカットに割り当て済みです。');
+    }
+
+    validateKey(key) {
+        if (typeof key !== 'string' || !/<(Control|Alt|Super)>/.test(key) ||
+            key.length > 200 || /[\x00-\x1f\x7f]/.test(key))
             throw new Error('Ctrl・Alt・Superのいずれかを含むキーにしてください。');
     }
 
@@ -71,15 +87,18 @@ export class Entries {
                 throw new Error('未対応の操作です。');
         }
         this.validateAll(next);
+        if (this.searchKey && next.some(item => item.key === this.searchKey))
+            throw new Error('そのキーは検索ショートカットに割り当て済みです。');
         return next;
     }
 
-    save(items) {
+    save(items, searchKey = this.searchKey) {
         if (GLib.mkdir_with_parents(this.directory, 0o700) !== 0)
             throw new Error('保存先を作成できません。');
-        const bytes = new TextEncoder().encode(JSON.stringify({version: 1, entries: items}));
+        const bytes = new TextEncoder().encode(JSON.stringify({version: 1, entries: items, ...(searchKey ? {searchKey} : {})}));
         this.file.replace_contents(bytes, null, false,
             Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION, null);
         this.items = items;
+        this.searchKey = searchKey;
     }
 }

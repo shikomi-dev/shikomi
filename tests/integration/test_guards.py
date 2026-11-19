@@ -1,3 +1,4 @@
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -28,6 +29,82 @@ class TestGuards:
             assert len(desktop.request('list')['result']) == 1
         finally:
             desktop.request('remove', label='existing')
+
+    def test_shortcut_check_distinguishes_owners_and_rechecks_at_save(self, desktop):
+        entry = dict(label='割り当て済み', text='確認用', key='<Control><Alt>j')
+        search = '<Control><Alt>u'
+        owner = dict(kind='entry', label='')
+        assert desktop.request('add', entry=entry)['ok']
+        assert desktop.request('setSearchKey', key=search, previous='')['ok']
+        try:
+            duplicate = desktop.request('checkKey', key=entry['key'], owner=owner)['result']
+            assert duplicate['status'] == 'entry'
+            assert duplicate['label'] == entry['label']
+            assert duplicate['candidates']
+            existing = desktop.request('checkKey', key=entry['key'],
+                                       owner=dict(kind='entry', label=entry['label']))
+            assert existing['result']['status'] == 'available'
+            assert desktop.request('checkKey', key=search, owner=owner)['result']['status'] == 'search'
+
+            candidate = duplicate['candidates'][0]
+            action = int(desktop.evaluate(
+                f'global.display.grab_accelerator({json.dumps(candidate)}, Meta.KeyBindingFlags.NONE)'))
+            assert action
+            try:
+                assert desktop.request('checkKey', key=candidate, owner=owner)['result']['status'] == 'unavailable'
+                assert not desktop.request('add', entry=dict(entry, label='別の定型文', key=candidate))['ok']
+            finally:
+                desktop.evaluate(f'global.display.ungrab_accelerator({action})')
+            assert not desktop.request('setSearchKey', key=entry['key'], previous=search)['ok']
+            assert desktop.request('getSearchKey')['result'] == dict(key=search, active=True)
+        finally:
+            desktop.request('setSearchKey', key='', previous=search)
+            desktop.request('remove', label=entry['label'])
+
+    def test_search_keeps_the_keyboard_selection_visible(self, desktop, target):
+        search = '<Control><Alt>m'
+        entries = [
+            dict(label=f'dates {index:02}', text=f'item {index}',
+                 key=f'<Shift><Control><Alt>{letter}')
+            for index, letter in enumerate('hjklmnpuwz')
+        ]
+        added = []
+        try:
+            for entry in entries:
+                assert desktop.request('add', entry=entry)['ok']
+                added.append(entry['label'])
+            assert desktop.request('setSearchKey', key=search, previous='')['ok']
+            desktop.chord([0xffe3, 0xffe9, ord('m')])
+            desktop.type_text('dates')
+            for _ in range(len(entries) - 1):
+                desktop.chord([0xff54])
+            assert desktop.evaluate('''(() => {
+                function find(actor, style) {
+                    if (actor.has_style_class_name?.(style))
+                        return actor;
+                    for (const child of actor.get_children()) {
+                        const found = find(child, style);
+                        if (found) return found;
+                    }
+                    return null;
+                }
+                const viewport = find(global.stage, 'shikomi-search-scroll');
+                const selected = viewport && find(viewport, 'shikomi-search-selected');
+                if (!selected) return false;
+                const [, top] = viewport.get_transformed_position();
+                const [, height] = viewport.get_transformed_size();
+                const [, y] = selected.get_transformed_position();
+                const [, rowHeight] = selected.get_transformed_size();
+                return y >= top - 1 && y + rowHeight <= top + height + 1;
+            })()''') == 'true'
+            assert target.read_text() == ''
+            desktop.chord([0xff0d])
+            assert target.read_text() == entries[-1]['text']
+        finally:
+            if desktop.request('getSearchKey')['result']['key'] == search:
+                desktop.request('setSearchKey', key='', previous=search)
+            for label in added:
+                desktop.request('remove', label=label)
 
     def test_escape_cancels_without_saving(self, desktop, target):
         desktop.evaluate('global.previousTestInputMethod = global.shikomiTestBackend.get_input_method(); true')

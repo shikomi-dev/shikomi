@@ -19,7 +19,7 @@ cp -R "$root/client/shikomi/gui/build/linux/x64/release/bundle/." "$stage/usr/li
 ln -s ../lib/shikomi/shikomi_gui "$stage/usr/bin/shikomi-gui"
 install -m 644 "$root/packaging/io.github.shikomi.shikomi_gui.desktop" "$stage/usr/share/applications/"
 install -m 644 "$root/client/shikomi/gui/assets/app-icon.png" "$stage/usr/share/pixmaps/io.github.shikomi.shikomi_gui.png"
-install -m 644 "$root"/client/shikomi/extension/{extension.js,entries.js,metadata.json} \
+install -m 644 "$root"/client/shikomi/extension/{extension.js,entries.js,shortcuts.js,search.js,stylesheet.css,metadata.json} \
   "$stage/usr/share/gnome-shell/extensions/shikomi@shikomi-dev.github.io/"
 install -m 644 "$root/LICENSE" "$stage/usr/share/doc/shikomi/copyright"
 cat > "$stage/DEBIAN/control" <<CONTROL

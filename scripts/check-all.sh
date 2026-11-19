@@ -7,8 +7,9 @@ python3 scripts/check-docs.py
 python3 scripts/check-trace.py
 python3 scripts/check-secrets.py
 PYTHONPYCACHEPREFIX="$(mktemp -d -t shikomi-pycache.XXXXXX)" python3 -m py_compile client/shikomi/shikomi tests/support/*.py
-node --input-type=module --check < client/shikomi/extension/extension.js
-node --input-type=module --check < client/shikomi/extension/entries.js
+for source in client/shikomi/extension/*.js; do
+  node --input-type=module --check < "$source"
+done
 gjs -m tests/integration/storage.js
 (cd client/shikomi/gui && "$root/scripts/flutter.sh" pub get --enforce-lockfile && \
   "$root/scripts/flutter.sh" analyze && "$root/scripts/flutter.sh" test test)

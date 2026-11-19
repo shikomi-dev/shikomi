@@ -24,7 +24,9 @@ class TestPackage:
         assert (prefix / 'lib/shikomi/lib/libflutter_linux_gtk.so').is_file()
         assert (prefix / 'share/applications/io.github.shikomi.shikomi_gui.desktop').is_file()
         assert subprocess.check_output(['dpkg-deb', '-f', str(package), 'Architecture'], text=True).strip() == 'amd64'
-        assert (prefix / 'share/gnome-shell/extensions/shikomi@shikomi-dev.github.io/extension.js').is_file()
+        extension = prefix / 'share/gnome-shell/extensions/shikomi@shikomi-dev.github.io'
+        for name in ('extension.js', 'entries.js', 'shortcuts.js', 'search.js', 'stylesheet.css'):
+            assert (extension / name).is_file()
         assert not list(prefix.rglob('*observer*'))
         command = subprocess.run([str(prefix / 'bin/shikomi'), '--help'], capture_output=True, text=True)
         assert command.returncode == 0

@@ -5,25 +5,28 @@ class KeyCaps extends StatelessWidget {
   final String value;
   final bool small;
 
+  static List<String> parts(String value) =>
+      RegExp(r'<([^>]+)>|([^<>]+)')
+          .allMatches(value)
+          .map(
+            (match) => switch (match.group(1) ?? match.group(2)!) {
+              'Control' => 'Ctrl',
+              'Primary' => 'Ctrl',
+              final String key => key.length == 1 ? key.toUpperCase() : key,
+            },
+          )
+          .toList();
+
   @override
   Widget build(BuildContext context) {
-    final parts = RegExp(r'<([^>]+)>|([^<>]+)')
-        .allMatches(value)
-        .map(
-          (match) => switch (match.group(1) ?? match.group(2)!) {
-            'Control' => 'Ctrl',
-            'Primary' => 'Ctrl',
-            final String key => key.length == 1 ? key.toUpperCase() : key,
-          },
-        )
-        .toList();
+    final keys = parts(value);
     return Semantics(
-      label: parts.join(' + '),
+      label: keys.join(' + '),
       child: ExcludeSemantics(
         child: Wrap(
           spacing: small ? 4 : 8,
           runSpacing: 5,
-          children: parts
+          children: keys
               .map(
                 (part) => Container(
                   padding: EdgeInsets.symmetric(

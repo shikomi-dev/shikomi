@@ -88,5 +88,15 @@
       65513,
       107
     ]
+  },
+  {
+    "id": "EX-SC001-10",
+    "journey": "search",
+    "label": "日程調整 dates",
+    "text": "候補日をいくつかお知らせください。",
+    "edited": "dates",
+    "key": "<Control><Alt>j",
+    "keys": [65507, 65513, 106],
+    "changedKeys": [65507, 65513, 117]
   }
 ]
