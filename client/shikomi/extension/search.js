@@ -1,7 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Pango from 'gi://Pango';
 import St from 'gi://St';
-import * as Util from 'resource:///org/gnome/shell/misc/util.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {ModalDialog} from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
@@ -86,7 +85,12 @@ export class SnippetSearch {
         return footer;
     }
 
+    get adjustment() {
+        return this.scroll.vadjustment ?? this.scroll.vscroll.adjustment;
+    }
+
     refresh() {
+        this.adjustment.value = 0;
         this.selected = 0;
         this.confirmed = null;
         const query = this.input.get_text().trim().toLowerCase();
@@ -134,8 +138,11 @@ export class SnippetSearch {
         this.selected = index;
         const row = this.rows.get_child_at_index(index);
         row.add_style_class_name('shikomi-search-selected');
-        if (row.mapped)
-            Util.ensureActorVisibleInScrollView(this.scroll, row);
+        if (row.has_allocation()) {
+            const {y1, y2} = row.get_allocation_box();
+            const {y1: top} = this.rows.get_allocation_box();
+            this.adjustment.clamp_page(top + y1, top + y2);
+        }
     }
 
     onPress(event) {
