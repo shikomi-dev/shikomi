@@ -1,3 +1,4 @@
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -28,6 +29,37 @@ class TestGuards:
             assert len(desktop.request('list')['result']) == 1
         finally:
             desktop.request('remove', label='existing')
+
+    def test_shortcut_check_distinguishes_owners_and_rechecks_at_save(self, desktop):
+        entry = dict(label='割り当て済み', text='確認用', key='<Control><Alt>j')
+        search = '<Control><Alt>u'
+        owner = dict(kind='entry', label='')
+        assert desktop.request('add', entry=entry)['ok']
+        assert desktop.request('setSearchKey', key=search, previous='')['ok']
+        try:
+            duplicate = desktop.request('checkKey', key=entry['key'], owner=owner)['result']
+            assert duplicate['status'] == 'entry'
+            assert duplicate['label'] == entry['label']
+            assert duplicate['candidates']
+            existing = desktop.request('checkKey', key=entry['key'],
+                                       owner=dict(kind='entry', label=entry['label']))
+            assert existing['result']['status'] == 'available'
+            assert desktop.request('checkKey', key=search, owner=owner)['result']['status'] == 'search'
+
+            candidate = duplicate['candidates'][0]
+            action = int(desktop.evaluate(
+                f'global.display.grab_accelerator({json.dumps(candidate)}, Meta.KeyBindingFlags.NONE)'))
+            assert action
+            try:
+                assert desktop.request('checkKey', key=candidate, owner=owner)['result']['status'] == 'unavailable'
+                assert not desktop.request('add', entry=dict(entry, label='別の定型文', key=candidate))['ok']
+            finally:
+                desktop.evaluate(f'global.display.ungrab_accelerator({action})')
+            assert not desktop.request('setSearchKey', key=entry['key'], previous=search)['ok']
+            assert desktop.request('getSearchKey')['result'] == dict(key=search, active=True)
+        finally:
+            desktop.request('setSearchKey', key='', previous=search)
+            desktop.request('remove', label=entry['label'])
 
     def test_escape_cancels_without_saving(self, desktop, target):
         desktop.evaluate('global.previousTestInputMethod = global.shikomiTestBackend.get_input_method(); true')

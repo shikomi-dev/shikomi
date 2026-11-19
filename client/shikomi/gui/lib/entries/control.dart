@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dbus/dbus.dart';
 
 import 'entry.dart';
+import 'shortcut.dart';
 
 final class ControlFailure implements Exception {
   const ControlFailure(
@@ -23,6 +24,9 @@ abstract interface class EntryControl {
   Future<Entry> get(String label);
   Future<void> save(Entry entry, Entry? previous);
   Future<void> remove(Entry previous);
+  Future<ShortcutCheck> checkShortcut(String key, {String? editingLabel});
+  Future<SearchShortcut> getSearchShortcut();
+  Future<void> setSearchShortcut(String key, String previous);
   Future<String> capture();
   Future<void> cancelCapture();
   Future<void> close();
@@ -145,6 +149,49 @@ final class ShellControl implements EntryControl {
     if (result != null) {
       throw const ControlFailure(
         '削除の応答が不正です。再接続して確認してください。',
+        uncertain: true,
+        offline: true,
+      );
+    }
+  }
+
+  @override
+  Future<ShortcutCheck> checkShortcut(
+    String key, {
+    String? editingLabel,
+  }) async {
+    try {
+      return ShortcutCheck.fromJson(
+        await _request('checkKey', {
+          'key': key,
+          'owner': editingLabel == null
+              ? {'kind': 'search'}
+              : {'kind': 'entry', 'label': editingLabel},
+        }),
+      );
+    } on FormatException catch (error) {
+      throw ControlFailure(error.message, offline: true);
+    }
+  }
+
+  @override
+  Future<SearchShortcut> getSearchShortcut() async {
+    try {
+      return SearchShortcut.fromJson(await _request('getSearchKey', {}));
+    } on FormatException catch (error) {
+      throw ControlFailure(error.message, offline: true);
+    }
+  }
+
+  @override
+  Future<void> setSearchShortcut(String key, String previous) async {
+    final result = await _request('setSearchKey', {
+      'key': key,
+      'previous': previous,
+    }, mutation: true);
+    if (result != null) {
+      throw const ControlFailure(
+        '保存の応答が不正です。設定を読み直して確認してください。',
         uncertain: true,
         offline: true,
       );

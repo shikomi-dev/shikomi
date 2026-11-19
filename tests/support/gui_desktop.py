@@ -24,6 +24,8 @@ class GuiDesktop:
             self.desktop.chord(json.loads(arguments[0]))
         elif operation == 'paste':
             self.paste(json.loads(arguments[0]), arguments[1])
+        elif operation == 'searchPaste':
+            self.paste(json.loads(arguments[0]), arguments[2], query=arguments[1])
         elif operation == 'focus':
             self.focus()
         elif operation == 'close':
@@ -67,7 +69,7 @@ class GuiDesktop:
         self.desktop.evaluate('Main.activateWindow(global.get_window_actors().find(a=>a.meta_window.get_title()==="shikomi").meta_window)')
         time.sleep(.2)
 
-    def paste(self, keys, expected):
+    def paste(self, keys, expected, query=None):
         path = Path(os.environ['SHIKOMI_SESSION']) / 'gui-pasted.txt'
         if path.exists():
             path.unlink()
@@ -79,7 +81,17 @@ class GuiDesktop:
                     break
                 time.sleep(.05)
             self.desktop.focus_target()
+            if query is not None:
+                self.desktop.chord(keys)
+                self.desktop.chord([0xff1b])
+                assert path.read_text() == '', '検索の取消後に入力先が変わった'
             self.desktop.chord(keys)
+            if query is not None:
+                self.desktop.type_text(query)
+                query_is_visible = self.desktop.evaluate(
+                    'global.stage.get_key_focus()?.get_text?.() === ' + json.dumps(query))
+                assert query_is_visible == 'true', '検索欄へ入力した文字が表示されない'
+                self.desktop.chord([0xff0d])
             for _ in range(100):
                 if path.exists() and path.read_text() == expected:
                     break

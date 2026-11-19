@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shikomi_gui/entries/control.dart';
 import 'package:shikomi_gui/entries/editor.dart';
 import 'package:shikomi_gui/entries/entry.dart';
+import 'package:shikomi_gui/entries/shortcut.dart';
 
 // 外部通信の境界。正常契約はintegration_testで実際のGNOMEにも接続する。
 final class InterruptedControl implements EntryControl {
@@ -34,6 +35,17 @@ final class InterruptedControl implements EntryControl {
   Future<void> remove(Entry previous) async {
     saved = null;
   }
+
+  @override
+  Future<ShortcutCheck> checkShortcut(String key, {String? editingLabel}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<SearchShortcut> getSearchShortcut() => throw UnimplementedError();
+
+  @override
+  Future<void> setSearchShortcut(String key, String previous) =>
+      throw UnimplementedError();
 
   @override
   Future<String> capture() async => '';

@@ -7,125 +7,14 @@ import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Entries} from './entries.js';
+import {MODIFIERS, Shortcuts} from './shortcuts.js';
 
 const XML = `<node><interface name="io.github.shikomi.Control">
 <method name="Request"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
 <method name="Capture"><arg type="s" direction="out"/></method>
 <method name="CancelCapture"/>
 </interface></node>`;
-const MODIFIERS = Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.MOD1_MASK |
-    Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.SHIFT_MASK;
 const REQUIRED = MODIFIERS & ~Clutter.ModifierType.SHIFT_MASK;
-
-class Shortcuts {
-    constructor(entries) {
-        this.entries = entries;
-        this.bindings = new Map();
-        this.pending = 0;
-        this.keyboard = null;
-        this.signal = global.display.connect('accelerator-activated', (_display, action) => this.activate(action));
-        try {
-            this.prepare(entries.items);
-        } catch (error) {
-            this.destroy();
-            throw error;
-        }
-    }
-
-    prepare(items) {
-        const added = [];
-        try {
-            for (const item of items) {
-                if (this.bindings.has(item.key))
-                    continue;
-                const action = global.display.grab_accelerator(item.key, Meta.KeyBindingFlags.NONE);
-                if (action === Meta.KeyBindingAction.NONE)
-                    throw new Error('そのキーは使用中、または登録できません。別のキーを選んでください。');
-                Main.wm.allowKeybinding(Meta.external_binding_name_for_action(action), Shell.ActionMode.NORMAL);
-                this.bindings.set(item.key, action);
-                added.push(item.key);
-            }
-        } catch (error) {
-            this.release(added);
-            throw error;
-        }
-        return added;
-    }
-
-    change(items) {
-        const added = this.prepare(items);
-        try {
-            this.entries.save(items);
-        } catch (error) {
-            this.release(added);
-            throw error;
-        }
-        this.cancelPaste();
-        this.release([...this.bindings.keys()].filter(key => !items.some(item => item.key === key)));
-    }
-
-    release(keys) {
-        for (const key of keys) {
-            const action = this.bindings.get(key);
-            Main.wm.allowKeybinding(Meta.external_binding_name_for_action(action), Shell.ActionMode.NONE);
-            global.display.ungrab_accelerator(action);
-            this.bindings.delete(key);
-        }
-    }
-
-    activate(action) {
-        if (Main.sessionMode.isLocked || this.pending)
-            return;
-        const item = this.entries.items.find(entry => this.bindings.get(entry.key) === action);
-        const focus = global.display.focus_window;
-        if (!item || !focus)
-            return;
-        const deadline = GLib.get_monotonic_time() + 3000000;
-        this.pending = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 25, () => {
-            if (Main.sessionMode.isLocked || global.display.focus_window !== focus ||
-                GLib.get_monotonic_time() > deadline) {
-                this.pending = 0;
-                return GLib.SOURCE_REMOVE;
-            }
-            if (global.get_pointer()[2] & MODIFIERS)
-                return GLib.SOURCE_CONTINUE;
-            this.pending = 0;
-            this.paste(item.text);
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    paste(text) {
-        this.keyboard ??= Clutter.get_default_backend().get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-        const clipboard = St.Clipboard.get_default();
-        clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-        clipboard.set_text(St.ClipboardType.PRIMARY, text);
-        // GNOME TerminalはShift+InsertでPRIMARYを読むため、両方を同じ内容にする。
-        for (const [key, state] of [
-            [Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED],
-            [Clutter.KEY_Insert, Clutter.KeyState.PRESSED],
-            [Clutter.KEY_Insert, Clutter.KeyState.RELEASED],
-            [Clutter.KEY_Shift_L, Clutter.KeyState.RELEASED],
-        ])
-            this.keyboard.notify_keyval(GLib.get_monotonic_time(), key, state);
-    }
-
-    cancelPaste() {
-        if (this.pending)
-            GLib.Source.remove(this.pending);
-        this.pending = 0;
-    }
-
-    destroy() {
-        this.cancelPaste();
-        this.release([...this.bindings.keys()]);
-        if (this.signal)
-            global.display.disconnect(this.signal);
-        this.signal = 0;
-        this.keyboard = null;
-    }
-}
 
 class KeyCapture {
     constructor(invocation, done) {
@@ -226,6 +115,14 @@ export default class Shikomi extends Extension {
             return this.entries.items.map(({label, key}) => ({label, key}));
         case 'get':
             return this.entries.find(request.label);
+        case 'checkKey':
+            this.entries.validateKey(request.key);
+            return this.shortcuts.check(request.key, request.owner);
+        case 'getSearchKey':
+            return this.shortcuts.searchSetting();
+        case 'setSearchKey':
+            this.shortcuts.setSearchKey(request.key, request.previous);
+            return null;
         case 'add':
         case 'edit':
         case 'remove':
@@ -237,7 +134,7 @@ export default class Shikomi extends Extension {
     }
 
     CaptureAsync(_parameters, invocation) {
-        if (this.capture || Main.sessionMode.isLocked) {
+        if (this.capture || this.shortcuts.searchOpen || Main.sessionMode.isLocked) {
             invocation.return_dbus_error('io.github.shikomi.Busy', '別の入力待ちか画面ロック中です。');
             return;
         }

@@ -158,6 +158,8 @@ final class GuiJourney {
         await themes();
       case 'offline':
         await offline();
+      case 'search':
+        await search();
       default:
         throw StateError('未対応のシナリオ');
     }
@@ -261,9 +263,63 @@ final class GuiJourney {
     await tester.pump(const Duration(milliseconds: 100));
     await desktop('chord', [jsonEncode(scenario.keys)]);
     await settle();
+    expect(find.text('「${scenario.entry.label}」で使用中'), findsOneWidget);
+    expect(find.text('空いている候補'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '登録する'))
+          .onPressed,
+      isNull,
+    );
+    final check = await control.checkShortcut(
+      scenario.entry.key,
+      editingLabel: '',
+    );
+    final candidate = check.candidates.first;
+    final candidateText = candidate
+        .replaceAll('<Control>', 'Ctrl + ')
+        .replaceAll('<Alt>', 'Alt + ');
+    await tap(
+      candidateText.substring(0, candidateText.length - 1) +
+          candidateText.substring(candidateText.length - 1).toUpperCase(),
+    );
+    expect(find.text('GNOMEで登録可能'), findsOneWidget);
     await tap('登録する');
     expect(find.textContaining('重複'), findsOneWidget);
+    await fill('label', scenario.edited);
+    await tap('登録する');
+    expect((await control.get(scenario.edited)).key, candidate);
     expect((await control.get(scenario.entry.label)).text, scenario.edited);
+  }
+
+  Future<void> search() async {
+    await tester.tap(find.byTooltip('検索ショートカット'));
+    await settle();
+    await tap('キーを設定');
+    await desktop('chord', [jsonEncode(scenario.keys)]);
+    await settle();
+    expect(find.text('「${scenario.entry.label}」で使用中'), findsOneWidget);
+    expect(find.text('空いている候補'), findsOneWidget);
+    await tap('変更');
+    await desktop('chord', [jsonEncode(scenario.changedKeys)]);
+    await settle();
+    expect(find.text('GNOMEで登録可能'), findsOneWidget);
+    await tap('保存する');
+    final saved = await control.getSearchShortcut();
+    expect(saved.active, true);
+    try {
+      await desktop('disable');
+      await desktop('enable');
+      expect((await control.getSearchShortcut()).key, saved.key);
+      expect((await control.getSearchShortcut()).active, true);
+      await desktop('searchPaste', [
+        jsonEncode(scenario.changedKeys),
+        scenario.edited,
+        scenario.entry.text,
+      ]);
+    } finally {
+      await control.setSearchShortcut('', saved.key);
+    }
   }
 
   Future<void> themes() async {

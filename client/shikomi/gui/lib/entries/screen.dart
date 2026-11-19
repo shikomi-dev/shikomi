@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import '../appearance.dart';
 import 'editor.dart';
 import 'key_caps.dart';
+import 'search_shortcut_dialog.dart';
+import 'shortcut_field.dart';
 
 class EntryScreen extends StatefulWidget {
   const EntryScreen({
@@ -132,6 +134,24 @@ class _EntryScreenState extends State<EntryScreen> with WidgetsBindingObserver {
     }
     if (!editor.dirty) return true;
     return confirm('変更を破棄しますか？', '入力した変更はまだ保存されていません。', '変更を破棄');
+  }
+
+  Future<void> configureSearchShortcut() async {
+    if (editor.busy || dialogOpen) return;
+    dialogOpen = true;
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (context) => SearchShortcutDialog(control: editor.control),
+      );
+      if (saved == true && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('検索ショートカットの設定を保存しました。')));
+      }
+    } finally {
+      dialogOpen = false;
+    }
   }
 
   Future<void> create() async {
@@ -268,6 +288,13 @@ class _EntryScreenState extends State<EntryScreen> with WidgetsBindingObserver {
           Text(editor.connected ? 'ショートカット有効' : '拡張に接続できません'),
           const Spacer(),
         ],
+        IconButton(
+          tooltip: '検索ショートカット',
+          onPressed: editor.busy || !editor.connected
+              ? null
+              : configureSearchShortcut,
+          icon: const Icon(Icons.keyboard_outlined),
+        ),
         PopupMenuButton<ThemeMode>(
           tooltip: '外観',
           icon: Icon(
@@ -580,7 +607,7 @@ class _EntryScreenState extends State<EntryScreen> with WidgetsBindingObserver {
                 child: TextField(
                   key: const ValueKey('body'),
                   controller: body,
-                  minLines: 6,
+                  minLines: editor.keyCheck?.blocked == true ? 4 : 6,
                   maxLines: 12,
                   readOnly: editor.busy || editor.uncertain,
                   decoration: const InputDecoration(
@@ -592,40 +619,16 @@ class _EntryScreenState extends State<EntryScreen> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 24),
               fieldHeading('ショートカット'),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: editor.capturing
-                          ? const Text('使いたいキーを押して、離してください…')
-                          : editor.draft.key.isEmpty
-                          ? const Text('まだ設定されていません')
-                          : KeyCaps(value: editor.draft.key),
-                    ),
-                    const SizedBox(width: 10),
-                    OutlinedButton(
-                      onPressed:
-                          editor.busy || editor.uncertain || !editor.connected
-                          ? null
-                          : editor.capture,
-                      child: Text(editor.draft.key.isEmpty ? 'キーを設定' : '変更'),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                editor.capturing
-                    ? 'Ctrl・Alt・Superのいずれかを含めてください。Escで取消し、1分で終了します。'
-                    : '変更を押して、使いたいキーを実際に押してください。',
-                style: Theme.of(context).textTheme.bodySmall,
+              ShortcutField(
+                value: editor.draft.key,
+                capturing: editor.capturing,
+                check: editor.keyCheck,
+                onCapture: editor.busy || editor.uncertain || !editor.connected
+                    ? null
+                    : editor.capture,
+                onChoose: editor.busy || editor.uncertain || !editor.connected
+                    ? null
+                    : editor.chooseShortcut,
               ),
               const SizedBox(height: 28),
               Text(

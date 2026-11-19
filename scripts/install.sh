@@ -14,7 +14,7 @@ uuid=shikomi@shikomi-dev.github.io
 "$root/scripts/build-gui.sh"
 extension="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$uuid"
 install -d -m 700 "$extension" "$HOME/.local/bin"
-install -m 644 "$root"/client/shikomi/extension/{extension.js,entries.js,metadata.json} "$extension/"
+install -m 644 "$root"/client/shikomi/extension/{extension.js,entries.js,shortcuts.js,search.js,stylesheet.css,metadata.json} "$extension/"
 install -m 755 "$root/client/shikomi/shikomi" "$HOME/.local/bin/shikomi"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 install -d "$data/shikomi/gui" "$data/applications" "$data/icons"

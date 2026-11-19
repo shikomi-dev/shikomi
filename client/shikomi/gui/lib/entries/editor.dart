@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'control.dart';
 import 'entry.dart';
+import 'shortcut.dart';
 
 final class EntryEditor extends ChangeNotifier {
   EntryEditor(this.control);
@@ -16,11 +17,18 @@ final class EntryEditor extends ChangeNotifier {
   bool uncertain = false;
   String? error;
   String? notice;
+  ShortcutCheck? keyCheck;
   int revision = 0;
   bool _disposed = false;
 
   bool get dirty => opened && !draft.sameAs(original ?? const Entry.empty());
-  bool get canSave => opened && dirty && !busy && !uncertain && connected;
+  bool get canSave =>
+      opened &&
+      dirty &&
+      !busy &&
+      !uncertain &&
+      connected &&
+      !(keyCheck?.blocked ?? false);
 
   void update(Entry value) {
     draft = value;
@@ -32,6 +40,7 @@ final class EntryEditor extends ChangeNotifier {
     original = entry;
     draft = entry ?? const Entry.empty();
     opened = open;
+    keyCheck = null;
     revision++;
   }
 
@@ -145,11 +154,25 @@ final class EntryEditor extends ChangeNotifier {
     capturing = true;
     await _perform(() async {
       final key = await control.capture();
-      if (key.isNotEmpty) draft = draft.copyWith(key: key);
+      if (key.isNotEmpty) await _checkShortcut(key);
       notice = key.isEmpty ? 'キーの読み取りを取り消しました。' : null;
     });
     capturing = false;
     if (!_disposed) notifyListeners();
+  }
+
+  Future<void> chooseShortcut(String key) async {
+    if (uncertain || !connected) return;
+    await _perform(() => _checkShortcut(key));
+  }
+
+  Future<void> _checkShortcut(String key) async {
+    draft = draft.copyWith(key: key);
+    keyCheck = null;
+    keyCheck = await control.checkShortcut(
+      key,
+      editingLabel: original?.label ?? '',
+    );
   }
 
   @override
