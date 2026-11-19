@@ -19,7 +19,8 @@ export class SnippetSearch {
         this.monitorIndex = monitor.index;
         this.dialog.dialogLayout.translation_y = -Math.round(monitor.height * 0.09);
         const content = new St.BoxLayout({
-            orientation: Clutter.Orientation.VERTICAL,
+            // GNOME 46と50が共通して持つ指定を使う。
+            vertical: true,
             style_class: 'shikomi-search-content',
             width: Math.min(552, monitor.width - 80),
         });
@@ -40,7 +41,7 @@ export class SnippetSearch {
             hscrollbar_policy: St.PolicyType.NEVER,
             vscrollbar_policy: St.PolicyType.AUTOMATIC,
         });
-        this.rows = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, x_expand: true});
+        this.rows = new St.BoxLayout({vertical: true, x_expand: true});
         this.scroll.add_child(this.rows);
         content.add_child(this.scroll);
         content.add_child(this.footer());
@@ -115,7 +116,7 @@ export class SnippetSearch {
             x_expand: true,
         });
         const text = new St.BoxLayout({
-            orientation: Clutter.Orientation.VERTICAL,
+            vertical: true,
             x_expand: true,
             x_align: Clutter.ActorAlign.FILL,
         });
