@@ -267,10 +267,21 @@ final class GuiJourney {
   }
 
   Future<void> themes() async {
-    for (final theme in ['ライト', 'ダーク']) {
+    for (final (theme, brightness) in [
+      ('ライト', Brightness.light),
+      ('ダーク', Brightness.dark),
+      ('ライト', Brightness.light),
+    ]) {
       await tester.tap(find.byTooltip('外観'));
       await settle();
-      await tap(theme);
+      await tester.tap(find.text(theme));
+      await tester.pump();
+      final scaffold = tester.element(find.byType(Scaffold));
+      expect(
+        Theme.of(scaffold).scaffoldBackgroundColor,
+        Appearance.theme(brightness).scaffoldBackgroundColor,
+      );
+      await settle();
       expect(tester.takeException(), isNull);
       final media = Platform.environment['SHIKOMI_GUI_SCREENSHOTS'];
       if (media != null) {
@@ -281,7 +292,7 @@ final class GuiJourney {
     }
     final restored = Appearance(file: File('${temp.path}/appearance'));
     await restored.load();
-    expect(restored.mode, ThemeMode.dark);
+    expect(restored.mode, ThemeMode.light);
     await desktop('resize', ['600', '700']);
     await tester.pumpAndSettle();
     expect(find.byTooltip('定型文の一覧'), findsOneWidget);

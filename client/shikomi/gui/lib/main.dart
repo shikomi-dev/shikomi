@@ -36,6 +36,7 @@ class ShikomiApp extends StatelessWidget {
       theme: Appearance.theme(Brightness.light),
       darkTheme: Appearance.theme(Brightness.dark),
       themeMode: appearance.mode,
+      themeAnimationDuration: Duration.zero,
       home: EntryScreen(editor: editor, appearance: appearance),
     ),
   );
